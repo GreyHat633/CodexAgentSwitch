@@ -8,8 +8,8 @@
             <Grid>
                 <local:PageHeader Title="配置方案" Subtitle="在可逆的方案之间切换；导入和导出永远不包含 API Key。" />
                 <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Button Content="导入" />
-                    <Button Content="新建方案" Style="{StaticResource AccentButtonStyle}" />
+                    <Button Content="导入" Tag="profile:import" />
+                    <Button Content="新建方案" Style="{StaticResource AccentButtonStyle}" Tag="profile:new" />
                 </StackPanel>
             </Grid>
             <InfoBar x:Name="CurrentProfileBar" IsOpen="True" Severity="Informational" Title="正在加载配置方案" Message="从本地数据库读取。" />
@@ -32,7 +32,7 @@
                         <TextBlock Text="严格替代门槛，优先低成本且可独立验收的任务。" Style="{StaticResource CaptionTextStyle}" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Button Content="已启用" IsEnabled="False" />
-                            <Button Content="复制" />
+                            <Button Content="复制" Tag="profile:copy-current" />
                             <Button Content="导出" Click="ExportCurrentProfile" />
                         </StackPanel>
                     </StackPanel>
@@ -43,9 +43,9 @@
                         <TextBlock Text="Sol high · Luna / Terra · 最多 2 个 Worker" Style="{StaticResource BodyTextStyle}" />
                         <TextBlock Text="在成本、速度与可靠性之间取得平衡。" Style="{StaticResource CaptionTextStyle}" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="立即启用" Style="{StaticResource AccentButtonStyle}" />
-                            <Button Content="复制" />
-                            <Button Content="更多" />
+                            <Button Content="立即启用" Style="{StaticResource AccentButtonStyle}" Tag="profile:balanced" />
+                            <Button Content="复制" Tag="profile:copy-balanced" />
+                            <Button Content="更多" Tag="profile:more" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -54,7 +54,7 @@
                         <TextBlock Text="性能模式" Style="{StaticResource SectionTitleStyle}" />
                         <TextBlock Text="Sol xhigh · 原生 Worker · 最多 3 个" Style="{StaticResource BodyTextStyle}" />
                         <TextBlock Text="仅在三个任务真正独立时并行，不重复探索同一根因。" Style="{StaticResource CaptionTextStyle}" />
-                        <Button Content="立即启用" HorizontalAlignment="Left" Click="EnableSingleAgentMode" />
+                        <Button Content="立即启用" HorizontalAlignment="Left" Tag="profile:performance" />
                     </StackPanel>
                 </Border>
                 <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardBorderStyle}">
@@ -62,7 +62,7 @@
                         <TextBlock Text="单人模式" Style="{StaticResource SectionTitleStyle}" />
                         <TextBlock Text="Sol high · 不使用 Worker" Style="{StaticResource BodyTextStyle}" />
                         <TextBlock Text="适合敏感、强耦合或不值得分包的任务。" Style="{StaticResource CaptionTextStyle}" />
-                        <Button Content="立即启用" HorizontalAlignment="Left" />
+                        <Button Content="立即启用" HorizontalAlignment="Left" Tag="profile:single" />
                     </StackPanel>
                 </Border>
             </Grid>

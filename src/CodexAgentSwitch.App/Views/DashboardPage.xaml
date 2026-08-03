@@ -19,6 +19,8 @@
                 </StackPanel>
             </Grid>
 
+            <InfoBar x:Name="DashboardActionBar" IsOpen="False" />
+
             <Border Style="{StaticResource CardBorderStyle}" Background="{ThemeResource AccentFillColorDefaultBrush}">
                 <Grid ColumnSpacing="24">
                     <Grid.ColumnDefinitions>
@@ -30,7 +32,7 @@
                         <TextBlock x:Name="AgentSummaryText" Text="正在读取本地配置" FontSize="28" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
                         <TextBlock x:Name="WorkerPolicyText" Text="预算与 Worker 边界正在加载" Foreground="{ThemeResource TextOnAccentFillColorSecondaryBrush}" />
                     </StackPanel>
-                    <Button Grid.Column="1" Content="更改方案" VerticalAlignment="Center" />
+                    <Button Grid.Column="1" Content="更改方案" VerticalAlignment="Center" Tag="navigate:profiles" />
                 </Grid>
             </Border>
 
@@ -63,7 +65,7 @@
                         </Grid>
                         <TextBlock Text="Luna ×1" FontSize="24" FontWeight="SemiBold" />
                         <TextBlock Text="优先明确、可独立验收的任务" Style="{StaticResource CaptionTextStyle}" />
-                        <Button Content="停用 Worker" HorizontalAlignment="Left" />
+                        <Button x:Name="DisableWorkerButton" Content="停用 Worker" HorizontalAlignment="Left" Tag="dashboard:disable-worker" />
                     </StackPanel>
                 </Border>
                 <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
@@ -88,7 +90,7 @@
                     <StackPanel Spacing="16">
                         <Grid>
                             <TextBlock Text="最近一次任务" Style="{StaticResource SectionTitleStyle}" />
-                            <Button Content="查看报告" HorizontalAlignment="Right" />
+                            <Button Content="查看报告" HorizontalAlignment="Right" Tag="navigate:history" />
                         </Grid>
                         <Grid ColumnSpacing="16">
                             <Grid.ColumnDefinitions>
@@ -127,7 +129,7 @@
                             <FontIcon Glyph="&#xE73E;" />
                             <TextBlock Grid.Column="1" Text="凭据存储安全" />
                         </Grid>
-                        <Button Content="打开诊断" HorizontalAlignment="Left" />
+                        <Button Content="打开诊断" HorizontalAlignment="Left" Tag="navigate:diagnostics" />
                     </StackPanel>
                 </Border>
             </Grid>

@@ -59,7 +59,7 @@ public sealed class CodexAppServerClient(CodexCommand command) : IAsyncDisposabl
             "initialize",
             new
             {
-                clientInfo = new { name = "codex-agent-switch", title = "Codex Agent Switch", version = "0.1.0" },
+                clientInfo = new { name = "codex-agent-switch", title = "Codex Agent Switch", version = "0.1.1" },
                 capabilities = (object?)null,
             },
             cancellationToken);

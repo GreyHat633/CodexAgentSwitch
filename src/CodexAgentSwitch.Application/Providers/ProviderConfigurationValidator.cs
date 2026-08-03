@@ -9,7 +9,6 @@ public sealed record ProviderValidationReport(
 {
     public bool IsValid => Errors.Count == 0;
 }
-
 public sealed class ProviderConfigurationValidator(ICredentialStore credentialStore)
 {
     private static readonly HashSet<string> ReservedHeaders = new(StringComparer.OrdinalIgnoreCase)
@@ -48,6 +47,13 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
             }
         }
 
+        if (provider.Kind == ProviderKind.DeepSeek
+            && provider.BaseUri is not null
+            && !string.Equals(provider.BaseUri.AbsoluteUri.TrimEnd('/'), DeepSeekV4Catalog.BaseUrl, StringComparison.Ordinal))
+        {
+            errors.Add($"DeepSeek Base URL must be exactly {DeepSeekV4Catalog.BaseUrl}.");
+        }
+
         if (provider.Timeout < TimeSpan.FromSeconds(2) || provider.Timeout > TimeSpan.FromMinutes(10))
         {
             errors.Add("请求超时必须在 2 秒到 10 分钟之间。");
@@ -70,6 +76,13 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
             || !await credentialStore.ExistsAsync(provider.CredentialReference, cancellationToken))
         {
             errors.Add("API Key 尚未保存到 Windows Credential Manager。");
+        }
+
+        if (provider.Kind == ProviderKind.DeepSeek
+            && !string.IsNullOrWhiteSpace(provider.ModelId)
+            && !DeepSeekV4Catalog.TryGet(provider.ModelId, out _))
+        {
+            errors.Add("DeepSeek Provider only supports the DeepSeek V4 Flash and Pro catalog.");
         }
 
         if (string.IsNullOrWhiteSpace(provider.ModelId))

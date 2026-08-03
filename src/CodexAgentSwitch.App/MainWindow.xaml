@@ -8,10 +8,11 @@
         AutomationProperties.Name="主导航"
         Background="{ThemeResource WindowBackgroundBrush}"
         IsBackButtonVisible="Collapsed"
+        IsPaneOpen="True"
         IsSettingsVisible="False"
         IsTabStop="False"
         IsTitleBarAutoPaddingEnabled="True"
-        PaneDisplayMode="Auto"
+        PaneDisplayMode="Left"
         PaneTitle="Codex Agent Switch"
         SelectionChanged="OnSelectionChanged">
         <NavigationView.MenuItems>
@@ -28,6 +29,6 @@
             <NavigationViewItem Content="首次启动向导" Icon="People" Tag="onboarding" />
             <NavigationViewItem Content="UI Gallery" Icon="AllApps" Tag="gallery" />
         </NavigationView.FooterMenuItems>
-        <Frame x:Name="ContentFrame" />
+        <Frame x:Name="ContentFrame" IsHitTestVisible="True" />
     </NavigationView>
 </Window>

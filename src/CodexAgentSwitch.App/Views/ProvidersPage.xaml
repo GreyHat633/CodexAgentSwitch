@@ -7,7 +7,7 @@
         <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1180">
             <Grid>
                 <local:PageHeader Title="Provider" Subtitle="管理原生 Codex 与 OpenAI-Compatible Provider；停用不会删除凭据。" />
-                <Button HorizontalAlignment="Right" VerticalAlignment="Center" Content="添加 Provider" Style="{StaticResource AccentButtonStyle}" />
+                <Button HorizontalAlignment="Right" VerticalAlignment="Center" Content="添加 Provider" Style="{StaticResource AccentButtonStyle}" Tag="provider:add" />
             </Grid>
             <Border Style="{StaticResource CardBorderStyle}">
                 <Grid ColumnSpacing="20">
@@ -27,7 +27,7 @@
                         <TextBlock Text="Sol · Terra · Luna · 推理强度由当前 App Server 动态发现" Style="{StaticResource BodyTextStyle}" />
                         <TextBlock Text="无需额外 API Key" Style="{StaticResource CaptionTextStyle}" />
                     </StackPanel>
-                    <Button Grid.Column="2" Content="测试" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" Content="测试" VerticalAlignment="Center" Tag="provider:test-native" />
                 </Grid>
             </Border>
             <Border Style="{StaticResource CardBorderStyle}">
@@ -76,12 +76,16 @@
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="8">
                                 <TextBlock Text="Model ID" />
-                                <TextBox x:Name="ModelIdText" PlaceholderText="例如 deepseek-chat；也可由模型发现获得" Text="deepseek-chat" AutomationProperties.Name="Provider Model ID" />
+                                <ComboBox x:Name="ModelSelectionComboBox" DisplayMemberPath="DisplayName" SelectedValuePath="Id" SelectionChanged="ModelSelectionChanged" AutomationProperties.Name="Provider Model ID" />
                             </StackPanel>
                         </Grid>
                         <InfoBar IsOpen="True" Severity="Warning" Title="HTTPS 安全要求" Message="非本机地址使用 HTTP 时会要求额外确认，API Key 不会写入配置或日志。" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button x:Name="TestConnectionButton" Content="测试并保存" Style="{StaticResource AccentButtonStyle}" Click="TestAndSaveProvider" />
+                            <Button x:Name="SaveProviderButton" Content="保存" Click="SaveProvider" />
+                            <Button x:Name="TestConnectionButton" Content="测试并启用" Style="{StaticResource AccentButtonStyle}" Click="TestAndSaveProvider" />
+                            <Button x:Name="EnableDeepSeekButton" Content="启用" Click="EnableDeepSeek" />
+                            <Button Content="删除 Provider" Click="DeleteDeepSeek" />
+                            <Button Content="重载" Click="ReloadProviders" />
                             <Button Content="清空 Key" Click="ClearProviderKey" />
                         </StackPanel>
                         <InfoBar x:Name="ProviderResultBar" IsOpen="False" />

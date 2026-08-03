@@ -21,13 +21,14 @@
             </Border>
             <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="16">
-                    <Grid><TextBlock Text="审计 Spark profile" Style="{StaticResource SectionTitleStyle}" /><Button Content="导出报告" HorizontalAlignment="Right" /></Grid>
+                    <Grid><TextBlock Text="审计 Spark profile" Style="{StaticResource SectionTitleStyle}" /><Button Content="导出报告" HorizontalAlignment="Right" Tag="history:export" /></Grid>
                     <TextBlock Text="Task Group 详情仅在诊断视图展示；这里保留人类可读摘要。" Style="{StaticResource CaptionTextStyle}" />
                     <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><StackPanel><TextBlock Text="主代理" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="Sol high" /></StackPanel><StackPanel Grid.Column="1"><TextBlock Text="Worker" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="DeepSeek · 结果已删除前保存" /></StackPanel></Grid>
                     <TextBlock Text="采用状态" Style="{StaticResource CaptionTextStyle}" /><Border Style="{StaticResource StatusBadgeStyle}" HorizontalAlignment="Left"><TextBlock Text="partially_adopted" /></Border>
                     <TextBlock Text="实际跳过" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="原始 profile 解析与热点树构建" Style="{StaticResource BodyTextStyle}" />
                     <TextBlock Text="重复劳动" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="一次定向抽查，未发生完整重复" Style="{StaticResource BodyTextStyle}" />
                     <InfoBar IsOpen="True" Severity="Success" Title="Usage 快照已保存" Message="Worker Thread 已安全删除，所有可取得的用量字段仍可查看。" />
+                    <InfoBar x:Name="HistoryActionBar" IsOpen="False" />
                 </StackPanel>
             </Border>
         </Grid>

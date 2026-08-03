@@ -28,7 +28,6 @@ public sealed class ProviderRequestException(
 
     public TimeSpan? RetryAfter { get; } = retryAfter;
 }
-
 public sealed class OpenAiCompatibleClient(HttpClient httpClient, ICredentialStore credentialStore) : IExternalProviderClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -44,11 +43,18 @@ public sealed class OpenAiCompatibleClient(HttpClient httpClient, ICredentialSto
         {
             try
             {
-                models = [.. await ListModelsAsync(provider, cancellationToken)];
+                models = NormalizeModels(provider, await ListModelsAsync(provider, cancellationToken));
+                if (provider.Kind == ProviderKind.DeepSeek && models.Length == 0)
+                {
+                    models = [.. DeepSeekV4Catalog.FallbackModelIds];
+                }
             }
             catch (ProviderRequestException exception) when (exception.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
             {
                 modelDiscoverySupported = false;
+                models = provider.Kind == ProviderKind.DeepSeek
+                    ? [.. DeepSeekV4Catalog.FallbackModelIds]
+                    : [];
             }
 
             var modelId = string.IsNullOrWhiteSpace(provider.ModelId) ? models.FirstOrDefault() : provider.ModelId;
@@ -275,4 +281,9 @@ public sealed class OpenAiCompatibleClient(HttpClient httpClient, ICredentialSto
         var baseText = baseUri.AbsoluteUri.TrimEnd('/');
         return new Uri($"{baseText}/{relativePath.TrimStart('/')}", UriKind.Absolute);
     }
+
+    private static string[] NormalizeModels(ProviderConfiguration provider, IReadOnlyList<string> models) =>
+        provider.Kind == ProviderKind.DeepSeek
+            ? [.. DeepSeekV4Catalog.FilterToV4(models)]
+            : [.. models.Distinct(StringComparer.Ordinal)];
 }

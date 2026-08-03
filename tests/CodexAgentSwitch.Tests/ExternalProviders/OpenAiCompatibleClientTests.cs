@@ -22,15 +22,15 @@ public sealed class OpenAiCompatibleClientTests
         {
             calls.Add(CloneMetadata(request));
             return Task.FromResult(request.RequestUri!.AbsolutePath.EndsWith("/models", StringComparison.Ordinal)
-                ? Json(HttpStatusCode.OK, "{\"data\":[{\"id\":\"deepseek-chat\"}]}")
-                : Json(HttpStatusCode.OK, "{\"model\":\"deepseek-chat\",\"choices\":[{\"message\":{\"content\":\"OK\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1,\"total_tokens\":4}}"));
+                ? Json(HttpStatusCode.OK, "{\"data\":[{\"id\":\"deepseek-v4-flash\"}]}")
+                : Json(HttpStatusCode.OK, "{\"model\":\"deepseek-v4-flash\",\"choices\":[{\"message\":{\"content\":\"OK\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1,\"total_tokens\":4}}"));
         });
         var client = Client(handler);
 
         var result = await client.TestConnectionAsync(Provider());
 
         Assert.True(result.Succeeded);
-        Assert.Equal(["deepseek-chat"], result.Models);
+        Assert.Equal(["deepseek-v4-flash"], result.Models);
         Assert.Equal(3, result.Usage?.InputTokens);
         Assert.Equal(1, result.Usage?.OutputTokens);
         Assert.Equal(4, result.Usage?.TotalTokens);
@@ -54,6 +54,27 @@ public sealed class OpenAiCompatibleClientTests
         Assert.False(result.ModelDiscoverySupported);
         Assert.Equal("manual-model", result.ResponseModel);
         Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task Connection_test_sends_the_selected_model_not_the_first_discovered_model()
+    {
+        string? completionPayload = null;
+        var handler = new StubHandler(async (request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/models", StringComparison.Ordinal))
+            {
+                return Json(HttpStatusCode.OK, "{\"data\":[{\"id\":\"deepseek-v4-flash\"},{\"id\":\"deepseek-v4-pro\"}]}");
+            }
+
+            completionPayload = await request.Content!.ReadAsStringAsync();
+            return Json(HttpStatusCode.OK, "{\"model\":\"deepseek-v4-pro\",\"choices\":[{\"message\":{\"content\":\"OK\"}}]}");
+        });
+
+        var result = await Client(handler).TestConnectionAsync(Provider(modelId: "deepseek-v4-pro"));
+
+        Assert.True(result.Succeeded);
+        Assert.Contains("\"model\":\"deepseek-v4-pro\"", completionPayload);
     }
 
     [Theory]
@@ -93,8 +114,8 @@ public sealed class OpenAiCompatibleClientTests
     {
         var handler = new StubHandler((request, _) => Task.FromResult(
             request.RequestUri!.AbsolutePath.EndsWith("/models", StringComparison.Ordinal)
-                ? Json(HttpStatusCode.OK, "{\"data\":[{\"id\":\"deepseek-chat\"}]}")
-                : Json(HttpStatusCode.OK, "{\"model\":\"deepseek-chat\",\"choices\":[{\"message\":{\"content\":\"worker-result\"}}],\"usage\":{\"total_tokens\":8}}")));
+                ? Json(HttpStatusCode.OK, "{\"data\":[{\"id\":\"deepseek-v4-flash\"}]}")
+                : Json(HttpStatusCode.OK, "{\"model\":\"deepseek-v4-flash\",\"choices\":[{\"message\":{\"content\":\"worker-result\"}}],\"usage\":{\"total_tokens\":8}}")));
         var provider = Provider() with { IsEnabled = true };
         await using var adapter = new OpenAiCompatibleWorkerAdapter(provider, Client(handler), new FakeClock());
         var task = new WorkerTask(
@@ -103,7 +124,7 @@ public sealed class OpenAiCompatibleClientTests
             "test",
             "Return a result.",
             Environment.CurrentDirectory,
-            "deepseek-chat",
+            "deepseek-v4-flash",
             "none",
             new WorkerScope([], [], [ScopeOperation.Read]),
             ["result"],
@@ -121,6 +142,32 @@ public sealed class OpenAiCompatibleClientTests
     }
 
     [Fact]
+    public async Task Pro_is_rejected_by_the_current_worker_protocol()
+    {
+        var handler = new StubHandler((request, _) => Task.FromResult(
+            Json(HttpStatusCode.OK, "{\"data\":[{\"id\":\"deepseek-v4-pro\"}]}")));
+        var provider = Provider(modelId: "deepseek-v4-pro") with { IsEnabled = true };
+        await using var adapter = new OpenAiCompatibleWorkerAdapter(provider, Client(handler), new FakeClock());
+
+        var capabilities = await adapter.GetCapabilitiesAsync();
+
+        Assert.False(capabilities.IsAvailable);
+        Assert.Contains(DeepSeekV4Catalog.UnsupportedWorkerReason, capabilities.Warnings);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => adapter.SpawnAsync(new WorkerTask(
+            "group-1",
+            "group-1-L1",
+            "test",
+            "Return a result.",
+            Environment.CurrentDirectory,
+            "deepseek-v4-pro",
+            "high",
+            new WorkerScope([], [], [ScopeOperation.Read]),
+            ["result"],
+            ["has result"],
+            [])));
+    }
+
+    [Fact]
     public async Task Validator_rejects_remote_http_reserved_headers_and_missing_credential()
     {
         var credentials = new FakeCredentialStore(null);
@@ -135,7 +182,7 @@ public sealed class OpenAiCompatibleClientTests
         var result = await validator.ValidateAsync(provider);
 
         Assert.False(result.IsValid);
-        Assert.Equal(3, result.Errors.Count);
+        Assert.Equal(4, result.Errors.Count);
     }
 
     private static OpenAiCompatibleClient Client(HttpMessageHandler handler) =>

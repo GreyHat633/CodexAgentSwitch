@@ -41,17 +41,43 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
         try
         {
             var discovered = await client.ListModelsAsync(provider, cancellationToken);
+            if (provider.Kind == ProviderKind.DeepSeek)
+            {
+                discovered = DeepSeekV4Catalog.FilterToV4(discovered);
+                if (discovered.Count == 0)
+                {
+                    discovered = DeepSeekV4Catalog.FallbackModelIds;
+                }
+            }
+
             var models = discovered.Select(ToCapability).ToArray();
             if (models.Length == 0 && !string.IsNullOrWhiteSpace(provider.ModelId))
             {
                 models = [ToCapability(provider.ModelId)];
             }
 
+            if (provider.Kind == ProviderKind.DeepSeek
+                && provider.ModelId is not null
+                && DeepSeekV4Catalog.TryGet(provider.ModelId, out var selected)
+                && !selected.Supports(ProviderProtocol.CodexWorker))
+            {
+                return new WorkerCapabilities(AdapterId, false, models, 3, [selected.WorkerUnavailableReason ?? DeepSeekV4Catalog.UnsupportedWorkerReason]);
+            }
+
             return new WorkerCapabilities(AdapterId, true, models, 3, models.Length == 0 ? ["Provider 未返回模型，请手动配置 Model ID。"] : []);
         }
         catch (ProviderRequestException exception) when (exception.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.MethodNotAllowed)
         {
-            var models = string.IsNullOrWhiteSpace(provider.ModelId) ? [] : new[] { ToCapability(provider.ModelId) };
+            var models = provider.Kind == ProviderKind.DeepSeek
+                ? DeepSeekV4Catalog.Models.Select(model => ToCapability(model.Id)).ToArray()
+                : string.IsNullOrWhiteSpace(provider.ModelId) ? [] : new[] { ToCapability(provider.ModelId) };
+            if (provider.Kind == ProviderKind.DeepSeek
+                && provider.ModelId is not null
+                && DeepSeekV4Catalog.TryGet(provider.ModelId, out var selected)
+                && !selected.Supports(ProviderProtocol.CodexWorker))
+            {
+                return new WorkerCapabilities(AdapterId, false, models, 3, [selected.WorkerUnavailableReason ?? DeepSeekV4Catalog.UnsupportedWorkerReason]);
+            }
             return new WorkerCapabilities(AdapterId, models.Length > 0, models, 3, ["Provider 不支持模型发现，使用手动 Model ID。"]);
         }
         catch (ProviderRequestException exception)
@@ -72,6 +98,13 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
         if (string.IsNullOrWhiteSpace(modelId))
         {
             throw new InvalidOperationException("外部 Worker 必须指定 Model ID。");
+        }
+
+        if (provider.Kind == ProviderKind.DeepSeek
+            && DeepSeekV4Catalog.TryGet(modelId, out var selected)
+            && !selected.Supports(ProviderProtocol.CodexWorker))
+        {
+            throw new InvalidOperationException(selected.WorkerUnavailableReason ?? DeepSeekV4Catalog.UnsupportedWorkerReason);
         }
 
         var jobId = Guid.NewGuid().ToString("D");
@@ -218,7 +251,21 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
         }
     }
 
-    private static WorkerModelCapability ToCapability(string id) => new(id, id, [], "none", false);
+    private static WorkerModelCapability ToCapability(string id)
+    {
+        if (DeepSeekV4Catalog.TryGet(id, out var model))
+        {
+            var supportsWorker = model.Supports(ProviderProtocol.CodexWorker);
+            return new(
+                model.Id,
+                model.DisplayName,
+                supportsWorker ? ["low", "medium", "high"] : [],
+                supportsWorker ? "medium" : "none",
+                string.Equals(model.Id, DeepSeekV4Catalog.FlashModelId, StringComparison.Ordinal));
+        }
+
+        return new(id, id, [], "none", false);
+    }
 
     private ExternalJobRuntime Runtime(string jobId) => jobs.TryGetValue(jobId, out var runtime)
         ? runtime

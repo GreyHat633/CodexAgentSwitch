@@ -8,7 +8,7 @@ public sealed class WindowsCredentialStoreTests
     public async Task Credential_round_trip_uses_reference_and_can_be_deleted()
     {
         var store = new WindowsCredentialStore();
-        var reference = "integration." + Guid.NewGuid().ToString("N");
+        var reference = "provider/integration." + Guid.NewGuid().ToString("N");
         const string secret = "test-only-secret";
         try
         {

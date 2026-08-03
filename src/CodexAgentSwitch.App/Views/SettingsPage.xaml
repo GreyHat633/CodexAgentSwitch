@@ -19,7 +19,8 @@
                     <TextBlock Text="会话与数据" Style="{StaticResource SectionTitleStyle}" />
                     <Grid><StackPanel><TextBlock Text="启动时恢复上次 Profile" /><TextBlock Text="不会自动恢复被取消的 Worker" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
                     <Grid><StackPanel><TextBlock Text="诊断日志" /><TextBlock Text="默认脱敏且不记录输入内容或 API Key" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
-                    <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="备份配置" /><Button Content="恢复配置" /><Button Content="导出崩溃日志" /></StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="备份配置" Tag="settings:backup" /><Button Content="恢复配置" Tag="settings:restore" /><Button Content="导出崩溃日志" Tag="settings:diagnostics" /></StackPanel>
+                    <InfoBar x:Name="SettingsActionBar" IsOpen="False" />
                 </StackPanel>
             </Border>
             <Expander Header="高级设置">

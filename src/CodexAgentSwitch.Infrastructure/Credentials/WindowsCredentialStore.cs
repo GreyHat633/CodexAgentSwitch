@@ -10,7 +10,7 @@ public sealed class WindowsCredentialStore : ICredentialStore
     private const uint CredentialTypeGeneric = 1;
     private const uint CredentialPersistLocalMachine = 2;
     private const int ErrorNotFound = 1168;
-    private const string Prefix = "CodexAgentSwitch/";
+    private const string DefaultPrefix = "CodexAgentSwitch/";
 
     public Task<bool> ExistsAsync(string referenceId, CancellationToken cancellationToken = default)
     {
@@ -105,12 +105,24 @@ public sealed class WindowsCredentialStore : ICredentialStore
     private static string Target(string referenceId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(referenceId);
-        if (referenceId.Length > 180 || referenceId.Any(character => !(char.IsLetterOrDigit(character) || character is '-' or '_' or '.')))
+        if (referenceId.Length > 180
+            || referenceId.StartsWith('/')
+            || referenceId.EndsWith('/')
+            || referenceId.Contains("//", StringComparison.Ordinal)
+            || referenceId.Any(character => !(char.IsLetterOrDigit(character) || character is '-' or '_' or '.' or '/')))
         {
             throw new ArgumentException("Credential reference contains unsupported characters.", nameof(referenceId));
         }
 
-        return Prefix + referenceId;
+        var prefix = Environment.GetEnvironmentVariable("CAS_CREDENTIAL_PREFIX") ?? DefaultPrefix;
+        if (prefix.Length is < 1 or > 60
+            || !prefix.EndsWith('/')
+            || prefix.Any(character => !(char.IsLetterOrDigit(character) || character is '-' or '_' or '.' or '/')))
+        {
+            throw new InvalidOperationException("CAS_CREDENTIAL_PREFIX is invalid.");
+        }
+
+        return prefix + referenceId;
     }
 
     [DllImport("advapi32.dll", EntryPoint = "CredReadW", CharSet = CharSet.Unicode, SetLastError = true)]

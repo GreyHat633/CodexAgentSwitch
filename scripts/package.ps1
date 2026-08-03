@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.0',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.1',
     [switch]$IncludeRuntimeInstaller
 )
 
@@ -52,9 +52,6 @@ New-Item -ItemType Directory -Force -Path $setupBundle | Out-Null
 Copy-Item -LiteralPath (Join-Path $setupPublish 'CodexAgentSwitch.Setup.exe') -Destination $setupBundle
 Copy-Item -LiteralPath $portableZip,($portableZip + '.sha256') -Destination $setupBundle
 Copy-Item -LiteralPath (Join-Path $repo 'docs\install-and-rollback.md') -Destination $setupBundle
-$setupZip = Join-Path $resolvedRelease 'CodexAgentSwitch-Setup-Bundle-win10-x64.zip'
-New-ZipArchive $setupBundle $setupZip
-
 $compactZip = $null
 if ($IncludeRuntimeInstaller) {
     $compact = Join-Path $resolvedRelease 'compact-runtime'
@@ -77,7 +74,15 @@ if ($IncludeRuntimeInstaller) {
     }
     $compactZip = Join-Path $resolvedRelease 'CodexAgentSwitch-compact-runtime-win10-x64.zip'
     New-ZipArchive $compact $compactZip
+    $runtimeSupport = Join-Path $setupBundle 'RuntimeSupport'
+    New-Item -ItemType Directory -Force -Path $runtimeSupport | Out-Null
+    Copy-Item -LiteralPath (Join-Path $bootstrapPublish 'CodexAgentSwitch.Bootstrapper.exe') -Destination $runtimeSupport
+    Copy-Item -LiteralPath $runtimeDirectory -Destination $runtimeSupport -Recurse
+    Copy-Item -LiteralPath (Join-Path $repo 'docs\runtime-deployment.md') -Destination $runtimeSupport
 }
+
+$setupZip = Join-Path $resolvedRelease 'CodexAgentSwitch-Setup-Bundle-win10-x64.zip'
+New-ZipArchive $setupBundle $setupZip
 
 $files = Get-ChildItem -LiteralPath $resolvedRelease -File | ForEach-Object {
     [pscustomobject]@{ name = $_.Name; size = $_.Length; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant() }

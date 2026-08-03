@@ -90,15 +90,63 @@ public partial class App : Microsoft.UI.Xaml.Application
     private async Task EnsureBuiltInProvidersAsync()
     {
         var repository = Services.GetRequiredService<IProviderRepository>();
+        var profileRepository = Services.GetRequiredService<IProfileRepository>();
         var clock = Services.GetRequiredService<IClock>();
         if (await repository.GetAsync("native-codex") is null)
         {
             await repository.UpsertAsync(ProviderConfiguration.Native(clock.UtcNow));
         }
 
-        if (await repository.GetAsync("deepseek-default") is null)
+        var deepSeek = await repository.GetAsync("deepseek-default");
+        if (deepSeek is null)
         {
             await repository.UpsertAsync(ProviderConfiguration.DeepSeekPreset(clock.UtcNow));
+        }
+        else
+        {
+            var migrated = DeepSeekV4Migration.Migrate(deepSeek);
+            if (migrated.Kind == ProviderKind.DeepSeek && migrated.Id == "deepseek-default")
+            {
+                migrated = migrated with
+                {
+                    BaseUri = new Uri(DeepSeekV4Catalog.BaseUrl),
+                    ModelId = string.IsNullOrWhiteSpace(migrated.ModelId)
+                        ? DeepSeekV4Catalog.FlashModelId
+                        : migrated.ModelId,
+                };
+            }
+
+            if (!Equals(migrated, deepSeek))
+            {
+                await repository.UpsertAsync(migrated with { UpdatedAt = clock.UtcNow });
+            }
+        }
+
+        foreach (var provider in await repository.ListAsync())
+        {
+            if (provider.Kind != ProviderKind.DeepSeek || provider.Id == "deepseek-default")
+            {
+                continue;
+            }
+
+            var migrated = DeepSeekV4Migration.Migrate(provider);
+            if (!Equals(migrated, provider))
+            {
+                await repository.UpsertAsync(migrated with { UpdatedAt = clock.UtcNow });
+            }
+        }
+
+        foreach (var profile in await profileRepository.ListAsync())
+        {
+            var migration = DeepSeekV4Migration.MigrateModel(profile.MainAgent.ModelId);
+            if (!migration.Changed)
+            {
+                continue;
+            }
+
+            // Keep the persisted reasoning effort unchanged: deepseek-reasoner was
+            // a thinking-intent selection and V4 Flash carries that intent forward.
+            await profileRepository.UpsertAsync(DeepSeekV4Migration.Migrate(profile) with { UpdatedAt = clock.UtcNow });
         }
     }
 }
