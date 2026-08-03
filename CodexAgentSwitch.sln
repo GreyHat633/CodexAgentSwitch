@@ -17,6 +17,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{F972EC6A
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexAgentSwitch.Tests", "tests\CodexAgentSwitch.Tests\CodexAgentSwitch.Tests.csproj", "{C3BDF577-D2EC-4C78-B70C-82A8009D5FE5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexAgentSwitch.Bootstrapper", "src\CodexAgentSwitch.Bootstrapper\CodexAgentSwitch.Bootstrapper.csproj", "{3C6D3F20-99E4-4294-B855-C83A8F3A7BA7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexAgentSwitch.Bootstrapper.Tests", "tests\CodexAgentSwitch.Bootstrapper.Tests\CodexAgentSwitch.Bootstrapper.Tests.csproj", "{58F621B6-5554-4CFB-A9EB-A062DF466515}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -46,6 +50,14 @@ Global
 		{C3BDF577-D2EC-4C78-B70C-82A8009D5FE5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C3BDF577-D2EC-4C78-B70C-82A8009D5FE5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C3BDF577-D2EC-4C78-B70C-82A8009D5FE5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3C6D3F20-99E4-4294-B855-C83A8F3A7BA7}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{3C6D3F20-99E4-4294-B855-C83A8F3A7BA7}.Debug|Any CPU.Build.0 = Debug|x64
+		{3C6D3F20-99E4-4294-B855-C83A8F3A7BA7}.Release|Any CPU.ActiveCfg = Release|x64
+		{3C6D3F20-99E4-4294-B855-C83A8F3A7BA7}.Release|Any CPU.Build.0 = Release|x64
+		{58F621B6-5554-4CFB-A9EB-A062DF466515}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{58F621B6-5554-4CFB-A9EB-A062DF466515}.Debug|Any CPU.Build.0 = Debug|x64
+		{58F621B6-5554-4CFB-A9EB-A062DF466515}.Release|Any CPU.ActiveCfg = Release|x64
+		{58F621B6-5554-4CFB-A9EB-A062DF466515}.Release|Any CPU.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{6E27FFA8-494F-4274-BEE1-1B2B1DB39D7B} = {D1610FB0-45E4-4EFE-89EB-D352688FE17F}
@@ -53,5 +65,7 @@ Global
 		{EBAD15D8-782C-40BF-B090-F06C35B0F801} = {D1610FB0-45E4-4EFE-89EB-D352688FE17F}
 		{5AAF45F1-A6B2-4FBB-8504-2775ED41E2CB} = {D1610FB0-45E4-4EFE-89EB-D352688FE17F}
 		{C3BDF577-D2EC-4C78-B70C-82A8009D5FE5} = {F972EC6A-315D-4781-AD7B-CFAB768CC21F}
+		{3C6D3F20-99E4-4294-B855-C83A8F3A7BA7} = {D1610FB0-45E4-4EFE-89EB-D352688FE17F}
+		{58F621B6-5554-4CFB-A9EB-A062DF466515} = {F972EC6A-315D-4781-AD7B-CFAB768CC21F}
 	EndGlobalSection
 EndGlobal
