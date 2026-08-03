@@ -15,7 +15,9 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(1280, 800));
+        AppWindow.Resize(new SizeInt32(
+            ReadDimension("CAS_WINDOW_WIDTH", 1280, 1024, 3840),
+            ReadDimension("CAS_WINDOW_HEIGHT", 800, 720, 2160)));
         RootNavigation.RequestedTheme = Environment.GetEnvironmentVariable("CAS_THEME") switch
         {
             "dark" => ElementTheme.Dark,
@@ -62,6 +64,11 @@ public sealed partial class MainWindow : Window
             "gallery" => typeof(UiGalleryPage),
             _ => typeof(DashboardPage),
         };
+
+    private static int ReadDimension(string variable, int fallback, int minimum, int maximum) =>
+        int.TryParse(Environment.GetEnvironmentVariable(variable), out var value)
+            ? Math.Clamp(value, minimum, maximum)
+            : fallback;
 
     private async void CaptureOnLoadedAsync(object sender, RoutedEventArgs args)
     {

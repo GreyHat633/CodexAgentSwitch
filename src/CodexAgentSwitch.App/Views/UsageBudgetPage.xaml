@@ -13,19 +13,19 @@
             </Grid>
             <Grid ColumnSpacing="16">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="外部 API 费用" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="¥0.18" FontSize="28" FontWeight="SemiBold" /><TextBlock Text="估算 · 价格更新于 2026-08-03" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
-                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="Provider Tokens" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="12,480" FontSize="28" FontWeight="SemiBold" /><TextBlock Text="Provider 返回" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
-                <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="Codex Thread Tokens" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="unavailable" FontSize="28" FontWeight="SemiBold" /><TextBlock Text="当前协议未提供明细" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="外部 API 费用" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ExternalCostText" Text="unavailable" FontSize="28" FontWeight="SemiBold" /><TextBlock x:Name="ExternalCostEvidenceText" Text="尚无历史快照" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="Provider Tokens" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ProviderTokensText" Text="unavailable" FontSize="28" FontWeight="SemiBold" /><TextBlock x:Name="ProviderTokensEvidenceText" Text="尚无历史快照" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="Codex Thread Tokens" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="unavailable" FontSize="28" FontWeight="SemiBold" /><TextBlock Text="协议未提供时明确记为 unavailable" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
             </Grid>
             <Border Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="16">
-                    <Grid><TextBlock Text="预算状态" Style="{StaticResource SectionTitleStyle}" /><TextBlock Text="6%" HorizontalAlignment="Right" FontWeight="SemiBold" /></Grid>
-                    <ProgressBar Value="0.18" Maximum="3" AutomationProperties.Name="今日预算使用 6%" />
+                    <Grid><TextBlock Text="预算状态" Style="{StaticResource SectionTitleStyle}" /><TextBlock x:Name="BudgetRatioText" Text="0%" HorizontalAlignment="Right" FontWeight="SemiBold" /></Grid>
+                    <ProgressBar x:Name="BudgetProgress" Value="0" Maximum="1" AutomationProperties.Name="今日预算使用情况" />
                     <Grid ColumnSpacing="16">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                        <StackPanel><TextBlock Text="单任务" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="¥0.18 / ¥0.50" /></StackPanel>
-                        <StackPanel Grid.Column="1"><TextBlock Text="今日" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="¥0.18 / ¥3.00" /></StackPanel>
-                        <StackPanel Grid.Column="2"><TextBlock Text="本月" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="¥2.84 / ¥30.00" /></StackPanel>
+                        <StackPanel><TextBlock Text="单任务" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="TaskBudgetText" Text="无当前任务 / 正在读取限额" /></StackPanel>
+                        <StackPanel Grid.Column="1"><TextBlock Text="今日" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="DailyBudgetText" Text="尚无费用 / 正在读取限额" /></StackPanel>
+                        <StackPanel Grid.Column="2"><TextBlock Text="本月" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="MonthlyBudgetText" Text="尚无费用 / 正在读取限额" /></StackPanel>
                     </Grid>
                     <TextBlock Text="检查点：25% · 50% · 80% · 100%" Style="{StaticResource CaptionTextStyle}" />
                 </StackPanel>
@@ -40,7 +40,7 @@
                         <StackPanel Grid.Column="2"><TextBlock Text="采用" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="部分采用" /></StackPanel>
                         <StackPanel Grid.Column="3"><TextBlock Text="经济结论" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="可能节省" /></StackPanel>
                     </Grid>
-                    <InfoBar IsOpen="True" Severity="Informational" Title="主代理实际跳过" Message="原始 Spark 文件解析。审查仅核对热点路径与证据，没有重做完整解析。" />
+                    <InfoBar x:Name="LatestReportBar" IsOpen="True" Severity="Informational" Title="尚无已归档任务" Message="Worker 删除前保存结果与 Usage 后，此处会显示有证据的经济结论。" />
                 </StackPanel>
             </Border>
         </StackPanel>

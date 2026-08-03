@@ -12,7 +12,7 @@
                     <Button Content="新建方案" Style="{StaticResource AccentButtonStyle}" />
                 </StackPanel>
             </Grid>
-            <InfoBar IsOpen="True" Severity="Success" Title="当前方案：经济模式" Message="Sol high · Luna ×1 · 每日外部预算 ¥3.00" />
+            <InfoBar x:Name="CurrentProfileBar" IsOpen="True" Severity="Informational" Title="正在加载配置方案" Message="从本地数据库读取。" />
             <Grid ColumnSpacing="16" RowSpacing="16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -25,15 +25,15 @@
                 <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource CardBorderStyle}" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" BorderThickness="2">
                     <StackPanel Spacing="12">
                         <Grid>
-                            <TextBlock Text="经济模式" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock x:Name="CurrentProfileNameText" Text="经济模式" Style="{StaticResource SectionTitleStyle}" />
                             <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}"><TextBlock Text="默认" /></Border>
                         </Grid>
-                        <TextBlock Text="Sol high · Luna · 最多 1 个 Worker" Style="{StaticResource BodyTextStyle}" />
+                        <TextBlock x:Name="CurrentProfileSummaryText" Text="Sol high · Luna · 最多 1 个 Worker" Style="{StaticResource BodyTextStyle}" />
                         <TextBlock Text="严格替代门槛，优先低成本且可独立验收的任务。" Style="{StaticResource CaptionTextStyle}" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Button Content="已启用" IsEnabled="False" />
                             <Button Content="复制" />
-                            <Button Content="导出" />
+                            <Button Content="导出" Click="ExportCurrentProfile" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -54,7 +54,7 @@
                         <TextBlock Text="性能模式" Style="{StaticResource SectionTitleStyle}" />
                         <TextBlock Text="Sol xhigh · 原生 Worker · 最多 3 个" Style="{StaticResource BodyTextStyle}" />
                         <TextBlock Text="仅在三个任务真正独立时并行，不重复探索同一根因。" Style="{StaticResource CaptionTextStyle}" />
-                        <Button Content="立即启用" HorizontalAlignment="Left" />
+                        <Button Content="立即启用" HorizontalAlignment="Left" Click="EnableSingleAgentMode" />
                     </StackPanel>
                 </Border>
                 <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardBorderStyle}">

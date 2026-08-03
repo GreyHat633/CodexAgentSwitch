@@ -14,8 +14,8 @@
                     Title="早上好"
                     Subtitle="当前会话已准备好，所有高成本操作都会先经过预算与委派边界检查。" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Button Content="应用并重启" AutomationProperties.Name="应用当前配置并重启 Codex" />
-                    <Button Content="启动 Codex" Style="{StaticResource HeroButtonStyle}" AutomationProperties.Name="启动受控 Codex 会话" />
+                    <Button Content="停止 App Server" Click="StopCodex" AutomationProperties.Name="停止 Codex App Server" />
+                    <Button x:Name="StartCodexButton" Content="启动 Codex" Click="StartCodex" Style="{StaticResource HeroButtonStyle}" AutomationProperties.Name="检测协议并启动受控 Codex App Server" />
                 </StackPanel>
             </Grid>
 
@@ -26,9 +26,9 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Spacing="8">
-                        <TextBlock Text="经济模式" FontSize="14" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                        <TextBlock Text="Sol high + Luna" FontSize="28" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                        <TextBlock Text="最多 1 个 Worker · 超预算时切回单人模式" Foreground="{ThemeResource TextOnAccentFillColorSecondaryBrush}" />
+                        <TextBlock x:Name="ProfileNameText" Text="正在加载方案" FontSize="14" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+                        <TextBlock x:Name="AgentSummaryText" Text="正在读取本地配置" FontSize="28" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+                        <TextBlock x:Name="WorkerPolicyText" Text="预算与 Worker 边界正在加载" Foreground="{ThemeResource TextOnAccentFillColorSecondaryBrush}" />
                     </StackPanel>
                     <Button Grid.Column="1" Content="更改方案" VerticalAlignment="Center" />
                 </Grid>
@@ -117,11 +117,11 @@
                         <TextBlock Text="环境状态" Style="{StaticResource SectionTitleStyle}" />
                         <Grid ColumnSpacing="8">
                             <FontIcon Glyph="&#xE73E;" />
-                            <TextBlock Grid.Column="1" Text="Codex 已检测" />
+                            <TextBlock x:Name="CodexDetectedText" Grid.Column="1" Text="Codex 尚未检测" />
                         </Grid>
                         <Grid ColumnSpacing="8">
                             <FontIcon Glyph="&#xE73E;" />
-                            <TextBlock Grid.Column="1" Text="App Server 可用" />
+                            <TextBlock x:Name="AppServerStatusText" Grid.Column="1" Text="App Server 尚未启动" />
                         </Grid>
                         <Grid ColumnSpacing="8">
                             <FontIcon Glyph="&#xE73E;" />

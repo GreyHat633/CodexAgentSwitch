@@ -5,12 +5,12 @@
     xmlns:local="using:CodexAgentSwitch.App.Views">
     <ScrollViewer>
         <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1000">
-            <Grid><local:PageHeader Title="诊断" Subtitle="把协议、Provider 与存储问题转成可恢复、可复制的具体说明。" /><Button Content="重新检测" HorizontalAlignment="Right" VerticalAlignment="Center" Style="{StaticResource AccentButtonStyle}" /></Grid>
+            <Grid><local:PageHeader Title="诊断" Subtitle="把协议、Provider 与存储问题转成可恢复、可复制的具体说明。" /><Button Content="重新检测" Click="RunDiagnostics" HorizontalAlignment="Right" VerticalAlignment="Center" Style="{StaticResource AccentButtonStyle}" /></Grid>
             <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="Codex App Server" Style="{StaticResource SectionTitleStyle}" /><TextBlock Text="可用" HorizontalAlignment="Right" Foreground="{ThemeResource SuccessBrush}" /></Grid><TextBlock Text="协议握手、Thread 与 Turn 流式事件已通过本机验证。" Style="{StaticResource BodyTextStyle}" /><Button Content="查看协议版本" HorizontalAlignment="Left" /></StackPanel></Border>
-                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="本地数据" Style="{StaticResource SectionTitleStyle}" /><TextBlock Text="安全" HorizontalAlignment="Right" Foreground="{ThemeResource SuccessBrush}" /></Grid><TextBlock Text="数据库可写；凭据仅保存引用；日志脱敏检查通过。" Style="{StaticResource BodyTextStyle}" /><Button Content="打开数据目录" HorizontalAlignment="Left" /></StackPanel></Border>
+                <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="Codex App Server" Style="{StaticResource SectionTitleStyle}" /><TextBlock x:Name="CodexStatusText" Text="尚未检测" HorizontalAlignment="Right" /></Grid><TextBlock x:Name="CodexDetailText" Text="点击重新检测以检查当前 Codex CLI 和协议。" Style="{StaticResource BodyTextStyle}" /><TextBlock x:Name="SchemaDetailText" Text="Schema：尚未生成" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="本地数据" Style="{StaticResource SectionTitleStyle}" /><TextBlock Text="安全" HorizontalAlignment="Right" Foreground="{ThemeResource SuccessBrush}" /></Grid><TextBlock Text="数据库可写；凭据仅保存引用；日志脱敏检查通过。" Style="{StaticResource BodyTextStyle}" /><TextBlock x:Name="DataRootText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" /></StackPanel></Border>
             </Grid>
-            <InfoBar IsOpen="True" Severity="Error" Title="Provider 连接失败示例" Message="HTTP 401：凭据被 Provider 拒绝。请更换 API Key 后重新测试；不会无限重试，也不会自动改用外部备用地址。" />
+            <InfoBar x:Name="DiagnosticResultBar" IsOpen="True" Severity="Informational" Title="可恢复错误" Message="Provider 401/429/超时会显示明确原因；不会无限重试，也不会自动改用未授权地址。" />
             <Border Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="16">
                     <TextBlock Text="检查项" Style="{StaticResource SectionTitleStyle}" />

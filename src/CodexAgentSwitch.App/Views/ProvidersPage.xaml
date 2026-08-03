@@ -43,47 +43,48 @@
                     <StackPanel Grid.Column="1" Spacing="4">
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <TextBlock Text="DeepSeek" Style="{StaticResource SectionTitleStyle}" />
-                            <Border Style="{StaticResource StatusBadgeStyle}"><TextBlock Text="未配置" /></Border>
+                            <Border Style="{StaticResource StatusBadgeStyle}"><TextBlock x:Name="DeepSeekStatusText" Text="正在加载" /></Border>
                         </StackPanel>
                         <TextBlock Text="内置 OpenAI-Compatible 预设" Style="{StaticResource BodyTextStyle}" />
-                        <TextBlock Text="凭据：未配置 · 今日费用：不可用" Style="{StaticResource CaptionTextStyle}" />
+                        <TextBlock x:Name="DeepSeekDetailText" Text="凭据：正在检查 · 今日费用：不可用" Style="{StaticResource CaptionTextStyle}" />
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Button Content="配置" Style="{StaticResource AccentButtonStyle}" />
-                        <Button Content="停用" IsEnabled="False" />
+                        <Button Content="配置" Style="{StaticResource AccentButtonStyle}" Click="OpenDeepSeekConfiguration" />
+                        <Button x:Name="DisableDeepSeekButton" Content="停用并回退 Luna" IsEnabled="False" Click="DisableDeepSeek" />
                     </StackPanel>
                 </Grid>
             </Border>
-            <Expander Header="添加通用 OpenAI-Compatible Provider">
+            <Expander x:Name="ProviderEditor" Header="配置 DeepSeek / 通用 OpenAI-Compatible Provider">
                 <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0">
                     <StackPanel Spacing="16">
                         <Grid ColumnSpacing="16">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                             <StackPanel Spacing="8">
                                 <TextBlock Text="名称" />
-                                <TextBox PlaceholderText="例如：团队网关" />
+                                <TextBox x:Name="ProviderNameText" PlaceholderText="例如：DeepSeek 或团队网关" Text="DeepSeek" AutomationProperties.Name="Provider 名称" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="8">
                                 <TextBlock Text="Base URL" />
-                                <TextBox PlaceholderText="https://api.example.com/v1" />
+                                <TextBox x:Name="BaseUrlText" PlaceholderText="https://api.example.com/v1" Text="https://api.deepseek.com" AutomationProperties.Name="Provider Base URL" />
                             </StackPanel>
                         </Grid>
                         <Grid ColumnSpacing="16">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                             <StackPanel Spacing="8">
                                 <TextBlock Text="API Key" />
-                                <PasswordBox PlaceholderText="安全保存到 Windows 凭据存储" PasswordRevealMode="Peek" />
+                                <PasswordBox x:Name="ApiKeyBox" PlaceholderText="安全保存到 Windows 凭据存储" PasswordRevealMode="Peek" AutomationProperties.Name="Provider API Key" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="8">
                                 <TextBlock Text="Model ID" />
-                                <TextBox PlaceholderText="连接成功后获取，或手动输入" />
+                                <TextBox x:Name="ModelIdText" PlaceholderText="例如 deepseek-chat；也可由模型发现获得" Text="deepseek-chat" AutomationProperties.Name="Provider Model ID" />
                             </StackPanel>
                         </Grid>
                         <InfoBar IsOpen="True" Severity="Warning" Title="HTTPS 安全要求" Message="非本机地址使用 HTTP 时会要求额外确认，API Key 不会写入配置或日志。" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="测试连接" Style="{StaticResource AccentButtonStyle}" />
-                            <Button Content="清空 Key" />
+                            <Button x:Name="TestConnectionButton" Content="测试并保存" Style="{StaticResource AccentButtonStyle}" Click="TestAndSaveProvider" />
+                            <Button Content="清空 Key" Click="ClearProviderKey" />
                         </StackPanel>
+                        <InfoBar x:Name="ProviderResultBar" IsOpen="False" />
                     </StackPanel>
                 </Border>
             </Expander>

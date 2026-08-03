@@ -66,4 +66,60 @@ public sealed class NativeCodexIntegrationTests
             }
         }
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Current_app_server_runs_three_independent_workers_without_duplicate_scope()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("CAS_RUN_CODEX_CONCURRENCY_INTEGRATION"), "1", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var discovery = await new CodexCommandLocator().LocateAsync();
+        Assert.True(discovery.IsAvailable, discovery.Status);
+        await using var client = new CodexAppServerClient(discovery.Command!);
+        var adapter = new NativeCodexWorkerAdapter(client, new SystemClock());
+        var capabilities = await adapter.GetCapabilitiesAsync();
+        var model = capabilities.Models.FirstOrDefault(candidate => candidate.Id.Contains("luna", StringComparison.OrdinalIgnoreCase))
+            ?? capabilities.Models.First(candidate => candidate.IsDefault);
+        var effort = model.SupportedReasoningEfforts.First();
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var tasks = Enumerable.Range(1, 3).Select(index => new WorkerTask(
+            "CAS-CONCURRENCY",
+            $"CAS-CONCURRENCY-L{index}",
+            $"Return health marker {index}.",
+            $"Return exactly CAS_PARALLEL_{index}. Do not call tools.",
+            root,
+            model.Id,
+            effort,
+            new WorkerScope([$"virtual/scope-{index}.txt"], [], [ScopeOperation.Read]),
+            [$"CAS_PARALLEL_{index}"],
+            ["Exact response"],
+            ["Any tool call"])).ToArray();
+        var jobs = await Task.WhenAll(tasks.Select(task => adapter.SpawnAsync(task)));
+        try
+        {
+            var results = await Task.WhenAll(jobs.Select(job => adapter.WaitAsync(job.JobId, TimeSpan.FromMinutes(2))));
+            Assert.All(results, result => Assert.NotNull(result));
+            for (var index = 0; index < results.Length; index++)
+            {
+                Assert.Equal(WorkerJobStatus.Completed, results[index]!.Status);
+                Assert.Contains($"CAS_PARALLEL_{index + 1}", results[index]!.Summary ?? string.Empty, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            foreach (var job in jobs)
+            {
+                var status = await adapter.ReadStatusAsync(job.JobId);
+                if (status.Status == WorkerJobStatus.Running)
+                {
+                    await adapter.CancelAsync(job.JobId);
+                }
+
+                await adapter.DeleteAsync(job.JobId);
+            }
+        }
+    }
 }

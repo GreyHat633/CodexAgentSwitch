@@ -6,6 +6,7 @@ using CodexAgentSwitch.Application.Orchestration;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.Common;
+using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Credentials;
 using CodexAgentSwitch.Infrastructure.ExternalProviders;
 using CodexAgentSwitch.Infrastructure.Persistence;
@@ -51,6 +52,9 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<SafeWorkerDeletionCoordinator>();
         services.AddSingleton<ProfileValidator>();
         services.AddSingleton<ProfileService>();
+        services.AddSingleton<CodexCommandLocator>();
+        services.AddSingleton(new CodexSchemaCache(paths.ProtocolCacheDirectory));
+        services.AddSingleton<CodexRuntimeManager>();
         services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Information));
         Services = services.BuildServiceProvider(validateScopes: true);
     }
