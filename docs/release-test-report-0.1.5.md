@@ -1,7 +1,9 @@
 # Codex Agent Switch 0.1.5 发布测试报告
 
-日期：2026-08-04  
-主验收系统：Windows 10 22H2 x64（10.0.19045）  
+日期：2026-08-04
+
+主验收系统：Windows 10 22H2 x64（10.0.19045）
+
 发布目录：`artifacts/release/0.1.5`
 
 ## P0 根因
@@ -63,4 +65,3 @@
 | `CodexAgentSwitch-Setup-Bundle-win10-x64.zip` | 413,147,501 | `601b6bd0efd10b4f0d9c79c8756b97badf130d28749bad7ec9ed58afefcadcda` |
 
 `release-manifest.json` 中全部文件的大小和 SHA-256 已重新计算并匹配。Portable App、Setup 和 Runtime Bootstrapper 的文件版本均为 0.1.5.0，产品版本关联提交 `d2cdafa6a0ba1bb7497d6b078c888af5a5d4b53c`。捆绑 Windows App Runtime 安装器的 Microsoft Authenticode 签名有效。
-
