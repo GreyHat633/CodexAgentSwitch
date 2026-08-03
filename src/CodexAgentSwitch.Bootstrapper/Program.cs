@@ -8,6 +8,6 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         var directory = AppContext.BaseDirectory;
         var service = new BootstrapperService(new SystemOsProbe(), new WindowsAppRuntimeInventory(), new BundledInstallerLocator(directory), new SystemProcessLauncher());
-        Application.Run(new BootstrapperForm(service, directory));
+        Application.Run(new BootstrapperForm(service, BootstrapperLayout.ResolveApplicationDirectory(directory)));
     }
 }

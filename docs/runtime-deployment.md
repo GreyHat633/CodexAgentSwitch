@@ -1,14 +1,20 @@
 # Runtime deployment
 
-The bootstrapper is a standalone `net8.0-windows10.0.19041.0` x64 WinForms executable. It has no Microsoft.WindowsAppSDK or WinUI dependency. Development remains self-contained; the compact framework-dependent release layout may place the bootstrapper beside the main app.
+The bootstrapper is a standalone, multi-file, self-contained `net8.0-windows10.0.19041.0` x64 WinForms application. It has no Microsoft.WindowsAppSDK or WinUI dependency. The compact release keeps the main app in a child directory so the two self-contained .NET runtime payloads cannot overwrite one another.
 
 ## Bundle layout
 
 ```text
 CodexAgentSwitch.Bootstrapper.exe
-CodexAgentSwitch.App.exe
+CodexAgentSwitch.Bootstrapper.dll
+CodexAgentSwitch.Bootstrapper.deps.json
+CodexAgentSwitch.Bootstrapper.runtimeconfig.json
+App/CodexAgentSwitch.App.exe
+App/CodexAgentSwitch.App.dll
 RuntimeInstaller/WindowsAppRuntimeInstall-x64.exe
 ```
+
+The bootstrapper also accepts the legacy layout where `CodexAgentSwitch.App.exe` is beside it. None of the 0.1.3 entry points is a .NET single-file bundle, so ordinary startup does not extract the application payload into `%TEMP%\.net`.
 
 The installer must be an already bundled, official, signed x64 Windows App Runtime installer. The bootstrapper never downloads software and never searches outside its application directory.
 

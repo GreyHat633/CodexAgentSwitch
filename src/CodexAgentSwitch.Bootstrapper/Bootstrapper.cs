@@ -15,6 +15,16 @@ public interface IRuntimeInventory { IReadOnlyList<RuntimeInstallation> Find(); 
 public interface IInstallerLocator { string? Find(); }
 public interface IProcessLauncher { int Launch(string fileName, string? arguments = null); }
 
+public static class BootstrapperLayout
+{
+    public static string ResolveApplicationDirectory(string bootstrapperDirectory)
+    {
+        var root = Path.GetFullPath(bootstrapperDirectory);
+        var nested = Path.Combine(root, "App");
+        return File.Exists(Path.Combine(nested, "CodexAgentSwitch.App.exe")) ? nested : root;
+    }
+}
+
 public sealed class SystemOsProbe : IOsProbe
 {
     public OsSnapshot Read() => new(Environment.OSVersion.Version, RuntimeInformation.OSArchitecture);

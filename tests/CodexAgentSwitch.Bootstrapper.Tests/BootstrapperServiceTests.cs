@@ -6,6 +6,24 @@ namespace CodexAgentSwitch.Bootstrapper.Tests;
 
 public sealed class BootstrapperServiceTests
 {
+    [Fact]
+    public void Compact_layout_prefers_nested_app_and_preserves_legacy_same_directory_layout()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "cas-bootstrapper-layout-" + Guid.NewGuid().ToString("N"));
+        var nested = Path.Combine(root, "App");
+        Directory.CreateDirectory(nested);
+        try
+        {
+            Assert.Equal(root, BootstrapperLayout.ResolveApplicationDirectory(root));
+            File.WriteAllText(Path.Combine(nested, "CodexAgentSwitch.App.exe"), string.Empty);
+            Assert.Equal(nested, BootstrapperLayout.ResolveApplicationDirectory(root));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     [Theory]
     [InlineData(19045, Architecture.X64, true)]
     [InlineData(22621, Architecture.X64, true)]

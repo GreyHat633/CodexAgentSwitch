@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.2',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.3',
     [switch]$IncludeRuntimeInstaller
 )
 
@@ -33,6 +33,37 @@ function New-ZipArchive([string]$sourceDirectory, [string]$destinationPath) {
         $destinationPath,
         [IO.Compression.CompressionLevel]::Fastest,
         $false)
+}
+
+function Assert-MultiFilePublish([string]$publishDirectory, [string]$assemblyName) {
+    foreach ($fileName in @("$assemblyName.exe", "$assemblyName.dll", "$assemblyName.deps.json", "$assemblyName.runtimeconfig.json")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $publishDirectory $fileName))) {
+            throw "Multi-file publish is incomplete: $fileName is missing from $publishDirectory."
+        }
+    }
+}
+
+function Copy-PublishContents([string]$sourceDirectory, [string]$destinationDirectory) {
+    New-Item -ItemType Directory -Force -Path $destinationDirectory | Out-Null
+    $sourceRoot = [IO.Path]::GetFullPath($sourceDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    foreach ($item in Get-ChildItem -LiteralPath $sourceRoot -Force -Recurse) {
+        $relativePath = $item.FullName.Substring($sourceRoot.Length).TrimStart([IO.Path]::DirectorySeparatorChar)
+        $destination = Join-Path $destinationDirectory $relativePath
+        if ($item.PSIsContainer) {
+            New-Item -ItemType Directory -Force -Path $destination | Out-Null
+            continue
+        }
+        if (Test-Path -LiteralPath $destination) {
+            $existing = Get-Item -LiteralPath $destination
+            if ($existing.Length -ne $item.Length -or
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $existing.FullName).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash) {
+                throw "Publish output collision has different content: $($item.Name)"
+            }
+            continue
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+        Copy-Item -LiteralPath $item.FullName -Destination $destination
+    }
 }
 
 function Test-MicrosoftSignedInstaller([string]$path) {
@@ -75,19 +106,20 @@ function Save-WindowsAppRuntimeInstaller([string]$destinationPath) {
 & (Join-Path $PSScriptRoot 'build.ps1') -Configuration Release
 
 $portable = Join-Path $resolvedRelease 'portable'
-dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:EnableMsixTooling=true -p:IncludeAllContentForSelfExtract=true -p:Version=$Version -o $portable --nologo
+dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishSingleFile=false -p:EnableMsixTooling=true -p:Version=$Version -o $portable --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Portable publish failed.' }
+Assert-MultiFilePublish $portable 'CodexAgentSwitch.App'
 $portableZip = Join-Path $resolvedRelease 'CodexAgentSwitch-win10-x64.zip'
 New-ZipArchive $portable $portableZip
 $portableHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $portableZip).Hash.ToLowerInvariant()
 Set-Content -LiteralPath ($portableZip + '.sha256') -Value "$portableHash  $([IO.Path]::GetFileName($portableZip))" -Encoding ASCII
 
 $setupPublish = Join-Path $resolvedRelease 'setup-publish'
-dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.Setup\CodexAgentSwitch.Setup.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$Version -o $setupPublish --nologo
+dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.Setup\CodexAgentSwitch.Setup.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:Version=$Version -o $setupPublish --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Setup publish failed.' }
+Assert-MultiFilePublish $setupPublish 'CodexAgentSwitch.Setup'
 $setupBundle = Join-Path $resolvedRelease 'setup-bundle'
-New-Item -ItemType Directory -Force -Path $setupBundle | Out-Null
-Copy-Item -LiteralPath (Join-Path $setupPublish 'CodexAgentSwitch.Setup.exe') -Destination $setupBundle
+Copy-PublishContents $setupPublish $setupBundle
 Copy-Item -LiteralPath $portableZip,($portableZip + '.sha256') -Destination $setupBundle
 Copy-Item -LiteralPath (Join-Path $repo 'docs\install-and-rollback.md') -Destination $setupBundle
 $brandingBundle = Join-Path $setupBundle 'Branding'
@@ -98,15 +130,18 @@ Copy-Item -LiteralPath (Join-Path $repo 'docs\branding\app-icon-design.md') -Des
 $compactZip = $null
 if ($IncludeRuntimeInstaller) {
     $compact = Join-Path $resolvedRelease 'compact-runtime'
-    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=false -p:Version=$Version -o $compact --nologo
+    $compactApp = Join-Path $compact 'App'
+    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:Version=$Version -o $compactApp --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Compact publish failed.' }
+    Assert-MultiFilePublish $compactApp 'CodexAgentSwitch.App'
     $appPri = Join-Path $repo 'src\CodexAgentSwitch.App\bin\Release\net8.0-windows10.0.22621.0\win-x64\CodexAgentSwitch.App.pri'
     if (-not (Test-Path -LiteralPath $appPri)) { throw 'Compact publish did not generate the application PRI resource index.' }
-    Copy-Item -LiteralPath $appPri -Destination $compact -Force
+    Copy-Item -LiteralPath $appPri -Destination $compactApp -Force
     $bootstrapPublish = Join-Path $resolvedRelease 'bootstrap-publish'
-    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.Bootstrapper\CodexAgentSwitch.Bootstrapper.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$Version -o $bootstrapPublish --nologo
+    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.Bootstrapper\CodexAgentSwitch.Bootstrapper.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:Version=$Version -o $bootstrapPublish --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Bootstrapper publish failed.' }
-    Copy-Item -LiteralPath (Join-Path $bootstrapPublish 'CodexAgentSwitch.Bootstrapper.exe') -Destination $compact
+    Assert-MultiFilePublish $bootstrapPublish 'CodexAgentSwitch.Bootstrapper'
+    Copy-PublishContents $bootstrapPublish $compact
     $runtimeDirectory = Join-Path $compact 'RuntimeInstaller'
     New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
     $runtimeInstaller = Join-Path $runtimeDirectory 'WindowsAppRuntimeInstall-x64.exe'
@@ -114,9 +149,7 @@ if ($IncludeRuntimeInstaller) {
     $compactZip = Join-Path $resolvedRelease 'CodexAgentSwitch-compact-runtime-win10-x64.zip'
     New-ZipArchive $compact $compactZip
     $runtimeSupport = Join-Path $setupBundle 'RuntimeSupport'
-    New-Item -ItemType Directory -Force -Path $runtimeSupport | Out-Null
-    Copy-Item -LiteralPath (Join-Path $bootstrapPublish 'CodexAgentSwitch.Bootstrapper.exe') -Destination $runtimeSupport
-    Copy-Item -LiteralPath $runtimeDirectory -Destination $runtimeSupport -Recurse
+    Copy-PublishContents $compact $runtimeSupport
     Copy-Item -LiteralPath (Join-Path $repo 'docs\runtime-deployment.md') -Destination $runtimeSupport
 }
 
