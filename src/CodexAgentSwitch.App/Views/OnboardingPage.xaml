@@ -1,0 +1,37 @@
+<Page
+    x:Class="CodexAgentSwitch.App.Views.OnboardingPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:CodexAgentSwitch.App.Views">
+    <ScrollViewer>
+        <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="900">
+            <local:PageHeader Title="欢迎使用 Codex Agent Switch" Subtitle="五步完成安全、可回退的首次配置。" />
+            <ProgressBar Value="2" Maximum="5" AutomationProperties.Name="首次启动向导，第 2 步，共 5 步" />
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <TextBlock Text="1 环境" Opacity="0.72" /><TextBlock Grid.Column="1" Text="2 主代理" FontWeight="SemiBold" /><TextBlock Grid.Column="2" Text="3 Worker" Opacity="0.72" /><TextBlock Grid.Column="3" Text="4 Provider" Opacity="0.72" /><TextBlock Grid.Column="4" Text="5 确认" Opacity="0.72" />
+            </Grid>
+            <TextBlock Text="选择主代理" Style="{StaticResource SectionTitleStyle}" />
+            <TextBlock Text="推理强度会根据当前 Codex 的真实能力动态显示。" Style="{StaticResource CaptionTextStyle}" />
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <Border Style="{StaticResource CardBorderStyle}" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" BorderThickness="2">
+                    <StackPanel Spacing="12">
+                        <FontIcon Glyph="&#xE8D4;" FontSize="28" HorizontalAlignment="Left" />
+                        <TextBlock Text="Sol" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="适合复杂规划与最终集成" Style="{StaticResource BodyTextStyle}" />
+                        <RadioButton Content="已选择" IsChecked="True" GroupName="agent" />
+                        <ComboBox Header="推理强度" SelectedIndex="2"><ComboBoxItem Content="low" /><ComboBoxItem Content="medium" /><ComboBoxItem Content="high" /><ComboBoxItem Content="xhigh" /></ComboBox>
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="12"><FontIcon Glyph="&#xE8EF;" FontSize="28" HorizontalAlignment="Left" /><TextBlock Text="Terra" Style="{StaticResource SectionTitleStyle}" /><TextBlock Text="适合大型读取与扫描" Style="{StaticResource BodyTextStyle}" /><RadioButton Content="选择 Terra" GroupName="agent" /></StackPanel>
+                </Border>
+                <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="12"><FontIcon Glyph="&#xE74C;" FontSize="28" HorizontalAlignment="Left" /><TextBlock Text="Luna" Style="{StaticResource SectionTitleStyle}" /><TextBlock Text="适合明确、轻量任务" Style="{StaticResource BodyTextStyle}" /><RadioButton Content="选择 Luna" GroupName="agent" /></StackPanel>
+                </Border>
+            </Grid>
+            <Grid><Button Content="返回" /><Button HorizontalAlignment="Right" Content="下一步：选择 Worker" Style="{StaticResource HeroButtonStyle}" /></Grid>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

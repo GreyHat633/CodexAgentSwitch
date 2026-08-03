@@ -1,0 +1,54 @@
+<Page
+    x:Class="CodexAgentSwitch.App.Views.UiGalleryPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:CodexAgentSwitch.App.Views">
+    <ScrollViewer>
+        <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1000">
+            <local:PageHeader Title="UI Gallery" Subtitle="设计令牌、控件语义与完整状态的可视化验收面板。" />
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="排版" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="页面标题 · Segoe UI Variable → Segoe UI · 32" Style="{StaticResource PageTitleStyle}" />
+                    <TextBlock Text="区块标题 · Semibold" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="正文不小于 14px，支持中英文长文本自然换行。Codex Agent Switch keeps technical detail progressively disclosed." Style="{StaticResource BodyTextStyle}" />
+                    <TextBlock Text="辅助说明使用次级视觉层级，但仍保持可读对比度。" Style="{StaticResource CaptionTextStyle}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="间距与圆角" Style="{StaticResource SectionTitleStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Width="72" Height="72" Background="{ThemeResource SubtleBackgroundBrush}" CornerRadius="6"><TextBlock Text="6" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+                        <Border Width="72" Height="72" Background="{ThemeResource SubtleBackgroundBrush}" CornerRadius="8"><TextBlock Text="8" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+                        <Border Width="72" Height="72" Background="{ThemeResource SubtleBackgroundBrush}" CornerRadius="12"><TextBlock Text="12" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+                        <Border Width="72" Height="72" Background="{ThemeResource SubtleBackgroundBrush}" CornerRadius="16"><TextBlock Text="16" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+                    </StackPanel>
+                    <TextBlock Text="4 / 8 / 12 / 16 / 24 / 32 像素节奏" Style="{StaticResource CaptionTextStyle}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="交互控件" Style="{StaticResource SectionTitleStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="主要操作" Style="{StaticResource AccentButtonStyle}" /><Button Content="次要操作" /><Button Content="危险操作" Foreground="{ThemeResource DangerBrush}" /><Button Content="不可用" IsEnabled="False" /></StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="16"><ToggleSwitch Header="Worker" OnContent="已开启" OffContent="已停用" IsOn="True" /><ComboBox Header="推理强度" SelectedIndex="1"><ComboBoxItem Content="medium" /><ComboBoxItem Content="high" /></ComboBox><NumberBox Header="最大 Worker" Value="1" Minimum="1" Maximum="3" /></StackPanel>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="状态与恢复" Style="{StaticResource SectionTitleStyle}" />
+                    <InfoBar IsOpen="True" Severity="Success" Title="成功" Message="配置已安全保存。" />
+                    <InfoBar IsOpen="True" Severity="Informational" Title="信息" Message="当前字段由能力发现获得。" />
+                    <InfoBar IsOpen="True" Severity="Warning" Title="警告" Message="即将达到预算检查点，可继续或切回 Luna。" />
+                    <InfoBar IsOpen="True" Severity="Error" Title="错误" Message="Provider 返回 429；不会无限重试。" />
+                </StackPanel>
+            </Border>
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <Border Style="{StaticResource CompactCardBorderStyle}"><StackPanel Spacing="8"><ProgressRing IsActive="True" Width="28" Height="28" HorizontalAlignment="Left" /><TextBlock Text="加载中" FontWeight="SemiBold" /><TextBlock Text="正在读取当前 App Server 能力。" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Grid.Column="1" Style="{StaticResource CompactCardBorderStyle}"><StackPanel Spacing="8"><FontIcon Glyph="&#xE8A5;" FontSize="28" HorizontalAlignment="Left" /><TextBlock Text="空状态" FontWeight="SemiBold" /><TextBlock Text="尚无历史任务；启动后会在这里出现。" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Grid.Column="2" Style="{StaticResource CompactCardBorderStyle}"><StackPanel Spacing="8"><FontIcon Glyph="&#xEA39;" FontSize="28" HorizontalAlignment="Left" Foreground="{ThemeResource DangerBrush}" /><TextBlock Text="失败状态" FontWeight="SemiBold" /><TextBlock Text="显示原因与恢复操作，不只写“失败”。" Style="{StaticResource CaptionTextStyle}" /><Button Content="重试" HorizontalAlignment="Left" /></StackPanel></Border>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

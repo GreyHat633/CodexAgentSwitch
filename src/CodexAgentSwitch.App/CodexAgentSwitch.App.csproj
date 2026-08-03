@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <WindowsSdkPackageVersion>10.0.22621.38</WindowsSdkPackageVersion>
+    <RootNamespace>CodexAgentSwitch.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained Condition="'$(WindowsAppSDKSelfContained)' == ''">true</WindowsAppSDKSelfContained>
+    <WindowsAppSdkBootstrapInitialize Condition="'$(WindowsAppSDKSelfContained)' != 'true'">true</WindowsAppSdkBootstrapInitialize>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260710003" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CodexAgentSwitch.Application\CodexAgentSwitch.Application.csproj" />
+    <ProjectReference Include="..\CodexAgentSwitch.Infrastructure\CodexAgentSwitch.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

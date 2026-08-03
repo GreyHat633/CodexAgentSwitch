@@ -1,0 +1,28 @@
+<Page
+    x:Class="CodexAgentSwitch.App.Views.DiagnosticsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:CodexAgentSwitch.App.Views">
+    <ScrollViewer>
+        <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1000">
+            <Grid><local:PageHeader Title="诊断" Subtitle="把协议、Provider 与存储问题转成可恢复、可复制的具体说明。" /><Button Content="重新检测" HorizontalAlignment="Right" VerticalAlignment="Center" Style="{StaticResource AccentButtonStyle}" /></Grid>
+            <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="Codex App Server" Style="{StaticResource SectionTitleStyle}" /><TextBlock Text="可用" HorizontalAlignment="Right" Foreground="{ThemeResource SuccessBrush}" /></Grid><TextBlock Text="协议握手、Thread 与 Turn 流式事件已通过本机验证。" Style="{StaticResource BodyTextStyle}" /><Button Content="查看协议版本" HorizontalAlignment="Left" /></StackPanel></Border>
+                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="本地数据" Style="{StaticResource SectionTitleStyle}" /><TextBlock Text="安全" HorizontalAlignment="Right" Foreground="{ThemeResource SuccessBrush}" /></Grid><TextBlock Text="数据库可写；凭据仅保存引用；日志脱敏检查通过。" Style="{StaticResource BodyTextStyle}" /><Button Content="打开数据目录" HorizontalAlignment="Left" /></StackPanel></Border>
+            </Grid>
+            <InfoBar IsOpen="True" Severity="Error" Title="Provider 连接失败示例" Message="HTTP 401：凭据被 Provider 拒绝。请更换 API Key 后重新测试；不会无限重试，也不会自动改用外部备用地址。" />
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="检查项" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="Codex 安装" /><TextBlock Grid.Column="1" Text="已检测" /><TextBlock Grid.Column="2" Text="通过" Foreground="{ThemeResource SuccessBrush}" /></Grid>
+                    <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="Schema 兼容性" /><TextBlock Grid.Column="1" Text="当前缓存" /><TextBlock Grid.Column="2" Text="通过" Foreground="{ThemeResource SuccessBrush}" /></Grid>
+                    <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="Windows 凭据存储" /><TextBlock Grid.Column="1" Text="CurrentUser" /><TextBlock Grid.Column="2" Text="通过" Foreground="{ThemeResource SuccessBrush}" /></Grid>
+                    <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="DeepSeek" /><TextBlock Grid.Column="1" Text="未配置" /><TextBlock Grid.Column="2" Text="跳过" Foreground="{ThemeResource WarningBrush}" /></Grid>
+                </StackPanel>
+            </Border>
+            <Expander Header="开发者诊断详情">
+                <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0"><StackPanel Spacing="8"><TextBlock Text="原始 Thread ID、JSON-RPC 与日志只在此渐进披露区域出现。" Style="{StaticResource CaptionTextStyle}" /><TextBox FontFamily="Cascadia Mono" IsReadOnly="True" AcceptsReturn="True" Height="130" Text="[sanitized] initialize: ok&#x0a;[sanitized] schema: compatible&#x0a;[sanitized] credential value: [REDACTED]" /></StackPanel></Border>
+            </Expander>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

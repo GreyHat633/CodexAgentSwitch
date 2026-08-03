@@ -1,0 +1,35 @@
+<Page
+    x:Class="CodexAgentSwitch.App.Views.HistoryPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:CodexAgentSwitch.App.Views">
+    <Grid Padding="{StaticResource PagePadding}" RowSpacing="24" MaxWidth="1180">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+        <local:PageHeader Title="历史记录" Subtitle="Worker Thread 删除后，结果、Usage 与审查结论仍会保留。" />
+        <Grid Grid.Row="1" ColumnSpacing="16">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="360" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="12">
+                    <TextBox PlaceholderText="搜索任务" Header="搜索" />
+                    <ComboBox Header="状态" SelectedIndex="0"><ComboBoxItem Content="全部" /><ComboBoxItem Content="已采用" /><ComboBoxItem Content="已拒绝" /></ComboBox>
+                    <ListView SelectedIndex="0" AutomationProperties.Name="历史任务列表">
+                        <ListViewItem><StackPanel Spacing="4"><TextBlock Text="审计 Spark profile" FontWeight="SemiBold" /><TextBlock Text="今天 11:42 · 部分采用" Style="{StaticResource CaptionTextStyle}" /></StackPanel></ListViewItem>
+                        <ListViewItem><StackPanel Spacing="4"><TextBlock Text="Provider 连接测试" FontWeight="SemiBold" /><TextBlock Text="昨天 20:17 · 已采用" Style="{StaticResource CaptionTextStyle}" /></StackPanel></ListViewItem>
+                        <ListViewItem><StackPanel Spacing="4"><TextBlock Text="模糊任务申请" FontWeight="SemiBold" /><TextBlock Text="昨天 14:09 · 拒绝委派" Style="{StaticResource CaptionTextStyle}" /></StackPanel></ListViewItem>
+                    </ListView>
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="16">
+                    <Grid><TextBlock Text="审计 Spark profile" Style="{StaticResource SectionTitleStyle}" /><Button Content="导出报告" HorizontalAlignment="Right" /></Grid>
+                    <TextBlock Text="Task Group 详情仅在诊断视图展示；这里保留人类可读摘要。" Style="{StaticResource CaptionTextStyle}" />
+                    <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><StackPanel><TextBlock Text="主代理" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="Sol high" /></StackPanel><StackPanel Grid.Column="1"><TextBlock Text="Worker" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="DeepSeek · 结果已删除前保存" /></StackPanel></Grid>
+                    <TextBlock Text="采用状态" Style="{StaticResource CaptionTextStyle}" /><Border Style="{StaticResource StatusBadgeStyle}" HorizontalAlignment="Left"><TextBlock Text="partially_adopted" /></Border>
+                    <TextBlock Text="实际跳过" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="原始 profile 解析与热点树构建" Style="{StaticResource BodyTextStyle}" />
+                    <TextBlock Text="重复劳动" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="一次定向抽查，未发生完整重复" Style="{StaticResource BodyTextStyle}" />
+                    <InfoBar IsOpen="True" Severity="Success" Title="Usage 快照已保存" Message="Worker Thread 已安全删除，所有可取得的用量字段仍可查看。" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Page>

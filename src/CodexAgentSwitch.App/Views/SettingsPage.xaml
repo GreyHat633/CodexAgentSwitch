@@ -1,0 +1,37 @@
+<Page
+    x:Class="CodexAgentSwitch.App.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:CodexAgentSwitch.App.Views">
+    <ScrollViewer>
+        <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="900">
+            <local:PageHeader Title="设置" Subtitle="普通流程不需要编辑 JSON 或 TOML；高级选项按需展开。" />
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="外观与无障碍" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid><StackPanel><TextBlock Text="应用主题" /><TextBlock Text="默认跟随 Windows" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ComboBox HorizontalAlignment="Right" SelectedIndex="0"><ComboBoxItem Content="使用系统设置" /><ComboBoxItem Content="浅色" /><ComboBoxItem Content="深色" /></ComboBox></Grid>
+                    <Grid><StackPanel><TextBlock Text="减少动画" /><TextBlock Text="尊重系统设置；也可在本应用中强制关闭" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" OffContent="跟随系统" OnContent="已开启" /></Grid>
+                    <Grid><StackPanel><TextBlock Text="高对比度" /><TextBlock Text="自动使用系统高对比资源" Style="{StaticResource CaptionTextStyle}" /></StackPanel><TextBlock HorizontalAlignment="Right" Text="由系统管理" Style="{StaticResource CaptionTextStyle}" /></Grid>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="会话与数据" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid><StackPanel><TextBlock Text="启动时恢复上次 Profile" /><TextBlock Text="不会自动恢复被取消的 Worker" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
+                    <Grid><StackPanel><TextBlock Text="诊断日志" /><TextBlock Text="默认脱敏且不记录输入内容或 API Key" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="备份配置" /><Button Content="恢复配置" /><Button Content="导出崩溃日志" /></StackPanel>
+                </StackPanel>
+            </Border>
+            <Expander Header="高级设置">
+                <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0">
+                    <StackPanel Spacing="16">
+                        <TextBox Header="Codex 可执行文件" Text="自动检测" IsReadOnly="True" />
+                        <TextBox Header="协议 Schema 缓存目录" Text="应用数据目录 / protocol-cache" IsReadOnly="True" />
+                        <NumberBox Header="App Server 请求超时（秒）" Value="30" Minimum="5" Maximum="300" SpinButtonPlacementMode="Compact" />
+                        <InfoBar IsOpen="True" Severity="Warning" Title="高级选项" Message="协议兼容性和 Thread 所有权保护不会因这里的设置而关闭。" />
+                    </StackPanel>
+                </Border>
+            </Expander>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

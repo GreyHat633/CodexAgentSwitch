@@ -1,0 +1,33 @@
+<Window
+    x:Class="CodexAgentSwitch.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Codex Agent Switch">
+    <NavigationView
+        x:Name="RootNavigation"
+        AutomationProperties.Name="主导航"
+        Background="{ThemeResource WindowBackgroundBrush}"
+        IsBackButtonVisible="Collapsed"
+        IsSettingsVisible="False"
+        IsTabStop="False"
+        IsTitleBarAutoPaddingEnabled="True"
+        PaneDisplayMode="Auto"
+        PaneTitle="Codex Agent Switch"
+        SelectionChanged="OnSelectionChanged">
+        <NavigationView.MenuItems>
+            <NavigationViewItem Content="首页" Icon="Home" Tag="dashboard" />
+            <NavigationViewItem Content="配置方案" Icon="Library" Tag="profiles" />
+            <NavigationViewItem Content="Provider" Icon="Globe" Tag="providers" />
+            <NavigationViewItem Content="运行任务" Icon="Play" Tag="tasks" />
+            <NavigationViewItem Content="用量与预算" Icon="Document" Tag="usage" />
+            <NavigationViewItem Content="历史记录" Icon="Clock" Tag="history" />
+            <NavigationViewItem Content="设置" Icon="Setting" Tag="settings" />
+            <NavigationViewItem Content="诊断" Icon="Repair" Tag="diagnostics" />
+        </NavigationView.MenuItems>
+        <NavigationView.FooterMenuItems>
+            <NavigationViewItem Content="首次启动向导" Icon="People" Tag="onboarding" />
+            <NavigationViewItem Content="UI Gallery" Icon="AllApps" Tag="gallery" />
+        </NavigationView.FooterMenuItems>
+        <Frame x:Name="ContentFrame" />
+    </NavigationView>
+</Window>
