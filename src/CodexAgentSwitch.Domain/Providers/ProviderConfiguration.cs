@@ -13,6 +13,31 @@ public sealed record ProviderPricing(
     string Currency,
     DateOnly? UpdatedOn);
 
+public enum ProviderErrorKind
+{
+    None,
+    InvalidConfiguration,
+    Authentication,
+    RateLimited,
+    Timeout,
+    ModelUnavailable,
+    ServiceUnavailable,
+    Protocol,
+    Cancelled,
+}
+
+public sealed record ProviderUsage(long? InputTokens, long? OutputTokens, long? TotalTokens);
+
+public sealed record ProviderConnectionResult(
+    bool Succeeded,
+    ProviderErrorKind ErrorKind,
+    string Message,
+    TimeSpan Latency,
+    string? ResponseModel,
+    ProviderUsage? Usage,
+    IReadOnlyList<string> Models,
+    bool ModelDiscoverySupported);
+
 public sealed record ProviderConfiguration(
     string Id,
     string Name,
