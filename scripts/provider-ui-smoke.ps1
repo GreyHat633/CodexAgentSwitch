@@ -13,7 +13,8 @@ $credentialTarget = $credentialPrefix + 'provider/deepseek-default'
 New-Item -ItemType Directory -Force -Path $data | Out-Null
 Remove-Item -LiteralPath (Join-Path $data 'provider-input.jsonl') -ErrorAction SilentlyContinue
 $env:TEMP = Join-Path $data 'temp'; $env:TMP = $env:TEMP
-New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = Join-Path $env:TEMP 'bundle-extract'
+New-Item -ItemType Directory -Force -Path $env:TEMP,$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR | Out-Null
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition @'

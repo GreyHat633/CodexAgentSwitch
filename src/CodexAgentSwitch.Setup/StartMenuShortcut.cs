@@ -18,6 +18,7 @@ public sealed class WindowsStartMenuShortcut(string? programsDirectory = null) :
     {
         var app = Path.GetFullPath(Path.Combine(targetDirectory, "CodexAgentSwitch.App.exe"));
         if (!File.Exists(app)) throw new FileNotFoundException("无法为不存在的主程序创建快捷方式。", app);
+        var icon = Path.GetFullPath(Path.Combine(targetDirectory, "AppIcon.ico"));
         var folder = Path.Combine(programsDirectory, "Codex Agent Switch");
         Directory.CreateDirectory(folder);
         var shortcutPath = Path.Combine(folder, "Codex Agent Switch.lnk");
@@ -33,7 +34,8 @@ public sealed class WindowsStartMenuShortcut(string? programsDirectory = null) :
             shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, [app]);
             shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, [targetDirectory]);
             shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, ["Codex Agent Switch"]);
-            shortcutType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, shortcut, [$"{app},0"]);
+            shortcutType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, shortcut,
+                [File.Exists(icon) ? icon : $"{app},0"]);
             shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
             return shortcutPath;
         }

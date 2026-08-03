@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.1',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.2',
     [switch]$IncludeRuntimeInstaller
 )
 
@@ -20,9 +20,10 @@ $env:NUGET_PACKAGES = Join-Path $repo '.nuget\packages'
 $env:NUGET_HTTP_CACHE_PATH = Join-Path $repo '.nuget\http-cache'
 $env:TEMP = Join-Path $repo '.tmp'
 $env:TMP = $env:TEMP
+$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = Join-Path $env:TEMP 'bundle-extract'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
-New-Item -ItemType Directory -Force -Path $env:DOTNET_CLI_HOME,$env:NUGET_PACKAGES,$env:NUGET_HTTP_CACHE_PATH,$env:TEMP | Out-Null
+New-Item -ItemType Directory -Force -Path $env:DOTNET_CLI_HOME,$env:NUGET_PACKAGES,$env:NUGET_HTTP_CACHE_PATH,$env:TEMP,$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 function New-ZipArchive([string]$sourceDirectory, [string]$destinationPath) {
@@ -32,6 +33,43 @@ function New-ZipArchive([string]$sourceDirectory, [string]$destinationPath) {
         $destinationPath,
         [IO.Compression.CompressionLevel]::Fastest,
         $false)
+}
+
+function Test-MicrosoftSignedInstaller([string]$path) {
+    if (-not (Test-Path -LiteralPath $path) -or (Get-Item -LiteralPath $path).Length -lt 1MB) { return $false }
+    $signature = Get-AuthenticodeSignature -LiteralPath $path
+    return $signature.Status -eq 'Valid' -and $signature.SignerCertificate.Subject -match 'Microsoft'
+}
+
+function Save-WindowsAppRuntimeInstaller([string]$destinationPath) {
+    $priorInstaller = Get-ChildItem -LiteralPath $resolvedArtifacts -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $resolvedRelease } |
+        ForEach-Object { Join-Path $_.FullName 'compact-runtime\RuntimeInstaller\WindowsAppRuntimeInstall-x64.exe' } |
+        Where-Object { Test-MicrosoftSignedInstaller $_ } |
+        Select-Object -First 1
+
+    if ($priorInstaller) {
+        Copy-Item -LiteralPath $priorInstaller -Destination $destinationPath -Force
+        return
+    }
+
+    $uri = 'https://aka.ms/windowsappsdk/1.8/1.8.260710003/windowsappruntimeinstall-x64.exe'
+    $temporaryPath = "$destinationPath.download"
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $temporaryPath
+            if (-not (Test-MicrosoftSignedInstaller $temporaryPath)) {
+                throw 'Downloaded Runtime installer is incomplete or does not have a valid Microsoft signature.'
+            }
+            Move-Item -LiteralPath $temporaryPath -Destination $destinationPath -Force
+            return
+        }
+        catch {
+            if ($attempt -eq 3) { throw }
+            Start-Sleep -Seconds (2 * $attempt)
+        }
+    }
 }
 
 & (Join-Path $PSScriptRoot 'build.ps1') -Configuration Release
@@ -52,6 +90,11 @@ New-Item -ItemType Directory -Force -Path $setupBundle | Out-Null
 Copy-Item -LiteralPath (Join-Path $setupPublish 'CodexAgentSwitch.Setup.exe') -Destination $setupBundle
 Copy-Item -LiteralPath $portableZip,($portableZip + '.sha256') -Destination $setupBundle
 Copy-Item -LiteralPath (Join-Path $repo 'docs\install-and-rollback.md') -Destination $setupBundle
+$brandingBundle = Join-Path $setupBundle 'Branding'
+New-Item -ItemType Directory -Force -Path $brandingBundle | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'assets\branding\AppIcon.svg'),(Join-Path $repo 'assets\branding\AppIcon.ico') -Destination $brandingBundle
+Copy-Item -LiteralPath (Join-Path $repo 'assets\branding\png') -Destination $brandingBundle -Recurse
+Copy-Item -LiteralPath (Join-Path $repo 'docs\branding\app-icon-design.md') -Destination $brandingBundle
 $compactZip = $null
 if ($IncludeRuntimeInstaller) {
     $compact = Join-Path $resolvedRelease 'compact-runtime'
@@ -67,11 +110,7 @@ if ($IncludeRuntimeInstaller) {
     $runtimeDirectory = Join-Path $compact 'RuntimeInstaller'
     New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
     $runtimeInstaller = Join-Path $runtimeDirectory 'WindowsAppRuntimeInstall-x64.exe'
-    Invoke-WebRequest -UseBasicParsing -Uri 'https://aka.ms/windowsappsdk/1.8/1.8.260710003/windowsappruntimeinstall-x64.exe' -OutFile $runtimeInstaller
-    $signature = Get-AuthenticodeSignature -LiteralPath $runtimeInstaller
-    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft') {
-        throw "Runtime installer signature validation failed: $($signature.Status), $($signature.SignerCertificate.Subject)"
-    }
+    Save-WindowsAppRuntimeInstaller $runtimeInstaller
     $compactZip = Join-Path $resolvedRelease 'CodexAgentSwitch-compact-runtime-win10-x64.zip'
     New-ZipArchive $compact $compactZip
     $runtimeSupport = Join-Path $setupBundle 'RuntimeSupport'
@@ -93,6 +132,12 @@ $manifest = [ordered]@{
     generatedAt = [DateTimeOffset]::Now.ToString('O')
     runtimeInstallerBundled = [bool]$IncludeRuntimeInstaller
     runtimeInstallerSource = if ($IncludeRuntimeInstaller) { 'https://aka.ms/windowsappsdk/1.8/1.8.260710003/windowsappruntimeinstall-x64.exe' } else { $null }
+    branding = [ordered]@{
+        source = 'Branding/AppIcon.svg'
+        ico = 'Branding/AppIcon.ico'
+        pngSizes = @(16,20,24,32,40,44,48,64,96,128,150,256,310,512)
+        entryPoints = @('app-window','app-executable','portable','setup','runtime-bootstrapper','start-menu-shortcut')
+    }
     files = @($files)
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $resolvedRelease 'release-manifest.json') -Encoding UTF8

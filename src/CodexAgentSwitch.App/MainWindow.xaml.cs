@@ -21,6 +21,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        ApplyWindowIcon();
         RootNavigation.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(TracePointerPressed), true);
         RootNavigation.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(TracePointerReleased), true);
         RootNavigation.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler(TracePointerCanceled), true);
@@ -46,6 +47,15 @@ public sealed partial class MainWindow : Window
         }
         RootNavigation.Loaded += ResizeForRasterizationScale;
         RootNavigation.Loaded += CaptureOnLoadedAsync;
+    }
+
+    private void ApplyWindowIcon()
+    {
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "AppIcon.ico");
+        if (File.Exists(iconPath))
+        {
+            AppWindow.SetIcon(iconPath);
+        }
     }
 
     private void OnContentNavigated(object sender, NavigationEventArgs args)

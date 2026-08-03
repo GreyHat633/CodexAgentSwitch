@@ -4,6 +4,7 @@ using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using System.Text.Json;
 
 namespace CodexAgentSwitch.App.Views;
 
@@ -26,6 +27,44 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
         }
 
         UpdateRuntime(await App.Services.GetRequiredService<CodexRuntimeManager>().DetectAsync());
+        if (string.Equals(Environment.GetEnvironmentVariable("CAS_UI_TEST_LONG_STATUS"), "1", StringComparison.Ordinal))
+        {
+            CodexDetectedText.Text = "Codex 已检测：Windows 10 长路径兼容性与系统字体回退验证状态正常";
+            AppServerStatusText.Text = "App Server 正在使用本地受控协议；窗口缩小时此状态文字应自然换行且不得覆盖状态图标";
+        }
+
+        await Task.Delay(700);
+        WriteEnvironmentLayoutTrace();
+    }
+
+    private void WriteEnvironmentLayoutTrace()
+    {
+        var path = Environment.GetEnvironmentVariable("CAS_LAYOUT_TRACE_PATH");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        static object Bounds(FrameworkElement element, UIElement root)
+        {
+            var point = element.TransformToVisual(root).TransformPoint(new Windows.Foundation.Point());
+            return new { x = point.X, y = point.Y, width = element.ActualWidth, height = element.ActualHeight };
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var rows = new[]
+        {
+            new { name = "codex", icon = Bounds(CodexStatusIcon, this), text = Bounds(CodexDetectedText, this) },
+            new { name = "appServer", icon = Bounds(AppServerStatusIcon, this), text = Bounds(AppServerStatusText, this) },
+            new { name = "credential", icon = Bounds(CredentialStatusIcon, this), text = Bounds(CredentialStatusText, this) },
+        };
+        File.WriteAllText(path, JsonSerializer.Serialize(new
+        {
+            rasterizationScale = XamlRoot?.RasterizationScale ?? 1d,
+            pageWidth = ActualWidth,
+            pageHeight = ActualHeight,
+            rows,
+        }, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private async void StartCodex(object sender, RoutedEventArgs e)

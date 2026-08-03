@@ -33,12 +33,12 @@ public sealed class ProfileValidator
             issues.Add(new("profile.workers.range", "Worker 数量必须在 0 到 3 之间。", "WorkerPolicy.MaxWorkers"));
         }
 
-        if (!profile.WorkerPolicy.Enabled && maxWorkers != 0)
+        if (!profile.WorkerPolicy.Enabled && (maxWorkers != 0 || profile.WorkerPolicy.Source != WorkerSource.Disabled))
         {
             issues.Add(new("profile.workers.disabled_count", "停用 Worker 时最大并发必须为 0。", "WorkerPolicy.MaxWorkers"));
         }
 
-        if (profile.WorkerPolicy.Enabled && maxWorkers == 0)
+        if (profile.WorkerPolicy.Enabled && (maxWorkers == 0 || profile.WorkerPolicy.Source == WorkerSource.Disabled))
         {
             issues.Add(new("profile.workers.enabled_count", "启用 Worker 时最大并发至少为 1。", "WorkerPolicy.MaxWorkers"));
         }
@@ -49,9 +49,18 @@ public sealed class ProfileValidator
             issues.Add(new("profile.provider.required", "外部 Worker 必须选择 Provider。", "WorkerPolicy.PreferredProviderId"));
         }
 
+        if (profile.WorkerPolicy.Enabled
+            && profile.WorkerPolicy.Source == WorkerSource.NativeCodex
+            && string.IsNullOrWhiteSpace(profile.WorkerPolicy.PreferredProviderId))
+        {
+            issues.Add(new("profile.native_worker.required", "启用 Native Worker 时必须选择 Sol、Terra 或 Luna。", "WorkerPolicy.PreferredProviderId"));
+        }
+
         ValidateNonNegative(profile.Budget.PerTask, "Budget.PerTask", issues);
         ValidateNonNegative(profile.Budget.Daily, "Budget.Daily", issues);
         ValidateNonNegative(profile.Budget.Monthly, "Budget.Monthly", issues);
+        ValidateNonNegative(profile.Budget.TokenLimit, "Budget.TokenLimit", issues);
+        ValidateNonNegative(profile.Budget.RequestLimit, "Budget.RequestLimit", issues);
         if (string.IsNullOrWhiteSpace(profile.Budget.Currency))
         {
             issues.Add(new("profile.currency.required", "预算币种不能为空。", "Budget.Currency"));
@@ -60,7 +69,37 @@ public sealed class ProfileValidator
         return new ValidationResult(issues);
     }
 
+    public ValidationResult ValidateUniqueName(Profile profile, IEnumerable<Profile> existingProfiles)
+    {
+        var result = Validate(profile);
+        var issues = result.Issues.ToList();
+        if (!string.IsNullOrWhiteSpace(profile.Name)
+            && existingProfiles.Any(existing => existing.Id != profile.Id
+                && string.Equals(existing.Name.Trim(), profile.Name.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            issues.Add(new("profile.name.duplicate", "配置方案名称已存在，请使用其他名称。", nameof(profile.Name)));
+        }
+
+        return new ValidationResult(issues);
+    }
+
     private static void ValidateNonNegative(decimal? value, string field, ICollection<ValidationIssue> issues)
+    {
+        if (value is < 0)
+        {
+            issues.Add(new("profile.budget.negative", "预算不能为负数。", field));
+        }
+    }
+
+    private static void ValidateNonNegative(long? value, string field, ICollection<ValidationIssue> issues)
+    {
+        if (value is < 0)
+        {
+            issues.Add(new("profile.budget.negative", "预算不能为负数。", field));
+        }
+    }
+
+    private static void ValidateNonNegative(int? value, string field, ICollection<ValidationIssue> issues)
     {
         if (value is < 0)
         {

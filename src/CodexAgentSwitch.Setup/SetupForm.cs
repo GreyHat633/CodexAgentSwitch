@@ -13,6 +13,7 @@ internal sealed class SetupForm : Form
     {
         this.payload = payload;
         Text = "Codex Agent Switch Setup";
+        Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!) ?? Icon;
         Font = new Font("Segoe UI", 10);
         MinimumSize = new Size(640, 300);
         StartPosition = FormStartPosition.CenterScreen;

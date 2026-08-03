@@ -3,69 +3,111 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:CodexAgentSwitch.App.Views">
-    <ScrollViewer>
-        <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1180">
-            <Grid>
-                <local:PageHeader Title="配置方案" Subtitle="在可逆的方案之间切换；导入和导出永远不包含 API Key。" />
-                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Button Content="导入" Tag="profile:import" />
-                    <Button Content="新建方案" Style="{StaticResource AccentButtonStyle}" Tag="profile:new" />
+    <Grid>
+        <ScrollViewer>
+            <StackPanel Padding="{StaticResource PagePadding}" Spacing="16" MaxWidth="1180">
+                <Grid>
+                    <local:PageHeader Title="配置方案" Subtitle="创建、编辑并持久化 Sol / Terra / Luna 路由方案。导入和导出不包含凭据。" />
+                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Button Content="导入" Tag="profile:import" />
+                        <Button Content="新建方案" Style="{StaticResource AccentButtonStyle}" Tag="profile:new" AutomationProperties.Name="新建方案" />
+                    </StackPanel>
+                </Grid>
+                <InfoBar x:Name="CurrentProfileBar" IsOpen="True" Severity="Informational" Title="正在加载配置方案" Message="从本地数据库读取。" />
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="2*" />
+                        <ColumnDefinition Width="3*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}">
+                        <StackPanel Spacing="12">
+                            <TextBlock Text="已保存方案" Style="{StaticResource SectionTitleStyle}" />
+                            <ListView x:Name="ProfileList" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile, Mode=TwoWay}" SelectionMode="Single" MinHeight="320" AutomationProperties.Name="配置方案列表">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Padding="4" ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Name}" Style="{StaticResource BodyTextStyle}" />
+                                                <TextBlock Text="{Binding KindLabel}" Style="{StaticResource CaptionTextStyle}" />
+                                            </StackPanel>
+                                            <Border Grid.Column="1" Style="{StaticResource StatusBadgeStyle}">
+                                                <TextBlock Text="{Binding DefaultLabel}" />
+                                            </Border>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <Grid RowSpacing="8" ColumnSpacing="8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                                <Button Grid.Row="0" Grid.Column="0" Content="编辑" Click="EditSelectedProfile" />
+                                <Button Grid.Row="0" Grid.Column="1" Content="复制" Click="CopySelectedProfile" />
+                                <Button Grid.Row="1" Grid.Column="0" Content="删除" Click="DeleteSelectedProfile" />
+                                <Button Grid.Row="1" Grid.Column="1" Content="导出" Click="ExportSelectedProfile" />
+                                <Button Grid.Row="2" Grid.Column="0" Content="设置默认" Click="SetSelectedAsDefault" Style="{StaticResource AccentButtonStyle}" />
+                                <Button Grid.Row="2" Grid.Column="1" Content="立即启用" Click="ActivateSelectedProfile" Style="{StaticResource AccentButtonStyle}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="当前方案" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock x:Name="CurrentProfileNameText" Text="未选择" Style="{StaticResource BodyTextStyle}" />
+                            <TextBlock x:Name="CurrentProfileSummaryText" Text="" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            <TextBlock Text="选择列表中的方案后，可编辑、复制、删除、设为默认或导出。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+
+        <ContentDialog x:Name="ProfileEditorDialog"
+                       DataContext="{Binding Editor}"
+                       Title="{Binding DialogTitle}"
+                       PrimaryButtonText="保存"
+                       CloseButtonText="取消"
+                       PrimaryButtonClick="SaveEditor"
+                       DefaultButton="Primary"
+                       MaxWidth="760">
+            <ScrollViewer MaxHeight="680">
+                <StackPanel Spacing="12">
+                    <TextBox Header="方案名称" Text="{Binding Name, Mode=TwoWay}" AutomationProperties.Name="方案名称" />
+                    <TextBlock Text="主代理" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid ColumnSpacing="8" RowSpacing="8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition /></Grid.RowDefinitions>
+                        <ComboBox Grid.Row="0" Grid.Column="0" Header="主代理" ItemsSource="{Binding MainAgentSlots}" SelectedItem="{Binding MainAgentSlot, Mode=TwoWay}" AutomationProperties.Name="主代理选择" />
+                        <ComboBox Grid.Row="0" Grid.Column="1" Header="推理强度" ItemsSource="{Binding ReasoningStrengths}" SelectedItem="{Binding ReasoningStrength, Mode=TwoWay}" AutomationProperties.Name="主代理推理强度" />
+                    </Grid>
+                    <TextBlock Text="Worker 与路由" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid ColumnSpacing="8" RowSpacing="8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                        <CheckBox Grid.Row="0" Grid.Column="0" Content="启用 Worker" IsChecked="{Binding WorkerEnabled, Mode=TwoWay}" VerticalAlignment="Center" AutomationProperties.Name="启用 Worker" />
+                        <ComboBox Grid.Row="0" Grid.Column="1" Header="Worker 来源" ItemsSource="{Binding WorkerSources}" SelectedItem="{Binding WorkerSource, Mode=TwoWay}" AutomationProperties.Name="Worker 类型" />
+                        <ComboBox Grid.Row="1" Grid.Column="0" Header="Native Worker" ItemsSource="{Binding NativeWorkerSlots}" SelectedItem="{Binding NativeWorkerSlot, Mode=TwoWay}" AutomationProperties.Name="原生 Worker 选择" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Header="External Provider ID（外部来源）" Text="{Binding ExternalProviderId, Mode=TwoWay}" AutomationProperties.Name="外部 Provider ID" />
+                        <TextBox Grid.Row="2" Grid.Column="0" Header="Worker 数量" Text="{Binding WorkerCount, Mode=TwoWay}" AutomationProperties.Name="最大 Worker 数量" />
+                        <ComboBox Grid.Row="2" Grid.Column="1" Header="路由模式" ItemsSource="{Binding RoutingModes}" SelectedItem="{Binding RoutingMode, Mode=TwoWay}" AutomationProperties.Name="路由模式" />
+                        <ComboBox Grid.Row="3" Grid.Column="0" Header="回退动作" ItemsSource="{Binding FallbackActions}" SelectedItem="{Binding FallbackAction, Mode=TwoWay}" AutomationProperties.Name="回退策略" />
+                    </Grid>
+                    <TextBlock Text="预算限制" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid ColumnSpacing="8" RowSpacing="8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                        <TextBox Grid.Row="0" Grid.Column="0" Header="单任务预算" Text="{Binding PerTaskBudget, Mode=TwoWay}" />
+                        <TextBox Grid.Row="0" Grid.Column="1" Header="每日预算" Text="{Binding DailyBudget, Mode=TwoWay}" />
+                        <TextBox Grid.Row="1" Grid.Column="0" Header="每月预算" Text="{Binding MonthlyBudget, Mode=TwoWay}" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Header="货币" Text="{Binding Currency, Mode=TwoWay}" />
+                        <TextBox Grid.Row="2" Grid.Column="0" Header="Token 上限" Text="{Binding TokenLimit, Mode=TwoWay}" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Header="请求上限" Text="{Binding RequestLimit, Mode=TwoWay}" />
+                    </Grid>
                 </StackPanel>
-            </Grid>
-            <InfoBar x:Name="CurrentProfileBar" IsOpen="True" Severity="Informational" Title="正在加载配置方案" Message="从本地数据库读取。" />
-            <Grid ColumnSpacing="16" RowSpacing="16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource CardBorderStyle}" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" BorderThickness="2">
-                    <StackPanel Spacing="12">
-                        <Grid>
-                            <TextBlock x:Name="CurrentProfileNameText" Text="经济模式" Style="{StaticResource SectionTitleStyle}" />
-                            <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}"><TextBlock Text="默认" /></Border>
-                        </Grid>
-                        <TextBlock x:Name="CurrentProfileSummaryText" Text="Sol high · Luna · 最多 1 个 Worker" Style="{StaticResource BodyTextStyle}" />
-                        <TextBlock Text="严格替代门槛，优先低成本且可独立验收的任务。" Style="{StaticResource CaptionTextStyle}" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="已启用" IsEnabled="False" />
-                            <Button Content="复制" Tag="profile:copy-current" />
-                            <Button Content="导出" Click="ExportCurrentProfile" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-                <Border Grid.Row="0" Grid.Column="1" Style="{StaticResource CardBorderStyle}">
-                    <StackPanel Spacing="12">
-                        <TextBlock Text="平衡模式" Style="{StaticResource SectionTitleStyle}" />
-                        <TextBlock Text="Sol high · Luna / Terra · 最多 2 个 Worker" Style="{StaticResource BodyTextStyle}" />
-                        <TextBlock Text="在成本、速度与可靠性之间取得平衡。" Style="{StaticResource CaptionTextStyle}" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="立即启用" Style="{StaticResource AccentButtonStyle}" Tag="profile:balanced" />
-                            <Button Content="复制" Tag="profile:copy-balanced" />
-                            <Button Content="更多" Tag="profile:more" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-                <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardBorderStyle}">
-                    <StackPanel Spacing="12">
-                        <TextBlock Text="性能模式" Style="{StaticResource SectionTitleStyle}" />
-                        <TextBlock Text="Sol xhigh · 原生 Worker · 最多 3 个" Style="{StaticResource BodyTextStyle}" />
-                        <TextBlock Text="仅在三个任务真正独立时并行，不重复探索同一根因。" Style="{StaticResource CaptionTextStyle}" />
-                        <Button Content="立即启用" HorizontalAlignment="Left" Tag="profile:performance" />
-                    </StackPanel>
-                </Border>
-                <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardBorderStyle}">
-                    <StackPanel Spacing="12">
-                        <TextBlock Text="单人模式" Style="{StaticResource SectionTitleStyle}" />
-                        <TextBlock Text="Sol high · 不使用 Worker" Style="{StaticResource BodyTextStyle}" />
-                        <TextBlock Text="适合敏感、强耦合或不值得分包的任务。" Style="{StaticResource CaptionTextStyle}" />
-                        <Button Content="立即启用" HorizontalAlignment="Left" Tag="profile:single" />
-                    </StackPanel>
-                </Border>
-            </Grid>
-        </StackPanel>
-    </ScrollViewer>
+            </ScrollViewer>
+        </ContentDialog>
+    </Grid>
 </Page>

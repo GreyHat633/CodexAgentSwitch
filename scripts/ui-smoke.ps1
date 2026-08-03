@@ -17,6 +17,8 @@ $script:tempRoot = Join-Path $resolvedData 'temp'
 New-Item -ItemType Directory -Force -Path $script:tempRoot | Out-Null
 $env:TEMP = $script:tempRoot
 $env:TMP = $script:tempRoot
+$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = Join-Path $script:tempRoot 'bundle-extract'
+New-Item -ItemType Directory -Force -Path $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR | Out-Null
 
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Windows.Forms
@@ -177,9 +179,10 @@ try {
     $dpi = Start-CasApp 'profiles' 'profiles-enter'
     Press-AppElement '新建方案' 'ENTER'
     Assert-Trace 'button-click' 'profile:new'
+    Assert-Visible '方案名称'
+    Press-AppElement '取消' 'ENTER'
     Assert-Trace 'action-completed' 'profile:new'
-    Assert-Visible '自定义方案'
-    Add-Pass '配置方案' '新建方案' 'Enter' $dpi 'profile database and current profile title changed'
+    Add-Pass '配置方案' '新建方案' 'Enter' $dpi 'real profile editor opened with a writable name field and closed cleanly'
 
     $dpi = Start-CasApp 'providers' 'providers-mouse'
     if ($Theme -eq 'light' -and -not $PreferKeyboard) { Click-AppElement '添加 Provider' 'provider:add'; $providerInput = 'mouse' }

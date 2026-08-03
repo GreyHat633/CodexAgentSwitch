@@ -43,4 +43,36 @@ public sealed class ProfileValidatorTests
 
         Assert.Contains(result.Issues, issue => issue.Code == "profile.provider.required");
     }
+
+    [Fact]
+    public void Duplicate_names_are_rejected_except_for_the_same_profile()
+    {
+        var validator = new ProfileValidator();
+        var first = Profile.CreateDefault(_now);
+        var duplicate = first with { Id = Guid.NewGuid(), Name = first.Name.ToUpperInvariant() };
+
+        var duplicateResult = validator.ValidateUniqueName(duplicate, [first]);
+        var sameResult = validator.ValidateUniqueName(first, [first]);
+
+        Assert.Contains(duplicateResult.Issues, issue => issue.Code == "profile.name.duplicate");
+        Assert.DoesNotContain(sameResult.Issues, issue => issue.Code == "profile.name.duplicate");
+    }
+
+    [Fact]
+    public void Disabled_worker_cannot_persist_a_selectable_source()
+    {
+        var profile = Profile.CreateDefault(_now) with
+        {
+            WorkerPolicy = Profile.CreateDefault(_now).WorkerPolicy with
+            {
+                Enabled = false,
+                Source = WorkerSource.NativeCodex,
+                MaxWorkers = 0,
+            },
+        };
+
+        var result = new ProfileValidator().Validate(profile);
+
+        Assert.Contains(result.Issues, issue => issue.Code == "profile.workers.disabled_count");
+    }
 }

@@ -1,3 +1,7 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using CodexAgentSwitch.App.ViewModels;
 using CodexAgentSwitch.Application.Profiles;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Infrastructure.Common;
@@ -7,147 +11,308 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace CodexAgentSwitch.App.Views;
 
-public sealed partial class ProfilesPage : Page, IContentActionHandler
+public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyPropertyChanged
 {
+    private ProfileListItemViewModel? _selectedProfile;
+    private ProfileEditorViewModel? _editor;
+
     public ProfilesPage()
     {
         InitializeComponent();
+        DataContext = this;
         Loaded += OnLoaded;
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs e) => await RefreshAsync();
+    public event PropertyChangedEventHandler? PropertyChanged;
 
-    private async Task RefreshAsync()
+    public ObservableCollection<ProfileListItemViewModel> Profiles { get; } = [];
+
+    public ProfileListItemViewModel? SelectedProfile
     {
-        var profile = await App.Services.GetRequiredService<IProfileRepository>().GetDefaultAsync();
-        if (profile is null)
+        get => _selectedProfile;
+        set
         {
-            CurrentProfileBar.Severity = InfoBarSeverity.Warning;
-            CurrentProfileBar.Title = "没有默认配置方案";
-            CurrentProfileBar.Message = "请创建或导入方案。";
-            return;
-        }
+            if (Equals(_selectedProfile, value))
+            {
+                return;
+            }
 
-        CurrentProfileNameText.Text = profile.Name;
-        CurrentProfileSummaryText.Text = $"{profile.MainAgent.ModelId} {profile.MainAgent.ReasoningEffort} · {profile.WorkerPolicy.Source} · 最多 {profile.WorkerPolicy.MaxWorkers} 个 Worker";
-        CurrentProfileBar.Severity = InfoBarSeverity.Success;
-        CurrentProfileBar.Title = $"当前方案：{profile.Name}";
-        CurrentProfileBar.Message = $"{CurrentProfileSummaryText.Text} · 每日预算 {profile.Budget.Daily?.ToString("0.##") ?? "未设置"} {profile.Budget.Currency}";
+            _selectedProfile = value;
+            OnPropertyChanged();
+            UpdateCurrentSummary(value);
+        }
     }
 
-    private async void ExportCurrentProfile(object sender, RoutedEventArgs e)
+    public ProfileEditorViewModel? Editor
     {
-        var profile = await App.Services.GetRequiredService<IProfileRepository>().GetDefaultAsync();
-        if (profile is null)
+        get => _editor;
+        private set
+        {
+            if (ReferenceEquals(_editor, value))
+            {
+                return;
+            }
+
+            _editor = value;
+            OnPropertyChanged();
+        }
+    }
+
+    private async void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await RefreshAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("加载配置方案失败", exception.Message);
+        }
+    }
+
+    private async Task RefreshAsync(Guid? preferredSelectionId = null)
+    {
+        var repository = App.Services.GetRequiredService<IProfileRepository>();
+        var selectedId = preferredSelectionId ?? SelectedProfile?.Id;
+        var profiles = await repository.ListAsync();
+        Profiles.Clear();
+        foreach (var profile in profiles)
+        {
+            Profiles.Add(new ProfileListItemViewModel(profile));
+        }
+
+        SelectedProfile = Profiles.FirstOrDefault(profile => profile.Id == selectedId)
+            ?? Profiles.FirstOrDefault(profile => profile.IsDefault)
+            ?? Profiles.FirstOrDefault();
+
+        if (SelectedProfile is null)
+        {
+            CurrentProfileBar.Severity = InfoBarSeverity.Warning;
+            CurrentProfileBar.Title = "没有配置方案";
+            CurrentProfileBar.Message = "请创建或导入方案。";
+        }
+        else
+        {
+            CurrentProfileBar.Severity = InfoBarSeverity.Success;
+            CurrentProfileBar.Title = $"当前方案：{SelectedProfile.Name}";
+            CurrentProfileBar.Message = "方案已从本地数据库加载。";
+        }
+    }
+
+    private void UpdateCurrentSummary(ProfileListItemViewModel? item)
+    {
+        var profile = item?.Value;
+        CurrentProfileNameText.Text = profile?.Name ?? "未选择";
+        CurrentProfileSummaryText.Text = profile is null
+            ? string.Empty
+            : $"{profile.MainAgent.ModelId} / {profile.MainAgent.ReasoningEffort} · Worker {profile.WorkerPolicy.MaxWorkers} · {profile.WorkerPolicy.RoutingMode}";
+    }
+
+    private async void SaveEditor(ContentDialog sender, ContentDialogButtonClickEventArgs args)
+    {
+        var deferral = args.GetDeferral();
+        try
+        {
+            if (Editor is null)
+            {
+                args.Cancel = true;
+                return;
+            }
+
+            var profile = Editor.BuildProfile(DateTimeOffset.UtcNow);
+            await App.Services.GetRequiredService<ProfileService>().SaveAsync(profile);
+            await RefreshAsync(profile.Id);
+            CurrentProfileBar.Severity = InfoBarSeverity.Success;
+            CurrentProfileBar.Title = "方案已保存";
+            CurrentProfileBar.Message = profile.Name;
+        }
+        catch (ProfileValidationException exception)
+        {
+            args.Cancel = true;
+            ShowError("方案校验失败", string.Join(Environment.NewLine, exception.Issues.Select(issue => issue.Message)));
+        }
+        catch (FormatException exception)
+        {
+            args.Cancel = true;
+            ShowError("输入格式错误", exception.Message);
+        }
+        catch (Exception exception)
+        {
+            args.Cancel = true;
+            ShowError("保存方案失败", exception.Message);
+        }
+        finally
+        {
+            deferral.Complete();
+        }
+    }
+
+    private async void EditSelectedProfile(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile is not null)
+        {
+            await ShowEditorAsync(ProfileEditorViewModel.ForEdit(SelectedProfile.Value));
+        }
+    }
+
+    private async void CopySelectedProfile(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile is not null)
+        {
+            var service = App.Services.GetRequiredService<ProfileService>();
+            var uniqueName = await service.SuggestUniqueNameAsync(SelectedProfile.Name);
+            await ShowEditorAsync(ProfileEditorViewModel.ForCopy(SelectedProfile.Value, uniqueName));
+        }
+    }
+
+    private async void DeleteSelectedProfile(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile is null)
         {
             return;
         }
 
-        var export = App.Services.GetRequiredService<ProfileService>().Export(profile);
-        var path = Path.Combine(App.Services.GetRequiredService<AppDataPaths>().Root, "exports", $"profile-{profile.Id:D}.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, export);
-        CurrentProfileBar.Severity = InfoBarSeverity.Success;
-        CurrentProfileBar.Title = "配置方案已导出";
-        CurrentProfileBar.Message = $"{path}；导出内容不包含 API Key。";
+        try
+        {
+            await App.Services.GetRequiredService<ProfileService>().DeleteAsync(SelectedProfile.Id);
+            await RefreshAsync();
+            CurrentProfileBar.Severity = InfoBarSeverity.Success;
+            CurrentProfileBar.Title = "方案已删除";
+            CurrentProfileBar.Message = "已更新本地方案列表。";
+        }
+        catch (Exception exception)
+        {
+            ShowError("删除方案失败", exception.Message);
+        }
+    }
+
+    private async void SetSelectedAsDefault(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await App.Services.GetRequiredService<ProfileService>().SetDefaultAsync(SelectedProfile.Id);
+            await RefreshAsync();
+            CurrentProfileBar.Severity = InfoBarSeverity.Success;
+            CurrentProfileBar.Title = "默认方案已切换";
+            CurrentProfileBar.Message = SelectedProfile?.Name ?? string.Empty;
+        }
+        catch (Exception exception)
+        {
+            ShowError("切换默认方案失败", exception.Message);
+        }
+    }
+
+    private async void ActivateSelectedProfile(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var activated = await App.Services.GetRequiredService<ProfileService>().ActivateAsync(SelectedProfile.Id);
+            await RefreshAsync();
+            CurrentProfileBar.Severity = InfoBarSeverity.Success;
+            CurrentProfileBar.Title = "方案已立即启用";
+            CurrentProfileBar.Message = $"{activated.Name} · LastUsedAt {activated.LastUsedAt:O}";
+        }
+        catch (Exception exception)
+        {
+            ShowError("立即启用方案失败", exception.Message);
+        }
+    }
+
+    private async void ExportSelectedProfile(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var paths = App.Services.GetRequiredService<AppDataPaths>();
+            var path = Path.Combine(paths.Root, "exports", $"profile-{SelectedProfile.Id:D}.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var export = App.Services.GetRequiredService<ProfileService>().Export(SelectedProfile.Value);
+            await File.WriteAllTextAsync(path, export);
+            CurrentProfileBar.Severity = InfoBarSeverity.Success;
+            CurrentProfileBar.Title = "方案已导出";
+            CurrentProfileBar.Message = $"{path}（不包含 API Key）";
+        }
+        catch (Exception exception)
+        {
+            ShowError("导出方案失败", exception.Message);
+        }
     }
 
     public async Task HandleContentActionAsync(string action, Button source)
     {
-        var repository = App.Services.GetRequiredService<IProfileRepository>();
-        var current = await repository.GetDefaultAsync();
-        if (current is null)
-        {
-            CurrentProfileBar.Severity = InfoBarSeverity.Warning;
-            CurrentProfileBar.Title = "没有可操作的默认方案";
-            CurrentProfileBar.Message = "请先恢复默认方案或导入方案。";
-            return;
-        }
-
-        var refresh = false;
+        var service = App.Services.GetRequiredService<ProfileService>();
+        var current = SelectedProfile?.Value ?? (await App.Services.GetRequiredService<IProfileRepository>().GetDefaultAsync());
         switch (action)
         {
             case "profile:new":
-                await SaveNewAsync(current with { Name = "自定义方案" }, makeDefault: true);
-                refresh = true;
+                await ShowEditorAsync(ProfileEditorViewModel.ForNew(current ?? Profile.CreateDefault(DateTimeOffset.UtcNow)));
                 break;
             case "profile:copy-current":
-                await SaveNewAsync(current with { Name = current.Name + " - 副本" }, makeDefault: false);
-                break;
-            case "profile:balanced":
-                await ApplyModeAsync(current, "平衡模式", "high", true, WorkerSource.NativeCodex, 2, RoutingMode.Balanced);
-                refresh = true;
-                break;
-            case "profile:copy-balanced":
-                await SaveNewAsync(CreateMode(current, "平衡模式 - 副本", "high", true, WorkerSource.NativeCodex, 2, RoutingMode.Balanced), makeDefault: false);
-                break;
-            case "profile:performance":
-                await ApplyModeAsync(current, "性能模式", "xhigh", true, WorkerSource.NativeCodex, 3, RoutingMode.Performance);
-                refresh = true;
-                break;
-            case "profile:single":
-                await ApplyModeAsync(current, "单人模式", "high", false, WorkerSource.Disabled, 0, RoutingMode.Manual);
-                refresh = true;
+                if (current is not null)
+                {
+                    var uniqueName = await service.SuggestUniqueNameAsync(current.Name);
+                    await ShowEditorAsync(ProfileEditorViewModel.ForCopy(current, uniqueName));
+                }
+
                 break;
             case "profile:import":
-                refresh = await ImportAsync();
+                await ImportAsync();
                 break;
-            case "profile:more":
-                CurrentProfileBar.Severity = InfoBarSeverity.Informational;
-                CurrentProfileBar.Title = "平衡模式详情";
-                CurrentProfileBar.Message = "最多两个原生 Worker；超预算时回退单代理，不会把 API Key 写入方案。";
+            case "profile:balanced":
+                if (current is not null) await ApplyModeAsync(service, current, "平衡模式", "high", true, WorkerSource.NativeCodex, 2, RoutingMode.Balanced);
+                break;
+            case "profile:performance":
+                if (current is not null) await ApplyModeAsync(service, current, "性能模式", "xhigh", true, WorkerSource.NativeCodex, 3, RoutingMode.Performance);
+                break;
+            case "profile:single":
+                if (current is not null) await ApplyModeAsync(service, current, "单人模式", "high", false, WorkerSource.Disabled, 0, RoutingMode.Single);
                 break;
         }
 
-        if (refresh)
-        {
-            await RefreshAsync();
-        }
+        await RefreshAsync();
     }
 
-    private async Task ApplyModeAsync(Profile current, string name, string effort, bool enabled, WorkerSource source, int maxWorkers, RoutingMode routingMode)
+    private async Task ShowEditorAsync(ProfileEditorViewModel editor)
     {
-        var updated = CreateMode(current, name, effort, enabled, source, maxWorkers, routingMode) with
+        Editor = editor;
+        await ProfileEditorDialog.ShowAsync();
+        Editor = null;
+    }
+
+    private async Task ApplyModeAsync(ProfileService service, Profile current, string name, string effort, bool enabled, WorkerSource source, int maxWorkers, RoutingMode routingMode)
+    {
+        var updated = current with
         {
-            IsDefault = true,
-            UpdatedAt = DateTimeOffset.UtcNow,
+            Name = name,
+            MainAgent = current.MainAgent with { ReasoningEffort = effort },
+            WorkerPolicy = current.WorkerPolicy with
+            {
+                Enabled = enabled,
+                Source = source,
+                PreferredProviderId = source == WorkerSource.Disabled ? null : "native-luna",
+                MaxWorkers = maxWorkers,
+                RoutingMode = routingMode,
+                FallbackAction = FallbackAction.SingleAgent,
+            },
         };
-        await App.Services.GetRequiredService<ProfileService>().SaveAsync(updated);
+        await service.SaveAsync(updated);
     }
 
-    private static Profile CreateMode(Profile current, string name, string effort, bool enabled, WorkerSource source, int maxWorkers, RoutingMode routingMode) => current with
-    {
-        Name = name,
-        MainAgent = current.MainAgent with { ReasoningEffort = effort },
-        WorkerPolicy = current.WorkerPolicy with
-        {
-            Enabled = enabled,
-            Source = source,
-            PreferredProviderId = source == WorkerSource.Disabled ? null : "native-luna",
-            MaxWorkers = maxWorkers,
-            RoutingMode = routingMode,
-            FallbackAction = FallbackAction.SingleAgent,
-        },
-    };
-
-    private async Task SaveNewAsync(Profile template, bool makeDefault)
-    {
-        var now = DateTimeOffset.UtcNow;
-        var created = template with
-        {
-            Id = Guid.NewGuid(),
-            IsDefault = makeDefault,
-            CreatedAt = now,
-            UpdatedAt = now,
-            LastUsedAt = null,
-        };
-        await App.Services.GetRequiredService<ProfileService>().SaveAsync(created);
-        CurrentProfileBar.Severity = InfoBarSeverity.Success;
-        CurrentProfileBar.Title = makeDefault ? "新方案已创建并启用" : "方案副本已创建";
-        CurrentProfileBar.Message = created.Name;
-    }
-
-    private async Task<bool> ImportAsync()
+    private async Task ImportAsync()
     {
         var paths = App.Services.GetRequiredService<AppDataPaths>();
         var source = Path.Combine(paths.Root, "imports", "profile.json");
@@ -155,16 +320,33 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler
         {
             CurrentProfileBar.Severity = InfoBarSeverity.Warning;
             CurrentProfileBar.Title = "等待导入文件";
-            CurrentProfileBar.Message = $"请将配置方案放到 {source} 后再次点击导入。";
-            return false;
+            CurrentProfileBar.Message = $"请将方案放入 {source} 后再次点击导入。";
+            return;
         }
 
-        var service = App.Services.GetRequiredService<ProfileService>();
-        var imported = service.Import(await File.ReadAllTextAsync(source)) with { IsDefault = true };
-        await service.SaveAsync(imported);
-        CurrentProfileBar.Severity = InfoBarSeverity.Success;
-        CurrentProfileBar.Title = "配置方案已导入并启用";
-        CurrentProfileBar.Message = imported.Name;
-        return true;
+        try
+        {
+            var service = App.Services.GetRequiredService<ProfileService>();
+            var imported = service.Import(await File.ReadAllTextAsync(source)) with { IsDefault = false };
+            await service.SaveAsync(imported);
+            await RefreshAsync();
+            CurrentProfileBar.Severity = InfoBarSeverity.Success;
+            CurrentProfileBar.Title = "方案已导入";
+            CurrentProfileBar.Message = imported.Name;
+        }
+        catch (Exception exception)
+        {
+            ShowError("导入方案失败", exception.Message);
+        }
     }
+
+    private void ShowError(string title, string message)
+    {
+        CurrentProfileBar.Severity = InfoBarSeverity.Error;
+        CurrentProfileBar.Title = title;
+        CurrentProfileBar.Message = message;
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }

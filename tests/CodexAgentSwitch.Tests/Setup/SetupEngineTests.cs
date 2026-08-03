@@ -15,6 +15,7 @@ public sealed class SetupEngineTests
         Directory.CreateDirectory(source);
         Directory.CreateDirectory(Path.Combine(target, "data"));
         await File.WriteAllTextAsync(Path.Combine(source, "CodexAgentSwitch.App.exe"), "new-app");
+        await File.WriteAllTextAsync(Path.Combine(source, "AppIcon.ico"), "icon-v2");
         await File.WriteAllTextAsync(Path.Combine(target, "old.txt"), "old-app");
         await File.WriteAllTextAsync(Path.Combine(target, "data", "user.db"), "user-data");
         var zip = Path.Combine(root, "CodexAgentSwitch-win10-x64.zip");
@@ -29,6 +30,7 @@ public sealed class SetupEngineTests
             Assert.True(Directory.Exists(result.BackupDirectory));
             Assert.Equal("old-app", await File.ReadAllTextAsync(Path.Combine(result.BackupDirectory!, "old.txt")));
             Assert.Equal("new-app", await File.ReadAllTextAsync(Path.Combine(target, "CodexAgentSwitch.App.exe")));
+            Assert.Equal("icon-v2", await File.ReadAllTextAsync(Path.Combine(target, "AppIcon.ico")));
             Assert.Equal("user-data", await File.ReadAllTextAsync(Path.Combine(target, "data", "user.db")));
             Assert.True(File.Exists(Path.Combine(target, "install.json")));
             Assert.Equal(target, shortcut.CreatedFor);

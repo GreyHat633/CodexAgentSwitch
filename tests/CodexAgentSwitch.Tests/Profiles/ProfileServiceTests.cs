@@ -20,6 +20,75 @@ public sealed class ProfileServiceTests
     }
 
     [Fact]
+    public async Task Create_uses_a_new_id_and_keeps_the_current_profile()
+    {
+        var repository = new InMemoryProfileRepository();
+        var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
+        var current = await service.EnsureDefaultAsync();
+
+        var created = await service.CreateAsync(current with { Name = "用户方案" });
+
+        Assert.NotEqual(current.Id, created.Id);
+        Assert.True(current.IsDefault);
+        Assert.False(created.IsDefault);
+        Assert.Equal(2, (await repository.ListAsync()).Count);
+    }
+
+    [Fact]
+    public async Task Save_rejects_duplicate_names_case_insensitively()
+    {
+        var repository = new InMemoryProfileRepository();
+        var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
+        var current = await service.EnsureDefaultAsync();
+
+        await Assert.ThrowsAsync<ProfileValidationException>(() => service.CreateAsync(current with { Name = current.Name.ToUpperInvariant() }));
+    }
+
+    [Fact]
+    public async Task Set_default_switches_without_deleting_the_previous_profile()
+    {
+        var repository = new InMemoryProfileRepository();
+        var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
+        var current = await service.EnsureDefaultAsync();
+        var created = await service.CreateAsync(current with { Name = "用户方案" });
+
+        await service.SetDefaultAsync(created.Id);
+
+        Assert.Equal(created.Id, (await repository.GetDefaultAsync())!.Id);
+        Assert.False((await repository.GetAsync(current.Id))!.IsDefault);
+    }
+
+    [Fact]
+    public async Task Activate_sets_default_and_records_last_used_at()
+    {
+        var repository = new InMemoryProfileRepository();
+        var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
+        var current = await service.EnsureDefaultAsync();
+        var created = await service.CreateAsync(current with { Name = "可启用方案" });
+
+        var activated = await service.ActivateAsync(created.Id);
+
+        Assert.True(activated.IsDefault);
+        Assert.Equal(new FixedClock().UtcNow, activated.LastUsedAt);
+        Assert.Equal(created.Id, (await repository.GetDefaultAsync())!.Id);
+    }
+
+    [Fact]
+    public async Task Suggested_copy_names_remain_unique_after_multiple_copies()
+    {
+        var repository = new InMemoryProfileRepository();
+        var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
+        var current = await service.EnsureDefaultAsync();
+
+        var firstName = await service.SuggestUniqueNameAsync(current.Name);
+        await service.CreateAsync(current with { Name = firstName });
+        var secondName = await service.SuggestUniqueNameAsync(current.Name);
+
+        Assert.NotEqual(firstName, secondName);
+        Assert.NotEqual(string.Empty, secondName);
+    }
+
+    [Fact]
     public void Export_contains_no_secret_fields()
     {
         var service = new ProfileService(new InMemoryProfileRepository(), new ProfileValidator(), new FixedClock());
@@ -29,6 +98,54 @@ public sealed class ProfileServiceTests
         Assert.DoesNotContain("apiKey", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("secret", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("tokenValue", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Import_reads_legacy_profile_json_without_new_agent_slots()
+    {
+        var service = new ProfileService(new InMemoryProfileRepository(), new ProfileValidator(), new FixedClock());
+        const string legacyJson = """
+            {
+              "version": 1,
+              "profile": {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "name": "legacy",
+                "mainAgent": { "modelId": "sol", "reasoningEffort": "high" },
+                "workerPolicy": { "enabled": false, "source": 0, "preferredProviderId": null, "fallbackProviderId": null, "maxWorkers": 0, "routingMode": 3, "fallbackAction": 1 },
+                "budget": { "perTask": null, "daily": null, "monthly": null, "tokenLimit": null, "requestLimit": null, "currency": "CNY" },
+                "isDefault": true,
+                "createdAt": "2026-08-03T00:00:00+00:00",
+                "updatedAt": "2026-08-03T00:00:00+00:00",
+                "lastUsedAt": null
+              }
+            }
+            """;
+
+        var imported = service.Import(legacyJson);
+
+        Assert.Equal("sol", imported.MainAgent.ModelId);
+        Assert.Equal("high", imported.MainAgent.ReasoningEffort);
+        Assert.False(imported.IsDefault);
+    }
+
+    [Fact]
+    public async Task Selected_main_agent_and_native_worker_selection_are_persisted()
+    {
+        var repository = new InMemoryProfileRepository();
+        var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
+        var template = Profile.CreateDefault(new FixedClock().UtcNow) with
+        {
+            Name = "Terra 用户方案",
+            MainAgent = new AgentSelection("gpt-5.6-terra", "xhigh"),
+            WorkerPolicy = new WorkerPolicy(true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Balanced, FallbackAction.SingleAgent),
+        };
+
+        var saved = await service.CreateAsync(template);
+        var reloaded = await repository.GetAsync(saved.Id);
+
+        Assert.Equal("gpt-5.6-terra", reloaded!.MainAgent.ModelId);
+        Assert.Equal("xhigh", reloaded.MainAgent.ReasoningEffort);
+        Assert.Equal("native-luna", reloaded.WorkerPolicy.PreferredProviderId);
     }
 
     [Fact]

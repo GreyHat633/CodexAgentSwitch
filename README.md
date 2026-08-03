@@ -16,7 +16,7 @@ Codex Agent Switch 是 Windows 10 22H2 x64 优先、Windows 11 增强兼容的 W
 
 ```powershell
 pwsh -File .\scripts\build.ps1
-pwsh -File .\scripts\package.ps1 -Version 0.1.1 -IncludeRuntimeInstaller
+pwsh -File .\scripts\package.ps1 -Version 0.1.2 -IncludeRuntimeInstaller
 ```
 
 所有 .NET、NuGet、临时和发布状态均重定向到仓库所在 E 盘目录。交付文档见 [ARCHITECTURE.md](ARCHITECTURE.md)、[SECURITY.md](SECURITY.md)、[PRIVACY.md](PRIVACY.md) 与 `docs/`；最终 Win10 验收记录在 `docs/release-test-report.md`。

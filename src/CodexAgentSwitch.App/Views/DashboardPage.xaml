@@ -114,20 +114,32 @@
                         <InfoBar IsOpen="True" Severity="Informational" Title="诚实的用量结论" Message="没有纯 Sol 对照实验，因此不会显示伪精确的节省百分比。" />
                     </StackPanel>
                 </Border>
-                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" MinWidth="0">
                     <StackPanel Spacing="12">
                         <TextBlock Text="环境状态" Style="{StaticResource SectionTitleStyle}" />
-                        <Grid ColumnSpacing="8">
-                            <FontIcon Glyph="&#xE73E;" />
-                            <TextBlock x:Name="CodexDetectedText" Grid.Column="1" Text="Codex 尚未检测" />
+                        <Grid ColumnSpacing="10" MinWidth="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon x:Name="CodexStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" AutomationProperties.Name="Codex 状态图标" />
+                            <TextBlock x:Name="CodexDetectedText" Grid.Column="1" Text="Codex 尚未检测" TextWrapping="Wrap" MinWidth="0" AutomationProperties.Name="Codex 状态文字" />
                         </Grid>
-                        <Grid ColumnSpacing="8">
-                            <FontIcon Glyph="&#xE73E;" />
-                            <TextBlock x:Name="AppServerStatusText" Grid.Column="1" Text="App Server 尚未启动" />
+                        <Grid ColumnSpacing="10" MinWidth="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon x:Name="AppServerStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" AutomationProperties.Name="App Server 状态图标" />
+                            <TextBlock x:Name="AppServerStatusText" Grid.Column="1" Text="App Server 尚未启动" TextWrapping="Wrap" MinWidth="0" AutomationProperties.Name="App Server 状态文字" />
                         </Grid>
-                        <Grid ColumnSpacing="8">
-                            <FontIcon Glyph="&#xE73E;" />
-                            <TextBlock Grid.Column="1" Text="凭据存储安全" />
+                        <Grid ColumnSpacing="10" MinWidth="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon x:Name="CredentialStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" AutomationProperties.Name="凭据状态图标" />
+                            <TextBlock x:Name="CredentialStatusText" Grid.Column="1" Text="凭据存储安全" TextWrapping="Wrap" MinWidth="0" AutomationProperties.Name="凭据状态文字" />
                         </Grid>
                         <Button Content="打开诊断" HorizontalAlignment="Left" Tag="navigate:diagnostics" />
                     </StackPanel>

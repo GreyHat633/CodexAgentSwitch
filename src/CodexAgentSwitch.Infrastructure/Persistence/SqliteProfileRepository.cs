@@ -99,6 +99,12 @@ public sealed class SqliteProfileRepository(SqliteDatabase database) : IProfileR
     {
         var profile = JsonSerializer.Deserialize<Profile>(json, JsonOptions)
             ?? throw new InvalidDataException("Stored profile JSON is invalid.");
-        return profile with { IsDefault = isDefault };
+        return profile with
+        {
+            IsDefault = isDefault,
+            // 0.1.1 did not persist IsBuiltIn. Keep the original economic preset
+            // visibly classified without changing the stored schema or payload.
+            IsBuiltIn = profile.IsBuiltIn || Profile.IsBuiltInPresetName(profile.Name),
+        };
     }
 }

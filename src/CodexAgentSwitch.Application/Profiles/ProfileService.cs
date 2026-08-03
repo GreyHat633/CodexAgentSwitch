@@ -29,7 +29,8 @@ public sealed class ProfileService(
 
     public async Task SaveAsync(Profile profile, CancellationToken cancellationToken = default)
     {
-        var validation = validator.Validate(profile);
+        var existingProfiles = await repository.ListAsync(cancellationToken);
+        var validation = validator.ValidateUniqueName(profile, existingProfiles);
         if (!validation.IsValid)
         {
             throw new ProfileValidationException(validation.Issues);
@@ -41,6 +42,62 @@ public sealed class ProfileService(
             UpdatedAt = clock.UtcNow,
         };
         await repository.UpsertAsync(normalized, cancellationToken);
+    }
+
+    public async Task<Profile> CreateAsync(Profile template, bool makeDefault = false, CancellationToken cancellationToken = default)
+    {
+        var now = clock.UtcNow;
+        var created = template with
+        {
+            Id = Guid.NewGuid(),
+            IsDefault = makeDefault,
+            IsBuiltIn = false,
+            CreatedAt = now,
+            UpdatedAt = now,
+            LastUsedAt = null,
+        };
+        await SaveAsync(created, cancellationToken);
+        return created;
+    }
+
+    public async Task<Profile> SetDefaultAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var profile = await repository.GetAsync(id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Profile {id} does not exist.");
+        var updated = profile with { IsDefault = true };
+        await SaveAsync(updated, cancellationToken);
+        return updated;
+    }
+
+    public async Task<Profile> ActivateAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var profile = await repository.GetAsync(id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Profile {id} does not exist.");
+        var now = clock.UtcNow;
+        var updated = profile with { IsDefault = true, LastUsedAt = now, UpdatedAt = now };
+        await SaveAsync(updated, cancellationToken);
+        return updated;
+    }
+
+    public async Task<string> SuggestUniqueNameAsync(string baseName, CancellationToken cancellationToken = default)
+    {
+        var existingNames = (await repository.ListAsync(cancellationToken))
+            .Select(profile => profile.Name.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var root = string.IsNullOrWhiteSpace(baseName) ? "新建方案" : baseName.Trim();
+        if (!existingNames.Contains(root))
+        {
+            return root;
+        }
+
+        var index = 2;
+        var candidate = $"{root} - 副本";
+        while (existingNames.Contains(candidate))
+        {
+            candidate = $"{root} - 副本 {index++}";
+        }
+
+        return candidate;
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
@@ -57,7 +114,15 @@ public sealed class ProfileService(
 
     public string Export(Profile profile)
     {
-        var envelope = new ProfileExportEnvelope(1, profile);
+        // Profile contains only routing and budget data. Keep the export envelope
+        // intentionally narrow so credentials cannot enter it as the model grows.
+        var safeProfile = profile with
+        {
+            IsDefault = false,
+            IsBuiltIn = false,
+            LastUsedAt = null,
+        };
+        var envelope = new ProfileExportEnvelope(1, safeProfile);
         return JsonSerializer.Serialize(envelope, ExportOptions);
     }
 

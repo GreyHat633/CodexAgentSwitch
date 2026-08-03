@@ -15,6 +15,7 @@ public enum RoutingMode
     Balanced,
     Performance,
     Manual,
+    Single,
 }
 
 public enum FallbackAction
@@ -53,6 +54,15 @@ public sealed record Profile(
     DateTimeOffset UpdatedAt,
     DateTimeOffset? LastUsedAt)
 {
+    public bool IsBuiltIn { get; init; }
+
+    public static bool IsBuiltInPresetName(string? name) =>
+        string.Equals(name?.Trim(), "经济模式", StringComparison.OrdinalIgnoreCase);
+
+    public string KindLabel => IsBuiltIn ? "内置预设" : "用户方案";
+
+    public string DefaultLabel => IsDefault ? "当前" : string.Empty;
+
     public static Profile CreateDefault(DateTimeOffset now) => new(
         Guid.NewGuid(),
         "经济模式",
@@ -62,5 +72,8 @@ public sealed record Profile(
         true,
         now,
         now,
-        null);
+        null)
+    {
+        IsBuiltIn = true,
+    };
 }

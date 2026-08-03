@@ -9,6 +9,7 @@
     <Platforms>x64</Platforms>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
+    <ApplicationIcon>..\..\assets\branding\AppIcon.ico</ApplicationIcon>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained Condition="'$(WindowsAppSDKSelfContained)' == ''">true</WindowsAppSDKSelfContained>
     <WindowsAppSdkBootstrapInitialize Condition="'$(WindowsAppSDKSelfContained)' != 'true'">true</WindowsAppSdkBootstrapInitialize>
@@ -22,5 +23,8 @@
   <ItemGroup>
     <ProjectReference Include="..\CodexAgentSwitch.Application\CodexAgentSwitch.Application.csproj" />
     <ProjectReference Include="..\CodexAgentSwitch.Infrastructure\CodexAgentSwitch.Infrastructure.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\assets\branding\AppIcon.ico" Link="AppIcon.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" ExcludeFromSingleFile="true" />
   </ItemGroup>
 </Project>
