@@ -67,4 +67,10 @@ public interface IMainAgentSession
         string threadId,
         string turnId,
         CancellationToken cancellationToken = default);
+
+    Task RespondToApprovalAsync(
+        string threadId,
+        string turnId,
+        bool approve,
+        CancellationToken cancellationToken = default);
 }

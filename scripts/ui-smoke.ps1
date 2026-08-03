@@ -5,6 +5,8 @@ param(
     [ValidateSet('light','dark')][string]$Theme = 'light',
     [switch]$PreferKeyboard,
     [int]$ExpectedDpi = 0,
+    [string]$CodexExecutable = 'E:\AI\CODEX\.codex\.sandbox-bin\codex.exe',
+    [string]$TaskWorkingDirectory = 'E:\AISPace\主模型项目区',
     [string]$ReportPath = (Join-Path $DataRoot "ui-smoke-$Theme.json")
 )
 
@@ -72,6 +74,8 @@ function Start-CasApp([string]$page, [string]$caseName) {
     $env:CAS_WINDOW_WIDTH = '1024'
     $env:CAS_WINDOW_HEIGHT = '720'
     $env:CAS_CREDENTIAL_PREFIX = "CodexAgentSwitch.UiSmoke.$([Guid]::NewGuid().ToString('N'))/"
+    $env:CAS_CODEX_EXECUTABLE = $CodexExecutable
+    $env:CAS_DEFAULT_WORKING_DIRECTORY = $TaskWorkingDirectory
     $script:process = Start-Process -FilePath $resolvedApp -PassThru
     for ($attempt = 0; $attempt -lt 60 -and $script:process.MainWindowHandle -eq 0; $attempt++) {
         Start-Sleep -Milliseconds 200
@@ -162,6 +166,24 @@ function Assert-Trace([string]$kind, [string]$action = '') {
 
 function Assert-Visible([string]$name) { $null = Find-AppElement $name }
 
+function Set-AppText([string]$name, [string]$value) {
+    $element = Find-AppElement $name -AllowOffscreen
+    $pattern = $null
+    if (-not $element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+        throw "Element does not support ValuePattern: $name"
+    }
+    ([Windows.Automation.ValuePattern]$pattern).SetValue($value)
+    Start-Sleep -Milliseconds 150
+}
+
+function Wait-AppElement([string]$name, [int]$timeoutSeconds = 180) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try { return Find-AppElement $name -AllowOffscreen } catch { Start-Sleep -Milliseconds 500 }
+    }
+    throw "Automation element did not appear within $timeoutSeconds seconds: $name"
+}
+
 function Add-Pass([string]$page, [string]$action, [string]$inputMethod, [int]$dpi, [string]$evidence) {
     $results.Add([pscustomobject]@{ page=$page; action=$action; input=$inputMethod; dpi=$dpi; theme=$Theme; evidence=$evidence; status='passed' })
 }
@@ -185,25 +207,26 @@ try {
     Add-Pass '配置方案' '新建方案' 'Enter' $dpi 'real profile editor opened with a writable name field and closed cleanly'
 
     $dpi = Start-CasApp 'providers' 'providers-mouse'
-    if ($Theme -eq 'light' -and -not $PreferKeyboard) { Click-AppElement '添加 Provider' 'provider:add'; $providerInput = 'mouse' }
-    else { Press-AppElement '添加 Provider' 'ENTER'; $providerInput = 'Enter' }
+    if ($Theme -eq 'light' -and -not $PreferKeyboard) { Click-AppElement '添加服务商' 'provider:add'; $providerInput = 'mouse' }
+    else { Press-AppElement '添加服务商' 'ENTER'; $providerInput = 'Enter' }
     Assert-Trace 'button-click' 'provider:add'
     Assert-Trace 'action-completed' 'provider:add'
-    Assert-Visible 'Provider API Key'
-    Add-Pass 'Provider' '添加 Provider' $providerInput $dpi 'editor expanded and API Key control became reachable'
+    Assert-Visible '服务商 API 密钥'
+    Add-Pass 'Provider' '添加服务商' $providerInput $dpi 'editor expanded and API Key control became reachable'
 
     $dpi = Start-CasApp 'tasks' 'tasks-scroll'
+    Set-AppText '任务内容' 'Return exactly CAS_UI_TASK_OK. Do not call tools.'
     if ($Theme -eq 'light' -and -not $PreferKeyboard) {
-        Click-AppElement '继续等待' 'task:continue'
-        $taskInput = 'mouse-after-scroll'
+        Click-AppElement '运行真实受控任务' 'task:start'
+        $taskInput = 'mouse'
     } else {
-        Press-AppElement '继续等待' 'ENTER'
-        $taskInput = 'Enter-after-scroll'
+        Press-AppElement '运行真实受控任务' 'ENTER'
+        $taskInput = 'Enter'
     }
-    Assert-Trace 'button-click' 'task:continue'
-    Assert-Trace 'action-completed' 'task:continue'
-    Assert-Visible '已继续等待当前 Job'
-    Add-Pass '运行任务' '继续等待' $taskInput $dpi 'same-Thread continuation state displayed'
+    Assert-Trace 'button-click' 'task:start'
+    Assert-Trace 'action-completed' 'task:start'
+    $null = Wait-AppElement 'CAS_UI_TASK_OK' 240
+    Add-Pass '运行任务' '运行真实受控任务' $taskInput $dpi 'real Worker and Sol result appeared in the WinUI control tree'
 
     $dpi = Start-CasApp 'usage' 'usage-keyboard'
     $range = Find-AppElement '报告时间范围'
@@ -217,8 +240,8 @@ try {
     else { Press-AppElement '导出报告' 'ENTER'; $historyInput = 'Enter' }
     Assert-Trace 'button-click' 'history:export'
     Assert-Trace 'action-completed' 'history:export'
-    if (-not (Get-ChildItem -LiteralPath (Join-Path $resolvedData 'exports') -Filter 'history-report-*.md' -ErrorAction SilentlyContinue)) { throw 'History report was not created' }
-    Add-Pass '历史记录' '导出报告' $historyInput $dpi 'sanitized report file created'
+    if (-not (Get-ChildItem -LiteralPath (Join-Path $resolvedData 'exports') -Filter 'task-*.md' -ErrorAction SilentlyContinue)) { throw 'Real task history report was not created' }
+    Add-Pass '历史记录' '导出报告' $historyInput $dpi 'persisted real task report was created'
 
     $dpi = Start-CasApp 'settings' 'settings-backup'
     if ($Theme -eq 'light' -and -not $PreferKeyboard) { Click-AppElement '备份配置' 'settings:backup'; $settingsInput = 'mouse' }

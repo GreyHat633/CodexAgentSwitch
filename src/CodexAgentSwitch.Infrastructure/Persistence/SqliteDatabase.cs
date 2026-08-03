@@ -61,6 +61,13 @@ public sealed class SqliteDatabase(string databasePath)
                 payload_json TEXT NOT NULL,
                 FOREIGN KEY(task_group_id) REFERENCES task_groups(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS controlled_tasks (
+                id TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

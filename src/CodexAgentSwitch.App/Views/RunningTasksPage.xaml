@@ -2,81 +2,127 @@
     x:Class="CodexAgentSwitch.App.Views.RunningTasksPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:CodexAgentSwitch.App.Views">
+    xmlns:local="using:CodexAgentSwitch.App.Views"
+    Loaded="OnLoaded"
+    Unloaded="OnUnloaded">
     <ScrollViewer>
-        <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1180">
-            <local:PageHeader Title="运行任务" Subtitle="主代理拥有最终责任；工作代理只能在已登记边界内工作。" />
-            <InfoBar x:Name="TaskActionBar" IsOpen="True" Severity="Informational" Title="当前没有正在运行的任务" Message="以下内容为界面预览使用的完整运行态示例。" />
-            <Border Style="{StaticResource CardBorderStyle}" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}">
-                <StackPanel Spacing="16">
-                    <Grid>
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="主代理 · Sol（高）" Style="{StaticResource SectionTitleStyle}" />
-                            <TextBlock Text="正在整合功能并执行最终审查" Style="{StaticResource CaptionTextStyle}" />
-                        </StackPanel>
-                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
-                            <Border Style="{StaticResource StatusBadgeStyle}"><TextBlock x:Name="MainTaskStatusText" Text="运行中" /></Border>
-                            <TextBlock Text="12:42" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Grid>
-                    <ProgressBar x:Name="MainTaskProgress" IsIndeterminate="True" AutomationProperties.Name="主代理正在运行" />
+        <StackPanel Padding="{StaticResource PagePadding}" Spacing="20" MaxWidth="1180">
+            <local:PageHeader Title="运行任务" Subtitle="在 Agent Switch 内创建受控 Thread；主代理负责最终结果，工作代理依据当前方案运行。" />
+
+            <InfoBar x:Name="TaskActionBar" IsOpen="False" IsClosable="True" />
+
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="新建受控任务" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBox
+                        x:Name="TaskInputTextBox"
+                        Header="任务内容"
+                        PlaceholderText="输入要交给当前方案执行的任务"
+                        AcceptsReturn="True"
+                        TextWrapping="Wrap"
+                        MinHeight="104"
+                        AutomationProperties.Name="任务内容" />
+                    <TextBox
+                        x:Name="WorkingDirectoryTextBox"
+                        Header="工作目录"
+                        PlaceholderText="例如 E:\AISPace\主模型项目区"
+                        AutomationProperties.Name="任务工作目录" />
                     <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                        <Border Style="{StaticResource CompactCardBorderStyle}">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="计划跳过" Style="{StaticResource CaptionTextStyle}" />
-                                <TextBlock Text="不再全量读取既有编排器或重建同一模块清单" Style="{StaticResource BodyTextStyle}" />
-                            </StackPanel>
-                        </Border>
-                        <Border Grid.Column="1" Style="{StaticResource CompactCardBorderStyle}">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="重复劳动" Style="{StaticResource CaptionTextStyle}" />
-                                <TextBlock Text="未检测到完整重复" Style="{StaticResource BodyTextStyle}" />
-                            </StackPanel>
-                        </Border>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <CheckBox
+                            x:Name="UseWorkerCheckBox"
+                            Content="允许当前方案调用工作代理"
+                            IsChecked="True"
+                            VerticalAlignment="Center" />
+                        <Button
+                            Grid.Column="1"
+                            x:Name="StartTaskButton"
+                            Content="运行任务"
+                            Style="{StaticResource AccentButtonStyle}"
+                            Tag="task:start"
+                            AutomationProperties.Name="运行真实受控任务" />
                     </Grid>
                 </StackPanel>
             </Border>
-            <Grid Margin="36,0,0,0" ColumnSpacing="16">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*" MinWidth="300" />
+                    <ColumnDefinition Width="3*" MinWidth="360" />
+                </Grid.ColumnDefinitions>
+
                 <Border Style="{StaticResource CardBorderStyle}">
                     <StackPanel Spacing="12">
                         <Grid>
-                            <TextBlock Text="工作代理 1 · Luna（中）" Style="{StaticResource SectionTitleStyle}" />
-                            <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}"><TextBlock Text="运行中" /></Border>
+                            <TextBlock Text="真实任务" Style="{StaticResource SectionTitleStyle}" />
+                            <Button HorizontalAlignment="Right" Content="刷新" Tag="task:refresh" />
                         </Grid>
-                        <TextBlock Text="审计现有 Sol–Luna 模块与当前协议" Style="{StaticResource BodyTextStyle}" />
-                        <TextBlock Text="最近进展：正在核对应用服务器协议结构生成命令" Style="{StaticResource CaptionTextStyle}" />
-                        <ProgressBar Value="62" AutomationProperties.Name="工作代理 1 估计进度 62%" />
-                        <Grid ColumnSpacing="16">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                            <StackPanel><TextBlock Text="用量" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="不可取得" /></StackPanel>
-                            <StackPanel Grid.Column="1"><TextBlock Text="预算" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="原生额度" /></StackPanel>
-                        </Grid>
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="查看详情" Tag="task:details" />
-                            <Button Content="继续等待" Tag="task:continue" />
-                            <Button Content="纠偏" Tag="task:refine" />
-                            <Button Content="取消" Foreground="{ThemeResource DangerBrush}" Tag="task:cancel" />
-                        </StackPanel>
+                        <TextBlock x:Name="EmptyTasksText" Text="尚未创建受控任务。" Style="{StaticResource CaptionTextStyle}" />
+                        <ListView
+                            x:Name="TaskListView"
+                            MinHeight="320"
+                            SelectionChanged="OnTaskSelectionChanged"
+                            AutomationProperties.Name="真实任务列表">
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Padding="4" ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="{Binding Title}" TextWrapping="Wrap" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding Metadata}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <Border Grid.Column="1" Style="{StaticResource StatusBadgeStyle}" VerticalAlignment="Top">
+                                            <TextBlock Text="{Binding Status}" />
+                                        </Border>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
                     </StackPanel>
                 </Border>
+
                 <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
-                    <StackPanel Spacing="12">
-                        <Grid>
-                            <TextBlock Text="工作代理 2 · Terra" Style="{StaticResource SectionTitleStyle}" />
-                            <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}"><TextBlock Text="等待批准" Foreground="{ThemeResource WarningBrush}" /></Border>
-                        </Grid>
-                        <TextBlock Text="测试大文件扫描性能" Style="{StaticResource BodyTextStyle}" />
-                        <InfoBar IsOpen="True" Severity="Warning" Title="需要批准" Message="工作代理请求读取任务范围外文件；默认不会自动批准。" />
+                    <StackPanel x:Name="TaskDetailsPanel" Spacing="12">
+                        <TextBlock x:Name="TaskTitleText" Text="选择任务查看详情" Style="{StaticResource SectionTitleStyle}" TextWrapping="Wrap" />
+                        <TextBlock x:Name="TaskMetadataText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                        <InfoBar x:Name="TaskStatusBar" IsOpen="False" IsClosable="False" />
+                        <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl x:Name="TaskMessagesItemsControl">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource CompactCardBorderStyle}" Margin="0,0,0,8">
+                                            <StackPanel Spacing="6">
+                                                <TextBlock Text="{Binding Actor}" FontWeight="SemiBold" />
+                                                <TextBlock Text="{Binding Content}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                                <TextBlock Text="{Binding Timestamp}" Style="{StaticResource CaptionTextStyle}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                        <TextBox
+                            x:Name="ContinueInputTextBox"
+                            Header="继续此任务"
+                            PlaceholderText="向同一个主 Thread 提交下一轮内容"
+                            AcceptsReturn="True"
+                            TextWrapping="Wrap"
+                            MinHeight="76" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="查看请求" Style="{StaticResource AccentButtonStyle}" Tag="task:approval-details" />
-                            <Button Content="拒绝并纠偏" Tag="task:reject" />
+                            <Button x:Name="ContinueTaskButton" Content="提交下一轮" Style="{StaticResource AccentButtonStyle}" Tag="task:continue" />
+                            <Button x:Name="CancelTaskButton" Content="取消运行" Tag="task:cancel" />
+                            <Button x:Name="ApproveTaskButton" Content="批准" Tag="task:approve" Visibility="Collapsed" />
+                            <Button x:Name="DeclineTaskButton" Content="拒绝" Tag="task:decline" Visibility="Collapsed" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
             </Grid>
-            <InfoBar IsOpen="True" Severity="Warning" Title="重复劳动提醒" Message="该范围已委派给工作代理 1。请选择等待、定向抽查、取消并接管，或记录本次允许重复的原因。" />
         </StackPanel>
     </ScrollViewer>
 </Page>

@@ -4,6 +4,7 @@ using CodexAgentSwitch.Application.Profiles;
 using CodexAgentSwitch.Application.Providers;
 using CodexAgentSwitch.Application.Orchestration;
 using CodexAgentSwitch.Application.Usage;
+using CodexAgentSwitch.Application.Tasks;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.Common;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
@@ -45,6 +46,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<EconomicCheckpointPolicy>();
         services.AddSingleton<WorkerRoutingService>();
         services.AddSingleton<IUsageLedgerRepository, SqliteUsageLedgerRepository>();
+        services.AddSingleton<IControlledTaskRepository, SqliteControlledTaskRepository>();
         services.AddSingleton<BudgetPolicy>();
         services.AddSingleton<CostCalculator>();
         services.AddSingleton<EconomicReportService>();
@@ -55,6 +57,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<CodexCommandLocator>();
         services.AddSingleton(new CodexSchemaCache(paths.ProtocolCacheDirectory));
         services.AddSingleton<CodexRuntimeManager>();
+        services.AddSingleton<IControlledTaskRuntime, ControlledTaskRuntime>();
+        services.AddSingleton<ControlledTaskService>();
         services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Information));
         Services = services.BuildServiceProvider(validateScopes: true);
     }

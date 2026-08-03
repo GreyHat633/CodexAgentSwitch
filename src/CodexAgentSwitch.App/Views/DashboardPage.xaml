@@ -15,7 +15,7 @@
                     Subtitle="当前会话已准备好，所有高成本操作都会先经过预算与委派边界检查。" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                     <Button Content="停止应用服务器" Click="StopCodex" AutomationProperties.Name="停止 Codex 应用服务器" />
-                    <Button x:Name="StartCodexButton" Content="启动 Codex" Click="StartCodex" Style="{StaticResource HeroButtonStyle}" AutomationProperties.Name="检测协议并启动受控 Codex 应用服务器" />
+                    <Button x:Name="StartCodexButton" Content="连接任务服务" Click="StartCodex" Style="{StaticResource HeroButtonStyle}" AutomationProperties.Name="检测协议并连接受控 Codex 任务服务" />
                 </StackPanel>
             </Grid>
 
@@ -89,7 +89,7 @@
                 <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}">
                     <StackPanel Spacing="16">
                         <Grid>
-                            <TextBlock Text="最近一次任务" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock x:Name="LatestTaskTitleText" Text="最近一次真实任务" Style="{StaticResource SectionTitleStyle}" />
                             <Button Content="查看报告" HorizontalAlignment="Right" Tag="navigate:history" />
                         </Grid>
                         <Grid ColumnSpacing="16">
@@ -100,18 +100,18 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel>
                                 <TextBlock Text="工作代理结果" Style="{StaticResource CaptionTextStyle}" />
-                                <TextBlock Text="部分采用" FontWeight="SemiBold" />
+                                <TextBlock x:Name="LatestWorkerResultText" Text="尚无任务" FontWeight="SemiBold" />
                             </StackPanel>
                             <StackPanel Grid.Column="1">
                                 <TextBlock Text="重复劳动" Style="{StaticResource CaptionTextStyle}" />
-                                <TextBlock Text="低" FontWeight="SemiBold" />
+                                <TextBlock x:Name="LatestDuplicateText" Text="尚无记录" FontWeight="SemiBold" />
                             </StackPanel>
                             <StackPanel Grid.Column="2">
                                 <TextBlock Text="经济判断" Style="{StaticResource CaptionTextStyle}" />
-                                <TextBlock Text="可能节省" FontWeight="SemiBold" />
+                                <TextBlock x:Name="LatestEconomicText" Text="无法判断" FontWeight="SemiBold" />
                             </StackPanel>
                         </Grid>
-                        <InfoBar IsOpen="True" Severity="Informational" Title="诚实的用量结论" Message="没有纯 Sol 对照实验，因此不会显示伪精确的节省百分比。" />
+                        <InfoBar x:Name="LatestTaskInfoBar" IsOpen="True" Severity="Informational" Title="尚无真实任务" Message="请在“运行任务”页面提交第一条受控任务。" />
                     </StackPanel>
                 </Border>
                 <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" MinWidth="0">
