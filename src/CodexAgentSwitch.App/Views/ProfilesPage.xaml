@@ -4,22 +4,46 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:CodexAgentSwitch.App.Views">
     <Grid>
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="ResponsiveLayoutStates">
+                <VisualState x:Name="CompactLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="HeaderActions.(Grid.Row)" Value="1" />
+                        <Setter Target="HeaderActions.HorizontalAlignment" Value="Left" />
+                        <Setter Target="SavedProfilesCard.(Grid.ColumnSpan)" Value="2" />
+                        <Setter Target="CurrentProfileCard.(Grid.Row)" Value="1" />
+                        <Setter Target="CurrentProfileCard.(Grid.Column)" Value="0" />
+                        <Setter Target="CurrentProfileCard.(Grid.ColumnSpan)" Value="2" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WideLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1000" />
+                    </VisualState.StateTriggers>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
         <ScrollViewer>
             <StackPanel Padding="{StaticResource PagePadding}" Spacing="16" MaxWidth="1180">
-                <Grid>
+                <Grid RowSpacing="12">
+                    <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
                     <local:PageHeader Title="配置方案" Subtitle="创建、编辑并持久化 Sol / Terra / Luna 路由方案。导入和导出不包含凭据。" />
-                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <StackPanel x:Name="HeaderActions" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <Button Content="导入" Tag="profile:import" />
                         <Button Content="新建方案" Style="{StaticResource AccentButtonStyle}" Tag="profile:new" AutomationProperties.Name="新建方案" />
                     </StackPanel>
                 </Grid>
                 <InfoBar x:Name="CurrentProfileBar" IsOpen="True" Severity="Informational" Title="正在加载配置方案" Message="从本地数据库读取。" />
-                <Grid ColumnSpacing="16">
+                <Grid ColumnSpacing="16" RowSpacing="16">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="2*" />
                         <ColumnDefinition Width="3*" />
                     </Grid.ColumnDefinitions>
-                    <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}">
+                    <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                    <Border x:Name="SavedProfilesCard" Grid.Column="0" Style="{StaticResource CardBorderStyle}">
                         <StackPanel Spacing="12">
                             <TextBlock Text="已保存方案" Style="{StaticResource SectionTitleStyle}" />
                             <ListView x:Name="ProfileList" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile, Mode=TwoWay}" SelectionMode="Single" MinHeight="320" AutomationProperties.Name="配置方案列表">
@@ -41,19 +65,35 @@
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
-                            <Grid RowSpacing="8" ColumnSpacing="8">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
-                                <Button Grid.Row="0" Grid.Column="0" Content="编辑" Click="EditSelectedProfile" />
-                                <Button Grid.Row="0" Grid.Column="1" Content="复制" Click="CopySelectedProfile" />
-                                <Button Grid.Row="1" Grid.Column="0" Content="删除" Click="DeleteSelectedProfile" />
-                                <Button Grid.Row="1" Grid.Column="1" Content="导出" Click="ExportSelectedProfile" />
-                                <Button Grid.Row="2" Grid.Column="0" Content="设置默认" Click="SetSelectedAsDefault" Style="{StaticResource AccentButtonStyle}" />
-                                <Button Grid.Row="2" Grid.Column="1" Content="立即启用" Click="ActivateSelectedProfile" Style="{StaticResource AccentButtonStyle}" />
-                            </Grid>
+                            <StackPanel Spacing="4" HorizontalAlignment="Stretch">
+                                <ItemsControl HorizontalAlignment="Stretch">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <ItemsWrapGrid Orientation="Horizontal"
+                                                           MaximumRowsOrColumns="4"
+                                                           HorizontalAlignment="Center" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <Button Content="编辑" Width="56" Margin="4" Padding="8,6" Click="EditSelectedProfile" />
+                                    <Button Content="复制" Width="56" Margin="4" Padding="8,6" Click="CopySelectedProfile" />
+                                    <Button Content="删除" Width="56" Margin="4" Padding="8,6" Click="DeleteSelectedProfile" />
+                                    <Button Content="导出" Width="56" Margin="4" Padding="8,6" Click="ExportSelectedProfile" />
+                                </ItemsControl>
+                                <ItemsControl HorizontalAlignment="Stretch">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <ItemsWrapGrid Orientation="Horizontal"
+                                                           MaximumRowsOrColumns="2"
+                                                           HorizontalAlignment="Center" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <Button Content="设置默认" Width="120" Margin="4" Click="SetSelectedAsDefault" Style="{StaticResource AccentButtonStyle}" />
+                                    <Button Content="立即启用" Width="120" Margin="4" Click="ActivateSelectedProfile" Style="{StaticResource AccentButtonStyle}" />
+                                </ItemsControl>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
-                    <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                    <Border x:Name="CurrentProfileCard" Grid.Column="1" Style="{StaticResource CardBorderStyle}">
                         <StackPanel Spacing="8">
                             <TextBlock Text="当前方案" Style="{StaticResource SectionTitleStyle}" />
                             <TextBlock x:Name="CurrentProfileNameText" Text="未选择" Style="{StaticResource BodyTextStyle}" />
@@ -72,13 +112,18 @@
                        CloseButtonText="取消"
                        PrimaryButtonClick="SaveEditor"
                        DefaultButton="Primary"
-                       MaxWidth="800">
+                       Width="860"
+                       MaxWidth="900">
             <ScrollViewer MaxHeight="680">
                 <StackPanel Spacing="20">
                     <TextBox Header="方案名称" Text="{Binding Name, Mode=TwoWay}" AutomationProperties.Name="方案名称" />
                     <TextBlock Text="主代理" Style="{StaticResource SectionTitleStyle}" />
                     <Grid ColumnSpacing="16" RowSpacing="12">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions><RowDefinition /></Grid.RowDefinitions>
                         <ComboBox Grid.Row="0" Grid.Column="0" Header="主代理" ItemsSource="{Binding MainAgentSlots}" SelectedItem="{Binding MainAgentSlot, Mode=TwoWay}" AutomationProperties.Name="主代理选择" />
                         <ComboBox Grid.Row="0" Grid.Column="1"
@@ -99,25 +144,29 @@
                                    TextWrapping="Wrap" />
                         <StackPanel Visibility="{Binding WorkerSettingsVisibility}" Spacing="12">
                             <Grid ColumnSpacing="16" RowSpacing="12">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
                                 <ComboBox Grid.Row="0" Grid.Column="0"
                                           Header="工作代理来源"
                                           ItemsSource="{Binding WorkerSourceOptions}"
                                           DisplayMemberPath="DisplayName"
                                           SelectedItem="{Binding SelectedWorkerSourceOption, Mode=TwoWay}"
                                           AutomationProperties.Name="工作代理来源" />
-                                <TextBox Grid.Row="0" Grid.Column="1"
+                                <TextBox Grid.Row="0" Grid.Column="2"
                                          Header="最大工作代理数量"
                                          Text="{Binding WorkerCount, Mode=TwoWay}"
                                          AutomationProperties.Name="最大工作代理数量" />
-                                <ComboBox Grid.Row="1" Grid.Column="0"
+                                <ComboBox Grid.Row="0" Grid.Column="1"
                                           Header="原生工作代理"
                                           ItemsSource="{Binding NativeWorkerSlots}"
                                           SelectedItem="{Binding NativeWorkerSlot, Mode=TwoWay}"
                                           Visibility="{Binding NativeWorkerVisibility}"
                                           AutomationProperties.Name="原生工作代理选择" />
-                                <ComboBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                <ComboBox Grid.Row="0" Grid.Column="1"
                                           Header="外部服务商"
                                           ItemsSource="{Binding ExternalProviders}"
                                           DisplayMemberPath="DisplayName"
@@ -126,7 +175,7 @@
                                           IsEnabled="{Binding HasExternalProviders}"
                                           Visibility="{Binding ExternalProviderVisibility}"
                                           AutomationProperties.Name="外部服务商选择" />
-                                <ComboBox Grid.Row="2" Grid.Column="0"
+                                <ComboBox Grid.Row="1" Grid.Column="0"
                                           Header="路由模式"
                                           ItemsSource="{Binding RoutingModeOptions}"
                                           SelectedItem="{Binding SelectedRoutingModeOption, Mode=TwoWay}"
@@ -139,35 +188,41 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
-                                <ComboBox Grid.Row="2" Grid.Column="1"
+                                <ComboBox Grid.Row="1" Grid.Column="1"
                                           Header="回退策略"
                                           ItemsSource="{Binding FallbackActionOptions}"
                                           DisplayMemberPath="DisplayName"
                                           SelectedItem="{Binding SelectedFallbackActionOption, Mode=TwoWay}"
                                           AutomationProperties.Name="回退策略" />
+                                <TextBlock Grid.Row="1" Grid.Column="2"
+                                           Text="{Binding RoutingModeDescription}"
+                                           Style="{StaticResource CaptionTextStyle}"
+                                           TextWrapping="Wrap"
+                                           VerticalAlignment="Center"
+                                           ToolTipService.ToolTip="{Binding RoutingModeDescription}"
+                                           AutomationProperties.Name="路由模式说明" />
                             </Grid>
                             <InfoBar IsOpen="True"
                                      Severity="Warning"
                                      Title="没有可用的外部服务商"
                                      Message="请先在服务商页面配置并启用一个外部服务商。"
                                      Visibility="{Binding ExternalProviderEmptyVisibility}" />
-                            <TextBlock Text="{Binding RoutingModeDescription}"
-                                       Style="{StaticResource CaptionTextStyle}"
-                                       TextWrapping="Wrap"
-                                       ToolTipService.ToolTip="{Binding RoutingModeDescription}"
-                                       AutomationProperties.Name="路由模式说明" />
                         </StackPanel>
                     </StackPanel>
                     <TextBlock Text="预算限制" Style="{StaticResource SectionTitleStyle}" />
                     <Grid ColumnSpacing="16" RowSpacing="12">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
                         <TextBox Grid.Row="0" Grid.Column="0" Header="单任务预算" Text="{Binding PerTaskBudget, Mode=TwoWay}" />
                         <TextBox Grid.Row="0" Grid.Column="1" Header="每日预算" Text="{Binding DailyBudget, Mode=TwoWay}" />
-                        <TextBox Grid.Row="1" Grid.Column="0" Header="每月预算" Text="{Binding MonthlyBudget, Mode=TwoWay}" />
-                        <TextBox Grid.Row="1" Grid.Column="1" Header="币种" Text="{Binding Currency, Mode=TwoWay}" />
-                        <TextBox Grid.Row="2" Grid.Column="0" Header="令牌上限" Text="{Binding TokenLimit, Mode=TwoWay}" />
-                        <TextBox Grid.Row="2" Grid.Column="1" Header="请求上限" Text="{Binding RequestLimit, Mode=TwoWay}" />
+                        <TextBox Grid.Row="0" Grid.Column="2" Header="每月预算" Text="{Binding MonthlyBudget, Mode=TwoWay}" />
+                        <TextBox Grid.Row="1" Grid.Column="0" Header="令牌上限" Text="{Binding TokenLimit, Mode=TwoWay}" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Header="请求上限" Text="{Binding RequestLimit, Mode=TwoWay}" />
+                        <TextBox Grid.Row="1" Grid.Column="2" Header="币种" Text="{Binding Currency, Mode=TwoWay}" />
                     </Grid>
                 </StackPanel>
             </ScrollViewer>
