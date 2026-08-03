@@ -10,6 +10,7 @@ public sealed class SqliteDatabase(string databasePath)
         Mode = SqliteOpenMode.ReadWriteCreate,
         Cache = SqliteCacheMode.Shared,
         ForeignKeys = true,
+        Pooling = false,
     }.ToString();
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
