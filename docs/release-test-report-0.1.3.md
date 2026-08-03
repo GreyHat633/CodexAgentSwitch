@@ -52,7 +52,7 @@
 - 实际启动：便携 App、安装后的 App、compact Runtime Bootstrapper 均成功；
 - 实际安装：Setup CLI 从 0.1.2 原地升级到 0.1.3，目标为 `E:\AISPace\Codex Agent Switch`；版本为 0.1.3.0，旧版本保留为时间戳备份；
 - C 盘监控物理条目：启动前 6，启动后 6，差异 0；
-- 审计证据：`docs\acceptance\c-drive-release-audit-0.1.3.json`；原始运行输出保存在 `.tmp\c-drive-release-audit-20260804-011937\result.json`。
+- 审计证据：`docs\acceptance\c-drive-release-audit-0.1.3.json`；最终可追溯构建的原始运行输出保存在 `.tmp\c-drive-release-audit-20260804-012904\result.json`。
 
 Windows 标准开始菜单入口本身是位于用户配置目录 C 盘的 `.lnk` 文件。为了同时保留既有“开始菜单图标”功能与不写入大型 payload 的目标，产品仍保留该功能；本轮安装测试通过 `CAS_START_MENU_ROOT` 将测试快捷方式重定向到 E 盘。这个极小 Shell 文件不应被表述为 payload 零写入，完整无 C 写入部署可使用 E 盘快捷方式或保留已有快捷方式。
 
@@ -60,8 +60,8 @@ Windows 标准开始菜单入口本身是位于用户配置目录 C 盘的 `.lnk
 
 | 文件 | 字节 | SHA-256 |
 | --- | ---: | --- |
-| `CodexAgentSwitch-win10-x64.zip` | 94,194,500 | `875748d353bdfb85dfbcdcd3df449549411584ba4acae8e7a6f1047bc296b379` |
-| `CodexAgentSwitch-compact-runtime-win10-x64.zip` | 237,524,669 | `1b12f0363058e9ed68e118ec65e4000dd23c1cced92363d4397aabc5ca097aec` |
-| `CodexAgentSwitch-Setup-Bundle-win10-x64.zip` | 413,013,130 | `652a6be63fa853cbb2c290e022fc8cba656317d412473c3e9405045f319702b8` |
+| `CodexAgentSwitch-win10-x64.zip` | 94,194,497 | `892bec90ece7d3c224d8a976e75ed6dce4ad443b9d0cadbe3c86ba717a8699dc` |
+| `CodexAgentSwitch-compact-runtime-win10-x64.zip` | 237,524,671 | `d52ad65cecab70d458149fb296f0212f7150a3b7c0f798f5f440609b0d1ac46c` |
+| `CodexAgentSwitch-Setup-Bundle-win10-x64.zip` | 413,013,065 | `801d30befc7b13bcf4b94091bb8689763b7d641f4810a49e547ed8c3870b0f33` |
 
 0.1.2 发布物未覆盖。Profile 与凭据格式未变化；Setup 延续既有 `data` 迁移和时间戳备份逻辑，支持从 0.1.2 原地升级。
