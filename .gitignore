@@ -1,0 +1,27 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+TestResults/
+
+# Local SDK and package state (kept on E: but never committed)
+.dotnet/
+.nuget/
+.packages/
+.tools/
+.tmp/
+
+# User data, credentials, and generated protocol cache
+data/
+secrets/
+protocol-cache/
+*.user
+*.suo
+
+# IDE and OS metadata
+.vs/
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+
