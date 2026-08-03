@@ -34,4 +34,21 @@ public sealed partial class DiagnosticsPage : Page
             DiagnosticResultBar.Message = exception.Message;
         }
     }
+
+    private void ExportDiagnostics(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var path = DiagnosticBundleExporter.Export(App.Services.GetRequiredService<AppDataPaths>());
+            DiagnosticResultBar.Severity = InfoBarSeverity.Success;
+            DiagnosticResultBar.Title = "诊断包已导出";
+            DiagnosticResultBar.Message = path;
+        }
+        catch (Exception exception)
+        {
+            DiagnosticResultBar.Severity = InfoBarSeverity.Error;
+            DiagnosticResultBar.Title = "诊断包导出失败";
+            DiagnosticResultBar.Message = exception.Message;
+        }
+    }
 }

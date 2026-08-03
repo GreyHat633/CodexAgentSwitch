@@ -73,13 +73,15 @@ public partial class App : Microsoft.UI.Xaml.Application
         }
         catch (Exception exception)
         {
-            var dataRoot = Environment.GetEnvironmentVariable("CAS_DATA_ROOT");
-            if (!string.IsNullOrWhiteSpace(dataRoot))
+            try
             {
-                var diagnosticDirectory = Path.Combine(dataRoot, "diagnostics");
-                Directory.CreateDirectory(diagnosticDirectory);
-                File.WriteAllText(Path.Combine(diagnosticDirectory, "startup-crash.txt"), exception.ToString());
+                var paths = Services.GetRequiredService<AppDataPaths>();
+                paths.EnsureCreated();
+                File.WriteAllText(
+                    Path.Combine(paths.LogsDirectory, "startup-crash.txt"),
+                    DiagnosticBundleExporter.Redact(exception.ToString()));
             }
+            catch { }
 
             throw;
         }

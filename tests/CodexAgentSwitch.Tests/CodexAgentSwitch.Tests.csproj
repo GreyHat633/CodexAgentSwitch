@@ -16,5 +16,6 @@
     <ProjectReference Include="..\..\src\CodexAgentSwitch.Domain\CodexAgentSwitch.Domain.csproj" />
     <ProjectReference Include="..\..\src\CodexAgentSwitch.Application\CodexAgentSwitch.Application.csproj" />
     <ProjectReference Include="..\..\src\CodexAgentSwitch.Infrastructure\CodexAgentSwitch.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\CodexAgentSwitch.Setup\CodexAgentSwitch.Setup.csproj" />
   </ItemGroup>
 </Project>

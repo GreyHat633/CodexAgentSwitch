@@ -7,12 +7,12 @@ The bootstrapper is a standalone `net8.0-windows10.0.19041.0` x64 WinForms execu
 ```text
 CodexAgentSwitch.Bootstrapper.exe
 CodexAgentSwitch.App.exe
-RuntimeInstaller/WindowsAppRuntime-1.8-x64.exe
+RuntimeInstaller/WindowsAppRuntimeInstall-x64.exe
 ```
 
 The installer must be an already bundled, official, signed x64 Windows App Runtime installer. The bootstrapper never downloads software and never searches outside its application directory.
 
-At startup it separately checks Windows build/architecture and the Windows App Runtime inventory. Windows 10 22H2 (build 19045) and Windows 11 x64 are accepted. Runtime matching requires x64 Windows App Runtime 1.8 or newer; absent and same-major-but-too-old states are reported differently.
+At startup it separately checks Windows build/architecture and the Windows App Runtime inventory. Windows 10 22H2 (build 19045) and Windows 11 x64 are accepted. Runtime matching requires a complete x64 Windows App Runtime 1.8 set: Framework, Main, Singleton, and DDLM packages with the same package version. A Framework-only registration is reported as incomplete instead of producing a false-positive. Absent, incomplete, and same-major-but-too-old states are reported differently.
 
 The installer button is enabled only when the OS is supported and the required runtime is not present. Clicking it opens an explicit confirmation dialog showing the exact bundled path. Declining does nothing. No installation occurs during inspection, development, or tests. After installation, restart or re-open the bootstrapper and re-check status.
 

@@ -1,11 +1,13 @@
 using Microsoft.Win32;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security;
 
 namespace CodexAgentSwitch.Bootstrapper;
 
 public sealed record OsSnapshot(Version Version, Architecture Architecture);
-public sealed record RuntimeInstallation(Version Version, Architecture Architecture, string Source, Version? PackageVersion = null);
+public enum RuntimeComponent { Framework, Main, Singleton, Ddlm, CompleteMarker }
+public sealed record RuntimeInstallation(Version Version, Architecture Architecture, string Source, Version? PackageVersion = null, RuntimeComponent Component = RuntimeComponent.Framework);
 public sealed record BootstrapperStatus(bool SupportedOs, bool RuntimePresent, bool RuntimeVersionMismatch, OsSnapshot Os, IReadOnlyList<RuntimeInstallation> Installations, string Message);
 
 public interface IOsProbe { OsSnapshot Read(); }
@@ -26,11 +28,19 @@ public sealed class WindowsAppRuntimeInventory : IRuntimeInventory
     public IReadOnlyList<RuntimeInstallation> Find()
     {
         var result = new List<RuntimeInstallation>();
-        ReadInstalledVersionKeys(Registry.LocalMachine, InstalledVersionsKey, result);
-        ReadInstalledVersionKeys(Registry.CurrentUser, InstalledVersionsKey, result);
-        ReadPackageKeys(Registry.LocalMachine, PackageRepositoryKey, result);
-        ReadPackageKeys(Registry.CurrentUser, PackageRepositoryKey, result);
+        TryRead(() => ReadInstalledVersionKeys(Registry.LocalMachine, InstalledVersionsKey, result));
+        TryRead(() => ReadInstalledVersionKeys(Registry.CurrentUser, InstalledVersionsKey, result));
+        TryRead(() => ReadPackageKeys(Registry.LocalMachine, PackageRepositoryKey, result));
+        TryRead(() => ReadPackageKeys(Registry.CurrentUser, PackageRepositoryKey, result));
         return result.Distinct().ToArray();
+    }
+
+    private static void TryRead(Action read)
+    {
+        try { read(); }
+        catch (UnauthorizedAccessException) { }
+        catch (SecurityException) { }
+        catch (IOException) { }
     }
 
     private static void ReadInstalledVersionKeys(RegistryKey root, string path, ICollection<RuntimeInstallation> result)
@@ -42,7 +52,7 @@ public sealed class WindowsAppRuntimeInventory : IRuntimeInventory
             if (!Version.TryParse(name, out var version)) continue;
             using var versionKey = key.OpenSubKey(name);
             var architecture = ParseArchitecture(versionKey?.GetValue("Architecture") as string) ?? Architecture.X64;
-            result.Add(new(version, architecture, $"registry:{path}\\{name}"));
+            result.Add(new(version, architecture, $"registry:{path}\\{name}", Component: RuntimeComponent.CompleteMarker));
         }
     }
 
@@ -58,12 +68,36 @@ public sealed class WindowsAppRuntimeInventory : IRuntimeInventory
     {
         installation = null!;
         var parts = packageName.Split('_');
-        if (parts.Length < 4 || !parts[0].StartsWith("Microsoft.WindowsAppRuntime.", StringComparison.OrdinalIgnoreCase)) return false;
-        var channelText = parts[0]["Microsoft.WindowsAppRuntime.".Length..];
-        if (!Version.TryParse(channelText, out var channel) || !Version.TryParse(parts[1], out var packageVersion)) return false;
+        if (parts.Length < 4 || !Version.TryParse(parts[1], out var packageVersion)) return false;
         var architecture = parts[2].ToLowerInvariant() switch { "x64" => Architecture.X64, "x86" => Architecture.X86, "arm64" => Architecture.Arm64, _ => (Architecture?)null };
         if (architecture is null) return false;
-        installation = new(channel, architecture.Value, $"package:{packageName}", packageVersion);
+
+        var name = parts[0];
+        Version channel;
+        RuntimeComponent component;
+        if (name.StartsWith("Microsoft.WindowsAppRuntime.", StringComparison.OrdinalIgnoreCase)
+            && Version.TryParse(name["Microsoft.WindowsAppRuntime.".Length..], out channel!))
+        {
+            component = RuntimeComponent.Framework;
+        }
+        else if (name.StartsWith("MicrosoftCorporationII.WindowsAppRuntime.Main.", StringComparison.OrdinalIgnoreCase)
+            && Version.TryParse(name["MicrosoftCorporationII.WindowsAppRuntime.Main.".Length..], out channel!))
+        {
+            component = RuntimeComponent.Main;
+        }
+        else if (name.Equals("Microsoft.WindowsAppRuntime.Singleton", StringComparison.OrdinalIgnoreCase))
+        {
+            channel = new Version(0, 0);
+            component = RuntimeComponent.Singleton;
+        }
+        else if (name.StartsWith("Microsoft.WinAppRuntime.DDLM.", StringComparison.OrdinalIgnoreCase))
+        {
+            channel = new Version(0, 0);
+            component = RuntimeComponent.Ddlm;
+        }
+        else return false;
+
+        installation = new(channel, architecture.Value, $"package:{packageName}", packageVersion, component);
         return true;
     }
 
@@ -76,7 +110,7 @@ public sealed class WindowsAppRuntimeInventory : IRuntimeInventory
     };
 }
 
-public sealed class BundledInstallerLocator(string applicationDirectory, string installerFileName = "WindowsAppRuntime-1.8-x64.exe") : IInstallerLocator
+public sealed class BundledInstallerLocator(string applicationDirectory, string installerFileName = "WindowsAppRuntimeInstall-x64.exe") : IInstallerLocator
 {
     public string? Find()
     {
@@ -103,11 +137,31 @@ public sealed class BootstrapperService(IOsProbe osProbe, IRuntimeInventory inve
         var os = osProbe.Read();
         var installations = inventory.Find();
         var supported = os.Architecture == Architecture.X64 && os.Version.Build >= 19045;
-        var matching = installations.Any(x => x.Architecture == Architecture.X64 && x.Version.Major == RequiredRuntime.Major && x.Version.Minor >= RequiredRuntime.Minor);
-        var sameMajor = installations.Any(x => x.Architecture == Architecture.X64 && x.Version.Major == RequiredRuntime.Major);
-        var message = !supported ? $"Unsupported system: Windows 10 22H2 (build 19045) or Windows 11 x64 is required; detected build {os.Version.Build}, {os.Architecture}." : matching ? $"Windows App Runtime {RequiredRuntime.Major}.{RequiredRuntime.Minor} x64 is available." : sameMajor ? $"Windows App Runtime x64 is installed, but version 1.8 or newer is required." : "Windows App Runtime 1.8 x64 is not installed.";
+        var completeMarker = installations.Any(x => x.Component == RuntimeComponent.CompleteMarker
+            && x.Architecture == Architecture.X64 && IsRequiredChannel(x.Version));
+        var frameworks = installations.Where(x => x.Component == RuntimeComponent.Framework
+            && x.Architecture == Architecture.X64 && IsRequiredChannel(x.Version)).ToArray();
+        var matching = completeMarker || frameworks.Any(framework => framework.PackageVersion is not null
+            && HasMatchingComponent(installations, RuntimeComponent.Main, framework.PackageVersion)
+            && HasMatchingComponent(installations, RuntimeComponent.Singleton, framework.PackageVersion)
+            && HasMatchingComponent(installations, RuntimeComponent.Ddlm, framework.PackageVersion));
+        var sameMajor = installations.Any(x => x.Architecture == Architecture.X64
+            && x.Component is RuntimeComponent.Framework or RuntimeComponent.CompleteMarker
+            && x.Version.Major == RequiredRuntime.Major);
+        var hasRequiredFramework = frameworks.Length > 0;
+        var message = !supported ? $"Unsupported system: Windows 10 22H2 (build 19045) or Windows 11 x64 is required; detected build {os.Version.Build}, {os.Architecture}."
+            : matching ? $"Windows App Runtime {RequiredRuntime.Major}.{RequiredRuntime.Minor} x64 is complete (Framework, Main, Singleton, and DDLM)."
+            : hasRequiredFramework ? "Windows App Runtime 1.8 x64 is incomplete; Framework, Main, Singleton, and DDLM must be installed together."
+            : sameMajor ? "Windows App Runtime x64 is installed, but version 1.8 or newer is required."
+            : "Windows App Runtime 1.8 x64 is not installed.";
         return new(supported, matching, !matching && sameMajor, os, installations, message);
     }
+
+    private static bool IsRequiredChannel(Version version) =>
+        version.Major == RequiredRuntime.Major && version.Minor >= RequiredRuntime.Minor;
+
+    private static bool HasMatchingComponent(IEnumerable<RuntimeInstallation> installations, RuntimeComponent component, Version packageVersion) =>
+        installations.Any(x => x.Component == component && x.Architecture == Architecture.X64 && x.PackageVersion == packageVersion);
 
     public bool InstallAfterConfirmation(Func<string, bool> confirm, out string message)
     {
