@@ -2,10 +2,16 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using CodexAgentSwitch.Domain.Profiles;
+using CodexAgentSwitch.Domain.Providers;
+using Microsoft.UI.Xaml;
 using DomainRoutingMode = CodexAgentSwitch.Domain.Profiles.RoutingMode;
 using DomainWorkerSource = CodexAgentSwitch.Domain.Profiles.WorkerSource;
 
 namespace CodexAgentSwitch.App.ViewModels;
+
+public sealed record SelectionOption<T>(T Value, string DisplayName, string Description = "");
+
+public sealed record ProviderSelectionOption(string Id, string DisplayName);
 
 public sealed class ProfileListItemViewModel(Profile profile)
 {
@@ -43,7 +49,11 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     private string _requestLimit;
     private string _currency;
 
-    private ProfileEditorViewModel(Profile? source, bool isNew, string initialName)
+    private ProfileEditorViewModel(
+        Profile? source,
+        bool isNew,
+        string initialName,
+        IReadOnlyList<ProviderSelectionOption> externalProviders)
     {
         _source = source;
         _isNew = isNew;
@@ -61,6 +71,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         _externalProviderId = profile.WorkerPolicy.Source == WorkerSource.ExternalProvider
             ? profile.WorkerPolicy.PreferredProviderId ?? string.Empty
             : string.Empty;
+        ExternalProviders = EnsureSelectedProvider(externalProviders, _externalProviderId);
         _workerCount = profile.WorkerPolicy.MaxWorkers.ToString(CultureInfo.InvariantCulture);
         _routingMode = profile.WorkerPolicy.RoutingMode;
         _fallbackAction = profile.WorkerPolicy.FallbackAction;
@@ -74,29 +85,133 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public static ProfileEditorViewModel ForNew(Profile template) => new(template, isNew: true, initialName: string.Empty);
+    public static ProfileEditorViewModel ForNew(Profile template, IReadOnlyList<ProviderSelectionOption> externalProviders) =>
+        new(template, isNew: true, initialName: string.Empty, externalProviders);
 
-    public static ProfileEditorViewModel ForCopy(Profile template, string uniqueName) => new(template, isNew: true, initialName: uniqueName);
+    public static ProfileEditorViewModel ForCopy(Profile template, string uniqueName, IReadOnlyList<ProviderSelectionOption> externalProviders) =>
+        new(template, isNew: true, initialName: uniqueName, externalProviders);
 
-    public static ProfileEditorViewModel ForEdit(Profile profile) => new(profile, isNew: false, initialName: profile.Name);
+    public static ProfileEditorViewModel ForEdit(Profile profile, IReadOnlyList<ProviderSelectionOption> externalProviders) =>
+        new(profile, isNew: false, initialName: profile.Name, externalProviders);
 
     public string DialogTitle => _isNew ? "新建方案" : "编辑方案";
 
     public IReadOnlyList<string> MainAgentSlots { get; } = ["Sol", "Terra", "Luna"];
 
-    public IReadOnlyList<string> ReasoningStrengths { get; } = ["low", "medium", "high", "xhigh"];
+    public IReadOnlyList<SelectionOption<string>> ReasoningStrengthOptions { get; } =
+    [
+        new("low", "低", "适合简单、明确的任务"),
+        new("medium", "中", "兼顾速度与分析深度"),
+        new("high", "高", "适合复杂开发与审查"),
+        new("xhigh", "极高", "用于最复杂且允许更高耗时的任务"),
+    ];
 
-    public IReadOnlyList<WorkerSource> WorkerSources { get; } = [WorkerSource.NativeCodex, WorkerSource.ExternalProvider];
+    public IReadOnlyList<SelectionOption<WorkerSource>> WorkerSourceOptions { get; } =
+    [
+        new(WorkerSource.NativeCodex, "原生工作代理", "使用 Codex 的 Sol、Terra 或 Luna"),
+        new(WorkerSource.ExternalProvider, "外部服务商", "使用已配置并启用的外部服务商"),
+    ];
 
     public IReadOnlyList<string> NativeWorkerSlots { get; } = ["Sol", "Terra", "Luna"];
 
-    public IReadOnlyList<RoutingMode> RoutingModes { get; } = Enum.GetValues<RoutingMode>();
+    public IReadOnlyList<SelectionOption<RoutingMode>> RoutingModeOptions { get; } =
+    [
+        new(RoutingMode.Economic, "经济优先", "最多使用 1 个工作代理，优先控制额度和重复劳动。"),
+        new(RoutingMode.Balanced, "平衡模式", "最多使用 2 个工作代理，在速度、质量与成本之间取平衡。"),
+        new(RoutingMode.Performance, "性能优先", "最多使用 3 个工作代理，优先并行速度与结果覆盖。"),
+        new(RoutingMode.Manual, "手动模式", "仅按用户明确指定的边界和数量调用工作代理。"),
+        new(RoutingMode.Single, "单代理模式", "不启用工作代理，所有工作由主代理独立完成。"),
+    ];
 
-    public IReadOnlyList<FallbackAction> FallbackActions { get; } = Enum.GetValues<FallbackAction>();
+    public IReadOnlyList<SelectionOption<FallbackAction>> FallbackActionOptions { get; } =
+    [
+        new(FallbackAction.NativeLuna, "回退到原生 Luna"),
+        new(FallbackAction.SingleAgent, "由主代理接管"),
+        new(FallbackAction.AskUser, "询问用户"),
+        new(FallbackAction.StopDelegation, "停止委派"),
+    ];
+
+    public IReadOnlyList<ProviderSelectionOption> ExternalProviders { get; }
+
+    public Visibility WorkerSettingsVisibility => WorkerEnabled ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility WorkerDisabledHintVisibility => WorkerEnabled ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility NativeWorkerVisibility =>
+        WorkerEnabled && WorkerSource == DomainWorkerSource.NativeCodex ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility ExternalProviderVisibility =>
+        WorkerEnabled && WorkerSource == DomainWorkerSource.ExternalProvider ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility ExternalProviderEmptyVisibility =>
+        ExternalProviderVisibility == Visibility.Visible && ExternalProviders.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public bool HasExternalProviders => ExternalProviders.Count > 0;
+
+    public string RoutingModeDescription =>
+        RoutingModeOptions.First(option => option.Value == RoutingMode).Description;
+
+    public SelectionOption<WorkerSource> SelectedWorkerSourceOption
+    {
+        get => WorkerSourceOptions.First(option => option.Value == WorkerSource);
+        set
+        {
+            if (value is not null)
+            {
+                WorkerSource = value.Value;
+            }
+        }
+    }
+
+    public SelectionOption<string> SelectedReasoningStrengthOption
+    {
+        get => ReasoningStrengthOptions.First(option => option.Value == ReasoningStrength);
+        set
+        {
+            if (value is not null)
+            {
+                ReasoningStrength = value.Value;
+            }
+        }
+    }
+
+    public SelectionOption<RoutingMode> SelectedRoutingModeOption
+    {
+        get => RoutingModeOptions.First(option => option.Value == RoutingMode);
+        set
+        {
+            if (value is not null)
+            {
+                RoutingMode = value.Value;
+            }
+        }
+    }
+
+    public SelectionOption<FallbackAction> SelectedFallbackActionOption
+    {
+        get => FallbackActionOptions.First(option => option.Value == FallbackAction);
+        set
+        {
+            if (value is not null)
+            {
+                FallbackAction = value.Value;
+            }
+        }
+    }
 
     public string Name { get => _name; set => Set(ref _name, value); }
     public string MainAgentSlot { get => _mainAgentSlot; set => Set(ref _mainAgentSlot, value); }
-    public string ReasoningStrength { get => _reasoningStrength; set => Set(ref _reasoningStrength, value); }
+    public string ReasoningStrength
+    {
+        get => _reasoningStrength;
+        set
+        {
+            if (Set(ref _reasoningStrength, value))
+            {
+                OnPropertyChanged(nameof(SelectedReasoningStrengthOption));
+            }
+        }
+    }
 
     public bool WorkerEnabled
     {
@@ -111,6 +226,10 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             if (!value)
             {
                 WorkerCount = "0";
+                if (RoutingMode != DomainRoutingMode.Single)
+                {
+                    RoutingMode = DomainRoutingMode.Single;
+                }
             }
             else
             {
@@ -124,10 +243,38 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
                     WorkerCount = "1";
                 }
             }
+
+            OnPropertyChanged(nameof(WorkerSettingsVisibility));
+            OnPropertyChanged(nameof(WorkerDisabledHintVisibility));
+            OnPropertyChanged(nameof(NativeWorkerVisibility));
+            OnPropertyChanged(nameof(ExternalProviderVisibility));
+            OnPropertyChanged(nameof(ExternalProviderEmptyVisibility));
+            OnPropertyChanged(nameof(SelectedWorkerSourceOption));
         }
     }
 
-    public WorkerSource WorkerSource { get => _workerSource; set => Set(ref _workerSource, value); }
+    public WorkerSource WorkerSource
+    {
+        get => _workerSource;
+        set
+        {
+            if (!Set(ref _workerSource, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(NativeWorkerVisibility));
+            OnPropertyChanged(nameof(ExternalProviderVisibility));
+            OnPropertyChanged(nameof(ExternalProviderEmptyVisibility));
+            OnPropertyChanged(nameof(SelectedWorkerSourceOption));
+            if (value == DomainWorkerSource.ExternalProvider
+                && string.IsNullOrWhiteSpace(ExternalProviderId)
+                && ExternalProviders.Count > 0)
+            {
+                ExternalProviderId = ExternalProviders[0].Id;
+            }
+        }
+    }
     public string NativeWorkerSlot { get => _nativeWorkerSlot; set => Set(ref _nativeWorkerSlot, value); }
     public string ExternalProviderId { get => _externalProviderId; set => Set(ref _externalProviderId, value); }
     public string WorkerCount { get => _workerCount; set => Set(ref _workerCount, value); }
@@ -136,13 +283,28 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         get => _routingMode;
         set
         {
-            if (Set(ref _routingMode, value) && value == DomainRoutingMode.Single)
+            if (Set(ref _routingMode, value))
             {
-                WorkerEnabled = false;
+                OnPropertyChanged(nameof(RoutingModeDescription));
+                OnPropertyChanged(nameof(SelectedRoutingModeOption));
+                if (value == DomainRoutingMode.Single)
+                {
+                    WorkerEnabled = false;
+                }
             }
         }
     }
-    public FallbackAction FallbackAction { get => _fallbackAction; set => Set(ref _fallbackAction, value); }
+    public FallbackAction FallbackAction
+    {
+        get => _fallbackAction;
+        set
+        {
+            if (Set(ref _fallbackAction, value))
+            {
+                OnPropertyChanged(nameof(SelectedFallbackActionOption));
+            }
+        }
+    }
     public string PerTaskBudget { get => _perTaskBudget; set => Set(ref _perTaskBudget, value); }
     public string DailyBudget { get => _dailyBudget; set => Set(ref _dailyBudget, value); }
     public string MonthlyBudget { get => _monthlyBudget; set => Set(ref _monthlyBudget, value); }
@@ -169,14 +331,14 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
                 source,
                 preferredWorker,
                 _source?.WorkerPolicy.FallbackProviderId,
-                ParseInt(WorkerCount, "Worker 数量"),
+                ParseInt(WorkerCount, "工作代理数量"),
                 RoutingMode,
                 FallbackAction),
             new BudgetLimits(
                 ParseDecimal(PerTaskBudget, "单任务预算"),
                 ParseDecimal(DailyBudget, "每日预算"),
                 ParseDecimal(MonthlyBudget, "每月预算"),
-                ParseLong(TokenLimit, "Token 上限"),
+                ParseLong(TokenLimit, "令牌上限"),
                 ParseIntOrNull(RequestLimit, "请求上限"),
                 Currency.Trim()),
             _isNew ? false : _source!.IsDefault,
@@ -217,6 +379,21 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     };
 
     private static string Format(decimal? value) => value?.ToString("0.##", CultureInfo.InvariantCulture) ?? string.Empty;
+
+    private static IReadOnlyList<ProviderSelectionOption> EnsureSelectedProvider(
+        IReadOnlyList<ProviderSelectionOption> providers,
+        string selectedProviderId)
+    {
+        if (string.IsNullOrWhiteSpace(selectedProviderId)
+            || providers.Any(provider => string.Equals(provider.Id, selectedProviderId, StringComparison.Ordinal)))
+        {
+            return providers;
+        }
+
+        return providers
+            .Append(new ProviderSelectionOption(selectedProviderId, $"{selectedProviderId}（已停用或已删除）"))
+            .ToArray();
+    }
 
     private static decimal? ParseDecimal(string value, string field) => ParseNullable<decimal>(value, field, TryParseDecimal);
 
@@ -274,4 +451,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         return true;
     }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }

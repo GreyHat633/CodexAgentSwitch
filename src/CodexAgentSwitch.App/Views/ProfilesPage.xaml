@@ -72,38 +72,101 @@
                        CloseButtonText="取消"
                        PrimaryButtonClick="SaveEditor"
                        DefaultButton="Primary"
-                       MaxWidth="760">
+                       MaxWidth="800">
             <ScrollViewer MaxHeight="680">
-                <StackPanel Spacing="12">
+                <StackPanel Spacing="20">
                     <TextBox Header="方案名称" Text="{Binding Name, Mode=TwoWay}" AutomationProperties.Name="方案名称" />
                     <TextBlock Text="主代理" Style="{StaticResource SectionTitleStyle}" />
-                    <Grid ColumnSpacing="8" RowSpacing="8">
+                    <Grid ColumnSpacing="16" RowSpacing="12">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                         <Grid.RowDefinitions><RowDefinition /></Grid.RowDefinitions>
                         <ComboBox Grid.Row="0" Grid.Column="0" Header="主代理" ItemsSource="{Binding MainAgentSlots}" SelectedItem="{Binding MainAgentSlot, Mode=TwoWay}" AutomationProperties.Name="主代理选择" />
-                        <ComboBox Grid.Row="0" Grid.Column="1" Header="推理强度" ItemsSource="{Binding ReasoningStrengths}" SelectedItem="{Binding ReasoningStrength, Mode=TwoWay}" AutomationProperties.Name="主代理推理强度" />
+                        <ComboBox Grid.Row="0" Grid.Column="1"
+                                  Header="推理强度"
+                                  ItemsSource="{Binding ReasoningStrengthOptions}"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedItem="{Binding SelectedReasoningStrengthOption, Mode=TwoWay}"
+                                  AutomationProperties.Name="主代理推理强度" />
                     </Grid>
-                    <TextBlock Text="Worker 与路由" Style="{StaticResource SectionTitleStyle}" />
-                    <Grid ColumnSpacing="8" RowSpacing="8">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
-                        <CheckBox Grid.Row="0" Grid.Column="0" Content="启用 Worker" IsChecked="{Binding WorkerEnabled, Mode=TwoWay}" VerticalAlignment="Center" AutomationProperties.Name="启用 Worker" />
-                        <ComboBox Grid.Row="0" Grid.Column="1" Header="Worker 来源" ItemsSource="{Binding WorkerSources}" SelectedItem="{Binding WorkerSource, Mode=TwoWay}" AutomationProperties.Name="Worker 类型" />
-                        <ComboBox Grid.Row="1" Grid.Column="0" Header="Native Worker" ItemsSource="{Binding NativeWorkerSlots}" SelectedItem="{Binding NativeWorkerSlot, Mode=TwoWay}" AutomationProperties.Name="原生 Worker 选择" />
-                        <TextBox Grid.Row="1" Grid.Column="1" Header="External Provider ID（外部来源）" Text="{Binding ExternalProviderId, Mode=TwoWay}" AutomationProperties.Name="外部 Provider ID" />
-                        <TextBox Grid.Row="2" Grid.Column="0" Header="Worker 数量" Text="{Binding WorkerCount, Mode=TwoWay}" AutomationProperties.Name="最大 Worker 数量" />
-                        <ComboBox Grid.Row="2" Grid.Column="1" Header="路由模式" ItemsSource="{Binding RoutingModes}" SelectedItem="{Binding RoutingMode, Mode=TwoWay}" AutomationProperties.Name="路由模式" />
-                        <ComboBox Grid.Row="3" Grid.Column="0" Header="回退动作" ItemsSource="{Binding FallbackActions}" SelectedItem="{Binding FallbackAction, Mode=TwoWay}" AutomationProperties.Name="回退策略" />
-                    </Grid>
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="工作代理与路由" Style="{StaticResource SectionTitleStyle}" />
+                        <CheckBox Content="启用工作代理"
+                                  IsChecked="{Binding WorkerEnabled, Mode=TwoWay}"
+                                  AutomationProperties.Name="启用工作代理" />
+                        <TextBlock Text="已关闭工作代理，所有任务将由主代理独立完成。"
+                                   Visibility="{Binding WorkerDisabledHintVisibility}"
+                                   Style="{StaticResource CaptionTextStyle}"
+                                   TextWrapping="Wrap" />
+                        <StackPanel Visibility="{Binding WorkerSettingsVisibility}" Spacing="12">
+                            <Grid ColumnSpacing="16" RowSpacing="12">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                                <ComboBox Grid.Row="0" Grid.Column="0"
+                                          Header="工作代理来源"
+                                          ItemsSource="{Binding WorkerSourceOptions}"
+                                          DisplayMemberPath="DisplayName"
+                                          SelectedItem="{Binding SelectedWorkerSourceOption, Mode=TwoWay}"
+                                          AutomationProperties.Name="工作代理来源" />
+                                <TextBox Grid.Row="0" Grid.Column="1"
+                                         Header="最大工作代理数量"
+                                         Text="{Binding WorkerCount, Mode=TwoWay}"
+                                         AutomationProperties.Name="最大工作代理数量" />
+                                <ComboBox Grid.Row="1" Grid.Column="0"
+                                          Header="原生工作代理"
+                                          ItemsSource="{Binding NativeWorkerSlots}"
+                                          SelectedItem="{Binding NativeWorkerSlot, Mode=TwoWay}"
+                                          Visibility="{Binding NativeWorkerVisibility}"
+                                          AutomationProperties.Name="原生工作代理选择" />
+                                <ComboBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                          Header="外部服务商"
+                                          ItemsSource="{Binding ExternalProviders}"
+                                          DisplayMemberPath="DisplayName"
+                                          SelectedValuePath="Id"
+                                          SelectedValue="{Binding ExternalProviderId, Mode=TwoWay}"
+                                          IsEnabled="{Binding HasExternalProviders}"
+                                          Visibility="{Binding ExternalProviderVisibility}"
+                                          AutomationProperties.Name="外部服务商选择" />
+                                <ComboBox Grid.Row="2" Grid.Column="0"
+                                          Header="路由模式"
+                                          ItemsSource="{Binding RoutingModeOptions}"
+                                          SelectedItem="{Binding SelectedRoutingModeOption, Mode=TwoWay}"
+                                          ToolTipService.ToolTip="{Binding RoutingModeDescription}"
+                                          AutomationProperties.Name="路由模式">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding DisplayName}"
+                                                       ToolTipService.ToolTip="{Binding Description}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <ComboBox Grid.Row="2" Grid.Column="1"
+                                          Header="回退策略"
+                                          ItemsSource="{Binding FallbackActionOptions}"
+                                          DisplayMemberPath="DisplayName"
+                                          SelectedItem="{Binding SelectedFallbackActionOption, Mode=TwoWay}"
+                                          AutomationProperties.Name="回退策略" />
+                            </Grid>
+                            <InfoBar IsOpen="True"
+                                     Severity="Warning"
+                                     Title="没有可用的外部服务商"
+                                     Message="请先在服务商页面配置并启用一个外部服务商。"
+                                     Visibility="{Binding ExternalProviderEmptyVisibility}" />
+                            <TextBlock Text="{Binding RoutingModeDescription}"
+                                       Style="{StaticResource CaptionTextStyle}"
+                                       TextWrapping="Wrap"
+                                       ToolTipService.ToolTip="{Binding RoutingModeDescription}"
+                                       AutomationProperties.Name="路由模式说明" />
+                        </StackPanel>
+                    </StackPanel>
                     <TextBlock Text="预算限制" Style="{StaticResource SectionTitleStyle}" />
-                    <Grid ColumnSpacing="8" RowSpacing="8">
+                    <Grid ColumnSpacing="16" RowSpacing="12">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                         <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
                         <TextBox Grid.Row="0" Grid.Column="0" Header="单任务预算" Text="{Binding PerTaskBudget, Mode=TwoWay}" />
                         <TextBox Grid.Row="0" Grid.Column="1" Header="每日预算" Text="{Binding DailyBudget, Mode=TwoWay}" />
                         <TextBox Grid.Row="1" Grid.Column="0" Header="每月预算" Text="{Binding MonthlyBudget, Mode=TwoWay}" />
-                        <TextBox Grid.Row="1" Grid.Column="1" Header="货币" Text="{Binding Currency, Mode=TwoWay}" />
-                        <TextBox Grid.Row="2" Grid.Column="0" Header="Token 上限" Text="{Binding TokenLimit, Mode=TwoWay}" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Header="币种" Text="{Binding Currency, Mode=TwoWay}" />
+                        <TextBox Grid.Row="2" Grid.Column="0" Header="令牌上限" Text="{Binding TokenLimit, Mode=TwoWay}" />
                         <TextBox Grid.Row="2" Grid.Column="1" Header="请求上限" Text="{Binding RequestLimit, Mode=TwoWay}" />
                     </Grid>
                 </StackPanel>

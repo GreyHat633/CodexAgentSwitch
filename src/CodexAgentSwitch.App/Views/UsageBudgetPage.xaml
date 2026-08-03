@@ -13,9 +13,9 @@
             </Grid>
             <Grid ColumnSpacing="16">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="外部 API 费用" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ExternalCostText" Text="unavailable" FontSize="28" FontWeight="SemiBold" /><TextBlock x:Name="ExternalCostEvidenceText" Text="尚无历史快照" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
-                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="Provider Tokens" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ProviderTokensText" Text="unavailable" FontSize="28" FontWeight="SemiBold" /><TextBlock x:Name="ProviderTokensEvidenceText" Text="尚无历史快照" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
-                <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="Codex Thread Tokens" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="unavailable" FontSize="28" FontWeight="SemiBold" /><TextBlock Text="协议未提供时明确记为 unavailable" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="外部 API 费用" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ExternalCostText" Text="不可取得" FontSize="28" FontWeight="SemiBold" /><TextBlock x:Name="ExternalCostEvidenceText" Text="尚无历史快照" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="外部服务令牌" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ProviderTokensText" Text="不可取得" FontSize="28" FontWeight="SemiBold" /><TextBlock x:Name="ProviderTokensEvidenceText" Text="尚无历史快照" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="Codex 线程令牌" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="不可取得" FontSize="28" FontWeight="SemiBold" /><TextBlock Text="协议未提供时明确显示为不可取得" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
             </Grid>
             <Border Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="16">
@@ -35,12 +35,12 @@
                     <TextBlock Text="最近任务报告" Style="{StaticResource SectionTitleStyle}" />
                     <Grid ColumnSpacing="16">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                        <StackPanel><TextBlock Text="主代理" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="Sol high" /></StackPanel>
-                        <StackPanel Grid.Column="1"><TextBlock Text="Worker" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="DeepSeek ×1" /></StackPanel>
+                        <StackPanel><TextBlock Text="主代理" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="Sol（高）" /></StackPanel>
+                        <StackPanel Grid.Column="1"><TextBlock Text="工作代理" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="DeepSeek ×1" /></StackPanel>
                         <StackPanel Grid.Column="2"><TextBlock Text="采用" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="部分采用" /></StackPanel>
                         <StackPanel Grid.Column="3"><TextBlock Text="经济结论" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="可能节省" /></StackPanel>
                     </Grid>
-                    <InfoBar x:Name="LatestReportBar" IsOpen="True" Severity="Informational" Title="尚无已归档任务" Message="Worker 删除前保存结果与 Usage 后，此处会显示有证据的经济结论。" />
+                    <InfoBar x:Name="LatestReportBar" IsOpen="True" Severity="Informational" Title="尚无已归档任务" Message="工作代理删除前保存结果与用量后，此处会显示有证据的经济结论。" />
                 </StackPanel>
             </Border>
         </StackPanel>

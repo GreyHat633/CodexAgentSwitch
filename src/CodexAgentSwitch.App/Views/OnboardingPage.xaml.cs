@@ -57,13 +57,13 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
 
     private void UpdateStep()
     {
-        var titles = new[] { "检查环境", "选择主代理", "选择 Worker", "配置 Provider", "确认设置" };
+        var titles = new[] { "检查环境", "选择主代理", "选择工作代理", "配置服务商", "确认设置" };
         var descriptions = new[]
         {
             "检查 Windows App SDK Runtime 与 Codex CLI。",
             "推理强度会根据当前 Codex 的真实能力动态显示。",
-            "选择最多三个边界明确、可独立验收的 Worker。",
-            "可选：配置外部 Provider，密钥只进入 Windows Credential Manager。",
+            "选择最多三个边界明确、可独立验收的工作代理。",
+            "可选：配置外部服务商，密钥只进入 Windows 凭据管理器。",
             "确认配置并保存到本地数据库。",
         };
         OnboardingProgress.Value = step;

@@ -14,8 +14,8 @@
                     Title="早上好"
                     Subtitle="当前会话已准备好，所有高成本操作都会先经过预算与委派边界检查。" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Button Content="停止 App Server" Click="StopCodex" AutomationProperties.Name="停止 Codex App Server" />
-                    <Button x:Name="StartCodexButton" Content="启动 Codex" Click="StartCodex" Style="{StaticResource HeroButtonStyle}" AutomationProperties.Name="检测协议并启动受控 Codex App Server" />
+                    <Button Content="停止应用服务器" Click="StopCodex" AutomationProperties.Name="停止 Codex 应用服务器" />
+                    <Button x:Name="StartCodexButton" Content="启动 Codex" Click="StartCodex" Style="{StaticResource HeroButtonStyle}" AutomationProperties.Name="检测协议并启动受控 Codex 应用服务器" />
                 </StackPanel>
             </Grid>
 
@@ -30,7 +30,7 @@
                     <StackPanel Spacing="8">
                         <TextBlock x:Name="ProfileNameText" Text="正在加载方案" FontSize="14" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
                         <TextBlock x:Name="AgentSummaryText" Text="正在读取本地配置" FontSize="28" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                        <TextBlock x:Name="WorkerPolicyText" Text="预算与 Worker 边界正在加载" Foreground="{ThemeResource TextOnAccentFillColorSecondaryBrush}" />
+                        <TextBlock x:Name="WorkerPolicyText" Text="预算与工作代理边界正在加载" Foreground="{ThemeResource TextOnAccentFillColorSecondaryBrush}" />
                     </StackPanel>
                     <Button Grid.Column="1" Content="更改方案" VerticalAlignment="Center" Tag="navigate:profiles" />
                 </Grid>
@@ -51,21 +51,21 @@
                             </Border>
                         </Grid>
                         <TextBlock Text="Sol" FontSize="24" FontWeight="SemiBold" />
-                        <TextBlock Text="推理强度 high" Style="{StaticResource CaptionTextStyle}" />
+                        <TextBlock Text="推理强度：高" Style="{StaticResource CaptionTextStyle}" />
                         <TextBlock Text="负责复杂规划、集成与最终审查" Style="{StaticResource BodyTextStyle}" />
                     </StackPanel>
                 </Border>
                 <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
                     <StackPanel Spacing="12">
                         <Grid>
-                            <TextBlock Text="Worker 策略" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="工作代理策略" Style="{StaticResource SectionTitleStyle}" />
                             <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}">
                                 <TextBlock Text="原生" />
                             </Border>
                         </Grid>
                         <TextBlock Text="Luna ×1" FontSize="24" FontWeight="SemiBold" />
                         <TextBlock Text="优先明确、可独立验收的任务" Style="{StaticResource CaptionTextStyle}" />
-                        <Button x:Name="DisableWorkerButton" Content="停用 Worker" HorizontalAlignment="Left" Tag="dashboard:disable-worker" />
+                        <Button x:Name="DisableWorkerButton" Content="停用工作代理" HorizontalAlignment="Left" Tag="dashboard:disable-worker" />
                     </StackPanel>
                 </Border>
                 <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
@@ -99,7 +99,7 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <StackPanel>
-                                <TextBlock Text="Worker 结果" Style="{StaticResource CaptionTextStyle}" />
+                                <TextBlock Text="工作代理结果" Style="{StaticResource CaptionTextStyle}" />
                                 <TextBlock Text="部分采用" FontWeight="SemiBold" />
                             </StackPanel>
                             <StackPanel Grid.Column="1">
@@ -130,8 +130,8 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <FontIcon x:Name="AppServerStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" AutomationProperties.Name="App Server 状态图标" />
-                            <TextBlock x:Name="AppServerStatusText" Grid.Column="1" Text="App Server 尚未启动" TextWrapping="Wrap" MinWidth="0" AutomationProperties.Name="App Server 状态文字" />
+                            <FontIcon x:Name="AppServerStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" AutomationProperties.Name="应用服务器状态图标" />
+                            <TextBlock x:Name="AppServerStatusText" Grid.Column="1" Text="应用服务器尚未启动" TextWrapping="Wrap" MinWidth="0" AutomationProperties.Name="应用服务器状态文字" />
                         </Grid>
                         <Grid ColumnSpacing="10" MinWidth="0">
                             <Grid.ColumnDefinitions>

@@ -9,7 +9,7 @@
             <ProgressBar x:Name="OnboardingProgress" Value="2" Maximum="5" AutomationProperties.Name="首次启动向导，第 2 步，共 5 步" />
             <Grid ColumnSpacing="8">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <TextBlock Text="1 环境" Opacity="0.72" /><TextBlock Grid.Column="1" Text="2 主代理" FontWeight="SemiBold" /><TextBlock Grid.Column="2" Text="3 Worker" Opacity="0.72" /><TextBlock Grid.Column="3" Text="4 Provider" Opacity="0.72" /><TextBlock Grid.Column="4" Text="5 确认" Opacity="0.72" />
+                <TextBlock Text="1 环境" Opacity="0.72" /><TextBlock Grid.Column="1" Text="2 主代理" FontWeight="SemiBold" /><TextBlock Grid.Column="2" Text="3 工作代理" Opacity="0.72" /><TextBlock Grid.Column="3" Text="4 服务商" Opacity="0.72" /><TextBlock Grid.Column="4" Text="5 确认" Opacity="0.72" />
             </Grid>
             <TextBlock x:Name="StepTitleText" Text="选择主代理" Style="{StaticResource SectionTitleStyle}" />
             <TextBlock x:Name="StepDescriptionText" Text="推理强度会根据当前 Codex 的真实能力动态显示。" Style="{StaticResource CaptionTextStyle}" />
@@ -21,7 +21,7 @@
                         <TextBlock Text="Sol" Style="{StaticResource SectionTitleStyle}" />
                         <TextBlock Text="适合复杂规划与最终集成" Style="{StaticResource BodyTextStyle}" />
                         <RadioButton Content="已选择" IsChecked="True" GroupName="agent" />
-                        <ComboBox Header="推理强度" SelectedIndex="2"><ComboBoxItem Content="low" /><ComboBoxItem Content="medium" /><ComboBoxItem Content="high" /><ComboBoxItem Content="xhigh" /></ComboBox>
+                        <ComboBox Header="推理强度" SelectedIndex="2"><ComboBoxItem Content="低" /><ComboBoxItem Content="中" /><ComboBoxItem Content="高" /><ComboBoxItem Content="极高" /></ComboBox>
                     </StackPanel>
                 </Border>
                 <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
@@ -32,7 +32,7 @@
                 </Border>
             </Grid>
             <InfoBar x:Name="OnboardingActionBar" IsOpen="False" />
-            <Grid><Button x:Name="BackButton" Content="返回" Tag="onboarding:back" /><Button x:Name="NextButton" HorizontalAlignment="Right" Content="下一步：选择 Worker" Style="{StaticResource HeroButtonStyle}" Tag="onboarding:next" /></Grid>
+            <Grid><Button x:Name="BackButton" Content="返回" Tag="onboarding:back" /><Button x:Name="NextButton" HorizontalAlignment="Right" Content="下一步：选择工作代理" Style="{StaticResource HeroButtonStyle}" Tag="onboarding:next" /></Grid>
         </StackPanel>
     </ScrollViewer>
 </Page>

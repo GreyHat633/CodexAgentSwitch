@@ -18,7 +18,7 @@
         <NavigationView.MenuItems>
             <NavigationViewItem Content="首页" Icon="Home" Tag="dashboard" />
             <NavigationViewItem Content="配置方案" Icon="Library" Tag="profiles" />
-            <NavigationViewItem Content="Provider" Icon="Globe" Tag="providers" />
+            <NavigationViewItem Content="服务商" Icon="Globe" Tag="providers" />
             <NavigationViewItem Content="运行任务" Icon="Play" Tag="tasks" />
             <NavigationViewItem Content="用量与预算" Icon="Document" Tag="usage" />
             <NavigationViewItem Content="历史记录" Icon="Clock" Tag="history" />
@@ -27,7 +27,7 @@
         </NavigationView.MenuItems>
         <NavigationView.FooterMenuItems>
             <NavigationViewItem Content="首次启动向导" Icon="People" Tag="onboarding" />
-            <NavigationViewItem Content="UI Gallery" Icon="AllApps" Tag="gallery" />
+            <NavigationViewItem Content="界面预览" Icon="AllApps" Tag="gallery" />
         </NavigationView.FooterMenuItems>
         <Frame x:Name="ContentFrame" IsHitTestVisible="True" />
     </NavigationView>

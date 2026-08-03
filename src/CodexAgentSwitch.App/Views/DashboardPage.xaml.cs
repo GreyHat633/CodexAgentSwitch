@@ -22,15 +22,18 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
         if (profile is not null)
         {
             ProfileNameText.Text = profile.Name;
-            AgentSummaryText.Text = $"{profile.MainAgent.ModelId} {profile.MainAgent.ReasoningEffort} + {profile.WorkerPolicy.Source}";
-            WorkerPolicyText.Text = $"最多 {profile.WorkerPolicy.MaxWorkers} 个 Worker · 超预算时执行 {profile.WorkerPolicy.FallbackAction}";
+            AgentSummaryText.Text = $"{profile.MainAgent.ModelId}（推理强度：{ReasoningLabel(profile.MainAgent.ReasoningEffort)}）"
+                + (profile.WorkerPolicy.Enabled ? $" + {WorkerSourceLabel(profile.WorkerPolicy.Source)}" : string.Empty);
+            WorkerPolicyText.Text = profile.WorkerPolicy.Enabled
+                ? $"最多 {profile.WorkerPolicy.MaxWorkers} 个工作代理 · 超预算时{FallbackLabel(profile.WorkerPolicy.FallbackAction)}"
+                : "工作代理已停用 · 所有任务由主代理处理";
         }
 
         UpdateRuntime(await App.Services.GetRequiredService<CodexRuntimeManager>().DetectAsync());
         if (string.Equals(Environment.GetEnvironmentVariable("CAS_UI_TEST_LONG_STATUS"), "1", StringComparison.Ordinal))
         {
             CodexDetectedText.Text = "Codex 已检测：Windows 10 长路径兼容性与系统字体回退验证状态正常";
-            AppServerStatusText.Text = "App Server 正在使用本地受控协议；窗口缩小时此状态文字应自然换行且不得覆盖状态图标";
+            AppServerStatusText.Text = "应用服务器正在使用本地受控协议；窗口缩小时此状态文字应自然换行且不得覆盖状态图标";
         }
 
         await Task.Delay(700);
@@ -94,7 +97,7 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
     private void UpdateRuntime(CodexRuntimeState state)
     {
         CodexDetectedText.Text = state.Installed ? $"Codex {state.Version}" : "Codex 未检测";
-        AppServerStatusText.Text = state.AppServerRunning ? "App Server 已连接" : state.Message;
+        AppServerStatusText.Text = state.AppServerRunning ? "应用服务器已连接" : state.Message;
     }
 
     public async Task HandleContentActionAsync(string action, Button source)
@@ -126,12 +129,37 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
             },
             UpdatedAt = DateTimeOffset.UtcNow,
         });
-        WorkerPolicyText.Text = "Worker 已停用；所有任务由主代理处理。";
+        WorkerPolicyText.Text = "工作代理已停用；所有任务由主代理处理。";
         DisableWorkerButton.IsEnabled = false;
-        DisableWorkerButton.Content = "Worker 已停用";
+        DisableWorkerButton.Content = "工作代理已停用";
         DashboardActionBar.Severity = InfoBarSeverity.Success;
-        DashboardActionBar.Title = "Worker 策略已更新";
+        DashboardActionBar.Title = "工作代理策略已更新";
         DashboardActionBar.Message = "重新启动应用后仍会保留此设置。";
         DashboardActionBar.IsOpen = true;
     }
+
+    private static string ReasoningLabel(string effort) => effort switch
+    {
+        "low" => "低",
+        "medium" => "中",
+        "high" => "高",
+        "xhigh" => "极高",
+        _ => effort,
+    };
+
+    private static string WorkerSourceLabel(WorkerSource source) => source switch
+    {
+        WorkerSource.NativeCodex => "原生工作代理",
+        WorkerSource.ExternalProvider => "外部服务商工作代理",
+        _ => "未启用工作代理",
+    };
+
+    private static string FallbackLabel(FallbackAction action) => action switch
+    {
+        FallbackAction.NativeLuna => "回退到原生 Luna",
+        FallbackAction.SingleAgent => "由主代理接管",
+        FallbackAction.AskUser => "询问用户",
+        FallbackAction.StopDelegation => "停止委派",
+        _ => action.ToString(),
+    };
 }

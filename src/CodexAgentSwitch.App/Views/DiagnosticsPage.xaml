@@ -5,12 +5,12 @@
     xmlns:local="using:CodexAgentSwitch.App.Views">
     <ScrollViewer>
         <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1000">
-            <Grid><local:PageHeader Title="诊断" Subtitle="把协议、Provider 与存储问题转成可恢复、可复制的具体说明。" /><StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center"><Button Content="导出脱敏日志" Click="ExportDiagnostics" /><Button Content="重新检测" Click="RunDiagnostics" Style="{StaticResource AccentButtonStyle}" /></StackPanel></Grid>
+            <Grid><local:PageHeader Title="诊断" Subtitle="把协议、外部服务与存储问题转成可恢复、可复制的具体说明。" /><StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center"><Button Content="导出脱敏日志" Click="ExportDiagnostics" /><Button Content="重新检测" Click="RunDiagnostics" Style="{StaticResource AccentButtonStyle}" /></StackPanel></Grid>
             <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="Codex App Server" Style="{StaticResource SectionTitleStyle}" /><TextBlock x:Name="CodexStatusText" Text="尚未检测" HorizontalAlignment="Right" /></Grid><TextBlock x:Name="CodexDetailText" Text="点击重新检测以检查当前 Codex CLI 和协议。" Style="{StaticResource BodyTextStyle}" /><TextBlock x:Name="SchemaDetailText" Text="Schema：尚未生成" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
+                <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="Codex 应用服务器" Style="{StaticResource SectionTitleStyle}" /><TextBlock x:Name="CodexStatusText" Text="尚未检测" HorizontalAlignment="Right" /></Grid><TextBlock x:Name="CodexDetailText" Text="点击重新检测以检查当前 Codex 命令行与协议。" Style="{StaticResource BodyTextStyle}" /><TextBlock x:Name="SchemaDetailText" Text="协议结构：尚未生成" Style="{StaticResource CaptionTextStyle}" /></StackPanel></Border>
                 <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="本地数据" Style="{StaticResource SectionTitleStyle}" /><TextBlock Text="安全" HorizontalAlignment="Right" Foreground="{ThemeResource SuccessBrush}" /></Grid><TextBlock Text="数据库可写；凭据仅保存引用；日志脱敏检查通过。" Style="{StaticResource BodyTextStyle}" /><TextBlock x:Name="DataRootText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" /></StackPanel></Border>
             </Grid>
-            <InfoBar x:Name="DiagnosticResultBar" IsOpen="True" Severity="Informational" Title="可恢复错误" Message="Provider 401/429/超时会显示明确原因；不会无限重试，也不会自动改用未授权地址。" />
+            <InfoBar x:Name="DiagnosticResultBar" IsOpen="True" Severity="Informational" Title="可恢复错误" Message="外部服务出现 401、429 或超时时会显示明确原因；不会无限重试，也不会自动改用未授权地址。" />
             <Border Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="16">
                     <TextBlock Text="检查项" Style="{StaticResource SectionTitleStyle}" />

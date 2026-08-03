@@ -16,19 +16,19 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
         {
             case "task:details":
                 TaskActionBar.Severity = InfoBarSeverity.Informational;
-                TaskActionBar.Title = "Worker 1 详情已展开";
+                TaskActionBar.Title = "工作代理 1 详情已展开";
                 TaskActionBar.Message = "当前进度 62%；使用量不可用；范围仍在已登记边界内。";
                 break;
             case "task:continue":
                 TaskActionBar.Severity = InfoBarSeverity.Success;
-                TaskActionBar.Title = "已继续等待当前 Job";
-                TaskActionBar.Message = "保持原 Thread，不创建重复 Worker。";
+                TaskActionBar.Title = "已继续等待当前任务";
+                TaskActionBar.Message = "保持原任务线程，不创建重复工作代理。";
                 break;
             case "task:refine":
                 MainTaskStatusText.Text = "已纠偏";
                 TaskActionBar.Severity = InfoBarSeverity.Success;
                 TaskActionBar.Title = "定向纠偏已记录";
-                TaskActionBar.Message = "后续消息将发送到同一个 Worker Thread。";
+                TaskActionBar.Message = "后续消息将发送到同一个工作代理线程。";
                 break;
             case "task:cancel":
                 MainTaskProgress.IsIndeterminate = false;
@@ -49,7 +49,7 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
                 source.Content = "已拒绝";
                 TaskActionBar.Severity = InfoBarSeverity.Success;
                 TaskActionBar.Title = "越界请求已拒绝";
-                TaskActionBar.Message = "已记录纠偏，未扩大 Worker 权限。";
+                TaskActionBar.Message = "已记录纠偏，未扩大工作代理权限。";
                 break;
         }
 

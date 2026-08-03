@@ -21,8 +21,8 @@ public sealed partial class DiagnosticsPage : Page
         {
             var state = await App.Services.GetRequiredService<CodexRuntimeManager>().DetectAsync();
             CodexStatusText.Text = state.Installed ? "已检测" : "不可用";
-            CodexDetailText.Text = state.Installed ? $"{state.Version}；App Server：{(state.AppServerRunning ? "运行中" : "未启动")}。" : state.Message;
-            SchemaDetailText.Text = state.Schema is null ? "Schema：启动 App Server 时生成并校验" : $"Schema SHA-256：{state.Schema.Sha256}";
+            CodexDetailText.Text = state.Installed ? $"{state.Version}；应用服务器：{(state.AppServerRunning ? "运行中" : "未启动")}。" : state.Message;
+            SchemaDetailText.Text = state.Schema is null ? "协议结构：启动应用服务器时生成并校验" : $"协议结构 SHA-256：{state.Schema.Sha256}";
             DiagnosticResultBar.Severity = state.Installed ? InfoBarSeverity.Success : InfoBarSeverity.Error;
             DiagnosticResultBar.Title = state.Installed ? "Codex 检测通过" : "Codex 未检测";
             DiagnosticResultBar.Message = state.Message;

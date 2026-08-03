@@ -6,8 +6,8 @@
     <ScrollViewer>
         <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1180">
             <Grid>
-                <local:PageHeader Title="Provider" Subtitle="管理原生 Codex 与 OpenAI-Compatible Provider；停用不会删除凭据。" />
-                <Button HorizontalAlignment="Right" VerticalAlignment="Center" Content="添加 Provider" Style="{StaticResource AccentButtonStyle}" Tag="provider:add" />
+                <local:PageHeader Title="服务商" Subtitle="管理原生 Codex 与 OpenAI 兼容服务；停用不会删除凭据。" />
+                <Button HorizontalAlignment="Right" VerticalAlignment="Center" Content="添加服务商" Style="{StaticResource AccentButtonStyle}" Tag="provider:add" />
             </Grid>
             <Border Style="{StaticResource CardBorderStyle}">
                 <Grid ColumnSpacing="20">
@@ -24,8 +24,8 @@
                             <TextBlock Text="原生 Codex" Style="{StaticResource SectionTitleStyle}" />
                             <Border Style="{StaticResource StatusBadgeStyle}"><TextBlock Text="已连接" Foreground="{ThemeResource SuccessBrush}" /></Border>
                         </StackPanel>
-                        <TextBlock Text="Sol · Terra · Luna · 推理强度由当前 App Server 动态发现" Style="{StaticResource BodyTextStyle}" />
-                        <TextBlock Text="无需额外 API Key" Style="{StaticResource CaptionTextStyle}" />
+                        <TextBlock Text="Sol · Terra · Luna · 推理强度由当前应用服务器动态发现" Style="{StaticResource BodyTextStyle}" />
+                        <TextBlock Text="无需额外 API 密钥" Style="{StaticResource CaptionTextStyle}" />
                     </StackPanel>
                     <Button Grid.Column="2" Content="测试" VerticalAlignment="Center" Tag="provider:test-native" />
                 </Grid>
@@ -45,7 +45,7 @@
                             <TextBlock Text="DeepSeek" Style="{StaticResource SectionTitleStyle}" />
                             <Border Style="{StaticResource StatusBadgeStyle}"><TextBlock x:Name="DeepSeekStatusText" Text="正在加载" /></Border>
                         </StackPanel>
-                        <TextBlock Text="内置 OpenAI-Compatible 预设" Style="{StaticResource BodyTextStyle}" />
+                        <TextBlock Text="内置 OpenAI 兼容预设" Style="{StaticResource BodyTextStyle}" />
                         <TextBlock x:Name="DeepSeekDetailText" Text="凭据：正在检查 · 今日费用：不可用" Style="{StaticResource CaptionTextStyle}" />
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -54,39 +54,39 @@
                     </StackPanel>
                 </Grid>
             </Border>
-            <Expander x:Name="ProviderEditor" Header="配置 DeepSeek / 通用 OpenAI-Compatible Provider">
+            <Expander x:Name="ProviderEditor" Header="配置 DeepSeek / 通用 OpenAI 兼容服务">
                 <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0">
                     <StackPanel Spacing="16">
                         <Grid ColumnSpacing="16">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                             <StackPanel Spacing="8">
                                 <TextBlock Text="名称" />
-                                <TextBox x:Name="ProviderNameText" PlaceholderText="例如：DeepSeek 或团队网关" Text="DeepSeek" AutomationProperties.Name="Provider 名称" />
+                                <TextBox x:Name="ProviderNameText" PlaceholderText="例如：DeepSeek 或团队网关" Text="DeepSeek" AutomationProperties.Name="服务商名称" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="8">
-                                <TextBlock Text="Base URL" />
-                                <TextBox x:Name="BaseUrlText" PlaceholderText="https://api.example.com/v1" Text="https://api.deepseek.com" AutomationProperties.Name="Provider Base URL" />
+                                <TextBlock Text="基础地址" />
+                                <TextBox x:Name="BaseUrlText" PlaceholderText="https://api.example.com/v1" Text="https://api.deepseek.com" AutomationProperties.Name="服务商基础地址" />
                             </StackPanel>
                         </Grid>
                         <Grid ColumnSpacing="16">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                             <StackPanel Spacing="8">
-                                <TextBlock Text="API Key" />
-                                <PasswordBox x:Name="ApiKeyBox" PlaceholderText="安全保存到 Windows 凭据存储" PasswordRevealMode="Peek" AutomationProperties.Name="Provider API Key" />
+                                <TextBlock Text="API 密钥" />
+                                <PasswordBox x:Name="ApiKeyBox" PlaceholderText="安全保存到 Windows 凭据存储" PasswordRevealMode="Peek" AutomationProperties.Name="服务商 API 密钥" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="8">
-                                <TextBlock Text="Model ID" />
-                                <ComboBox x:Name="ModelSelectionComboBox" DisplayMemberPath="DisplayName" SelectedValuePath="Id" SelectionChanged="ModelSelectionChanged" AutomationProperties.Name="Provider Model ID" />
+                                <TextBlock Text="模型标识" />
+                                <ComboBox x:Name="ModelSelectionComboBox" DisplayMemberPath="DisplayName" SelectedValuePath="Id" SelectionChanged="ModelSelectionChanged" AutomationProperties.Name="服务商模型标识" />
                             </StackPanel>
                         </Grid>
-                        <InfoBar IsOpen="True" Severity="Warning" Title="HTTPS 安全要求" Message="非本机地址使用 HTTP 时会要求额外确认，API Key 不会写入配置或日志。" />
+                        <InfoBar IsOpen="True" Severity="Warning" Title="HTTPS 安全要求" Message="非本机地址使用 HTTP 时会要求额外确认，API 密钥不会写入配置或日志。" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Button x:Name="SaveProviderButton" Content="保存" Click="SaveProvider" />
                             <Button x:Name="TestConnectionButton" Content="测试并启用" Style="{StaticResource AccentButtonStyle}" Click="TestAndSaveProvider" />
                             <Button x:Name="EnableDeepSeekButton" Content="启用" Click="EnableDeepSeek" />
-                            <Button Content="删除 Provider" Click="DeleteDeepSeek" />
+                            <Button Content="删除服务商" Click="DeleteDeepSeek" />
                             <Button Content="重载" Click="ReloadProviders" />
-                            <Button Content="清空 Key" Click="ClearProviderKey" />
+                            <Button Content="清空密钥" Click="ClearProviderKey" />
                         </StackPanel>
                         <InfoBar x:Name="ProviderResultBar" IsOpen="False" />
                     </StackPanel>

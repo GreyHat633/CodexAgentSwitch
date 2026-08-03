@@ -5,13 +5,13 @@
     xmlns:local="using:CodexAgentSwitch.App.Views">
     <ScrollViewer>
         <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1180">
-            <local:PageHeader Title="运行任务" Subtitle="主代理拥有最终责任；Worker 只能在已登记边界内工作。" />
-            <InfoBar x:Name="TaskActionBar" IsOpen="True" Severity="Informational" Title="当前没有正在运行的任务" Message="以下内容为 UI Gallery 使用的完整运行态示例。" />
+            <local:PageHeader Title="运行任务" Subtitle="主代理拥有最终责任；工作代理只能在已登记边界内工作。" />
+            <InfoBar x:Name="TaskActionBar" IsOpen="True" Severity="Informational" Title="当前没有正在运行的任务" Message="以下内容为界面预览使用的完整运行态示例。" />
             <Border Style="{StaticResource CardBorderStyle}" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}">
                 <StackPanel Spacing="16">
                     <Grid>
                         <StackPanel Spacing="4">
-                            <TextBlock Text="主代理 · Sol high" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="主代理 · Sol（高）" Style="{StaticResource SectionTitleStyle}" />
                             <TextBlock Text="正在整合功能并执行最终审查" Style="{StaticResource CaptionTextStyle}" />
                         </StackPanel>
                         <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
@@ -42,15 +42,15 @@
                 <Border Style="{StaticResource CardBorderStyle}">
                     <StackPanel Spacing="12">
                         <Grid>
-                            <TextBlock Text="Worker 1 · Luna medium" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="工作代理 1 · Luna（中）" Style="{StaticResource SectionTitleStyle}" />
                             <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}"><TextBlock Text="运行中" /></Border>
                         </Grid>
                         <TextBlock Text="审计现有 Sol–Luna 模块与当前协议" Style="{StaticResource BodyTextStyle}" />
-                        <TextBlock Text="最近进展：正在核对 App Server schema 生成命令" Style="{StaticResource CaptionTextStyle}" />
-                        <ProgressBar Value="62" AutomationProperties.Name="Worker 1 估计进度 62%" />
+                        <TextBlock Text="最近进展：正在核对应用服务器协议结构生成命令" Style="{StaticResource CaptionTextStyle}" />
+                        <ProgressBar Value="62" AutomationProperties.Name="工作代理 1 估计进度 62%" />
                         <Grid ColumnSpacing="16">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                            <StackPanel><TextBlock Text="用量" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="unavailable" /></StackPanel>
+                            <StackPanel><TextBlock Text="用量" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="不可取得" /></StackPanel>
                             <StackPanel Grid.Column="1"><TextBlock Text="预算" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="原生额度" /></StackPanel>
                         </Grid>
                         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -64,11 +64,11 @@
                 <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
                     <StackPanel Spacing="12">
                         <Grid>
-                            <TextBlock Text="Worker 2 · Terra" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="工作代理 2 · Terra" Style="{StaticResource SectionTitleStyle}" />
                             <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}"><TextBlock Text="等待批准" Foreground="{ThemeResource WarningBrush}" /></Border>
                         </Grid>
                         <TextBlock Text="测试大文件扫描性能" Style="{StaticResource BodyTextStyle}" />
-                        <InfoBar IsOpen="True" Severity="Warning" Title="需要批准" Message="Worker 请求读取任务范围外文件；默认不会自动批准。" />
+                        <InfoBar IsOpen="True" Severity="Warning" Title="需要批准" Message="工作代理请求读取任务范围外文件；默认不会自动批准。" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Button Content="查看请求" Style="{StaticResource AccentButtonStyle}" Tag="task:approval-details" />
                             <Button Content="拒绝并纠偏" Tag="task:reject" />
@@ -76,7 +76,7 @@
                     </StackPanel>
                 </Border>
             </Grid>
-            <InfoBar IsOpen="True" Severity="Warning" Title="重复劳动提醒" Message="该范围已委派给 Worker 1。请选择等待、定向抽查、取消并接管，或记录本次允许重复的原因。" />
+            <InfoBar IsOpen="True" Severity="Warning" Title="重复劳动提醒" Message="该范围已委派给工作代理 1。请选择等待、定向抽查、取消并接管，或记录本次允许重复的原因。" />
         </StackPanel>
     </ScrollViewer>
 </Page>

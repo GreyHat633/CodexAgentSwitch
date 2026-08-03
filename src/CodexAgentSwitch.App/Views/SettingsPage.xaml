@@ -17,8 +17,8 @@
             <Border Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="16">
                     <TextBlock Text="会话与数据" Style="{StaticResource SectionTitleStyle}" />
-                    <Grid><StackPanel><TextBlock Text="启动时恢复上次 Profile" /><TextBlock Text="不会自动恢复被取消的 Worker" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
-                    <Grid><StackPanel><TextBlock Text="诊断日志" /><TextBlock Text="默认脱敏且不记录输入内容或 API Key" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
+                    <Grid><StackPanel><TextBlock Text="启动时恢复上次方案" /><TextBlock Text="不会自动恢复已取消的工作代理" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
+                    <Grid><StackPanel><TextBlock Text="诊断日志" /><TextBlock Text="默认脱敏且不记录输入内容或 API 密钥" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
                     <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="备份配置" Tag="settings:backup" /><Button Content="恢复配置" Tag="settings:restore" /><Button Content="导出崩溃日志" Tag="settings:diagnostics" /></StackPanel>
                     <InfoBar x:Name="SettingsActionBar" IsOpen="False" />
                 </StackPanel>
@@ -28,7 +28,7 @@
                     <StackPanel Spacing="16">
                         <TextBox Header="Codex 可执行文件" Text="自动检测" IsReadOnly="True" />
                         <TextBox Header="协议 Schema 缓存目录" Text="应用数据目录 / protocol-cache" IsReadOnly="True" />
-                        <NumberBox Header="App Server 请求超时（秒）" Value="30" Minimum="5" Maximum="300" SpinButtonPlacementMode="Compact" />
+                        <NumberBox Header="应用服务器请求超时（秒）" Value="30" Minimum="5" Maximum="300" SpinButtonPlacementMode="Compact" />
                         <InfoBar IsOpen="True" Severity="Warning" Title="高级选项" Message="协议兼容性和 Thread 所有权保护不会因这里的设置而关闭。" />
                     </StackPanel>
                 </Border>

@@ -25,10 +25,10 @@ public sealed partial class HistoryPage : Page, IContentActionHandler
         await File.WriteAllTextAsync(destination, """
             # Codex Agent Switch 历史报告
 
-            - 任务：审计 Spark profile
-            - 采用状态：partially_adopted
+            - 任务：审计 Spark 性能分析
+            - 采用状态：部分采用
             - 重复劳动：一次定向抽查，未发生完整重复
-            - Usage：快照已保留
+            - 用量：快照已保留
             - 凭据：未包含
             """);
         HistoryActionBar.Severity = InfoBarSeverity.Success;

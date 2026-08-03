@@ -3,7 +3,9 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using CodexAgentSwitch.App.ViewModels;
 using CodexAgentSwitch.Application.Profiles;
+using CodexAgentSwitch.Application.Providers;
 using CodexAgentSwitch.Domain.Profiles;
+using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -105,7 +107,10 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         CurrentProfileNameText.Text = profile?.Name ?? "未选择";
         CurrentProfileSummaryText.Text = profile is null
             ? string.Empty
-            : $"{profile.MainAgent.ModelId} / {profile.MainAgent.ReasoningEffort} · Worker {profile.WorkerPolicy.MaxWorkers} · {profile.WorkerPolicy.RoutingMode}";
+            : $"{profile.MainAgent.ModelId} / 推理强度{ReasoningLabel(profile.MainAgent.ReasoningEffort)} · "
+              + (profile.WorkerPolicy.Enabled
+                  ? $"工作代理 {profile.WorkerPolicy.MaxWorkers} 个 · {RoutingLabel(profile.WorkerPolicy.RoutingMode)}"
+                  : "未启用工作代理 · 单代理模式");
     }
 
     private async void SaveEditor(ContentDialog sender, ContentDialogButtonClickEventArgs args)
@@ -151,7 +156,7 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
     {
         if (SelectedProfile is not null)
         {
-            await ShowEditorAsync(ProfileEditorViewModel.ForEdit(SelectedProfile.Value));
+            await ShowEditorAsync(ProfileEditorViewModel.ForEdit(SelectedProfile.Value, await LoadExternalProviderOptionsAsync()));
         }
     }
 
@@ -161,7 +166,7 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         {
             var service = App.Services.GetRequiredService<ProfileService>();
             var uniqueName = await service.SuggestUniqueNameAsync(SelectedProfile.Name);
-            await ShowEditorAsync(ProfileEditorViewModel.ForCopy(SelectedProfile.Value, uniqueName));
+            await ShowEditorAsync(ProfileEditorViewModel.ForCopy(SelectedProfile.Value, uniqueName, await LoadExternalProviderOptionsAsync()));
         }
     }
 
@@ -220,7 +225,7 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
             await RefreshAsync();
             CurrentProfileBar.Severity = InfoBarSeverity.Success;
             CurrentProfileBar.Title = "方案已立即启用";
-            CurrentProfileBar.Message = $"{activated.Name} · LastUsedAt {activated.LastUsedAt:O}";
+            CurrentProfileBar.Message = $"{activated.Name} · 最后使用时间 {activated.LastUsedAt:O}";
         }
         catch (Exception exception)
         {
@@ -244,7 +249,7 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
             await File.WriteAllTextAsync(path, export);
             CurrentProfileBar.Severity = InfoBarSeverity.Success;
             CurrentProfileBar.Title = "方案已导出";
-            CurrentProfileBar.Message = $"{path}（不包含 API Key）";
+            CurrentProfileBar.Message = $"{path}（不包含 API 密钥）";
         }
         catch (Exception exception)
         {
@@ -259,13 +264,15 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         switch (action)
         {
             case "profile:new":
-                await ShowEditorAsync(ProfileEditorViewModel.ForNew(current ?? Profile.CreateDefault(DateTimeOffset.UtcNow)));
+                await ShowEditorAsync(ProfileEditorViewModel.ForNew(
+                    current ?? Profile.CreateDefault(DateTimeOffset.UtcNow),
+                    await LoadExternalProviderOptionsAsync()));
                 break;
             case "profile:copy-current":
                 if (current is not null)
                 {
                     var uniqueName = await service.SuggestUniqueNameAsync(current.Name);
-                    await ShowEditorAsync(ProfileEditorViewModel.ForCopy(current, uniqueName));
+                    await ShowEditorAsync(ProfileEditorViewModel.ForCopy(current, uniqueName, await LoadExternalProviderOptionsAsync()));
                 }
 
                 break;
@@ -292,6 +299,35 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         await ProfileEditorDialog.ShowAsync();
         Editor = null;
     }
+
+    private async Task<IReadOnlyList<ProviderSelectionOption>> LoadExternalProviderOptionsAsync()
+    {
+        var providers = await App.Services.GetRequiredService<IProviderRepository>().ListAsync();
+        return providers
+            .Where(provider => provider.Kind != ProviderKind.NativeCodex && provider.IsEnabled)
+            .OrderBy(provider => provider.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Select(provider => new ProviderSelectionOption(provider.Id, $"{provider.Name}（{provider.Id}）"))
+            .ToArray();
+    }
+
+    private static string ReasoningLabel(string effort) => effort switch
+    {
+        "low" => "低",
+        "medium" => "中",
+        "high" => "高",
+        "xhigh" => "极高",
+        _ => effort,
+    };
+
+    private static string RoutingLabel(RoutingMode mode) => mode switch
+    {
+        RoutingMode.Economic => "经济优先",
+        RoutingMode.Balanced => "平衡模式",
+        RoutingMode.Performance => "性能优先",
+        RoutingMode.Manual => "手动模式",
+        RoutingMode.Single => "单代理模式",
+        _ => mode.ToString(),
+    };
 
     private async Task ApplyModeAsync(ProfileService service, Profile current, string name, string effort, bool enabled, WorkerSource source, int maxWorkers, RoutingMode routingMode)
     {

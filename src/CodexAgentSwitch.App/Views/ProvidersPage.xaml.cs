@@ -82,14 +82,14 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
                 await repository.UpsertAsync(provider);
                 ProviderResultBar.Severity = InfoBarSeverity.Success;
                 ProviderResultBar.Title = "连接成功并已启用";
-                ProviderResultBar.Message = $"模型：{provider.ModelId}；延迟：{result.Latency.TotalMilliseconds:0} ms；Usage：{(result.Usage is null ? "不可取得" : $"{result.Usage.TotalTokens ?? 0} tokens")}。";
+                ProviderResultBar.Message = $"模型：{provider.ModelId}；延迟：{result.Latency.TotalMilliseconds:0} 毫秒；用量：{(result.Usage is null ? "不可取得" : $"{result.Usage.TotalTokens ?? 0} 个令牌")}。";
             }
             else
             {
                 await repository.UpsertAsync(provider);
                 ProviderResultBar.Severity = InfoBarSeverity.Success;
-                ProviderResultBar.Title = "Provider 已保存";
-                ProviderResultBar.Message = $"已保存模型 {provider.ModelId}；Provider 保持当前启用状态。";
+                ProviderResultBar.Title = "服务商已保存";
+                ProviderResultBar.Message = $"已保存模型 {provider.ModelId}；服务商保持当前启用状态。";
             }
 
             ApiKeyBox.Password = string.Empty;
@@ -99,7 +99,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         catch (Exception exception)
         {
             ProviderResultBar.Severity = InfoBarSeverity.Error;
-            ProviderResultBar.Title = "Provider 操作失败";
+            ProviderResultBar.Title = "服务商操作失败";
             ProviderResultBar.Message = exception.Message;
             ProviderResultBar.IsOpen = true;
         }
@@ -127,8 +127,8 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         if (provider is null)
         {
             ProviderResultBar.Severity = InfoBarSeverity.Warning;
-            ProviderResultBar.Title = "Provider 尚未保存";
-            ProviderResultBar.Message = "请先保存 API Key 和模型选择。";
+            ProviderResultBar.Title = "服务商尚未保存";
+            ProviderResultBar.Message = "请先保存 API 密钥和模型选择。";
             ProviderResultBar.IsOpen = true;
             return;
         }
@@ -137,16 +137,16 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         if (enabled && !hasCredential)
         {
             ProviderResultBar.Severity = InfoBarSeverity.Error;
-            ProviderResultBar.Title = "无法启用 Provider";
-            ProviderResultBar.Message = "API Key 尚未保存在 Windows Credential Manager。";
+            ProviderResultBar.Title = "无法启用服务商";
+            ProviderResultBar.Message = "API 密钥尚未保存在 Windows 凭据管理器中。";
             ProviderResultBar.IsOpen = true;
             return;
         }
 
         await repository.UpsertAsync(provider with { IsEnabled = enabled, UpdatedAt = DateTimeOffset.UtcNow });
         ProviderResultBar.Severity = InfoBarSeverity.Informational;
-        ProviderResultBar.Title = enabled ? "Provider 已启用" : "Provider 已停用";
-        ProviderResultBar.Message = enabled ? "新 Worker 将使用所选 DeepSeek V4 模型。" : "新任务将回退到原生 Luna；凭据仍保留。";
+        ProviderResultBar.Title = enabled ? "服务商已启用" : "服务商已停用";
+        ProviderResultBar.Message = enabled ? "新的工作代理将使用所选 DeepSeek V4 模型。" : "新任务将回退到原生 Luna；凭据仍保留。";
         ProviderResultBar.IsOpen = true;
         await RefreshDeepSeekAsync();
     }
@@ -158,8 +158,8 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         await App.Services.GetRequiredService<ICredentialStore>().DeleteAsync(CredentialReference);
         ApiKeyBox.Password = string.Empty;
         ProviderResultBar.Severity = InfoBarSeverity.Informational;
-        ProviderResultBar.Title = "Provider 已删除";
-        ProviderResultBar.Message = "配置和 Windows Credential Manager 中的 API Key 已清除。";
+        ProviderResultBar.Title = "服务商已删除";
+        ProviderResultBar.Message = "配置和 Windows 凭据管理器中的 API 密钥已清除。";
         ProviderResultBar.IsOpen = true;
         await RefreshDeepSeekAsync();
     }
@@ -169,8 +169,8 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         await App.Services.GetRequiredService<ICredentialStore>().DeleteAsync(CredentialReference);
         ApiKeyBox.Password = string.Empty;
         ProviderResultBar.Severity = InfoBarSeverity.Informational;
-        ProviderResultBar.Title = "API Key 已删除";
-        ProviderResultBar.Message = "Windows Credential Manager 中的凭据已清除；Provider 配置不含明文 Key。";
+        ProviderResultBar.Title = "API 密钥已删除";
+        ProviderResultBar.Message = "Windows 凭据管理器中的凭据已清除；服务商配置不含明文密钥。";
         ProviderResultBar.IsOpen = true;
         await RefreshDeepSeekAsync();
     }
@@ -183,8 +183,8 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         {
             ProviderEditor.IsExpanded = true;
             ProviderResultBar.Severity = InfoBarSeverity.Informational;
-            ProviderResultBar.Title = "Provider 编辑器已打开";
-            ProviderResultBar.Message = "选择模型并安全保存 API Key；当前版本提供经过验证的 DeepSeek V4 预设。";
+            ProviderResultBar.Title = "服务商编辑器已打开";
+            ProviderResultBar.Message = "选择模型并安全保存 API 密钥；当前版本提供经过验证的 DeepSeek V4 预设。";
             ProviderResultBar.IsOpen = true;
             ApiKeyBox.Focus(FocusState.Programmatic);
             return;
@@ -205,7 +205,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
     {
         if (!Uri.TryCreate(BaseUrlText.Text.Trim(), UriKind.Absolute, out var baseUri))
         {
-            throw new InvalidOperationException("Base URL 格式无效。");
+            throw new InvalidOperationException("基础地址格式无效。");
         }
 
         var model = ModelSelectionComboBox.SelectedValue as string;
@@ -242,7 +242,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         BaseUrlText.Text = provider?.BaseUri?.AbsoluteUri ?? DeepSeekV4Catalog.BaseUrl;
         ModelSelectionComboBox.SelectedValue = provider?.ModelId ?? DeepSeekV4Catalog.FlashModelId;
         DeepSeekStatusText.Text = provider?.IsEnabled == true ? "已启用" : hasCredential ? "已停用" : "未配置";
-        DeepSeekDetailText.Text = $"凭据：{(hasCredential ? "已安全配置" : "未配置")} · Model：{provider?.ModelId ?? DeepSeekV4Catalog.FlashModelId} · 今日费用：不可取得";
+        DeepSeekDetailText.Text = $"凭据：{(hasCredential ? "已安全配置" : "未配置")} · 模型：{provider?.ModelId ?? DeepSeekV4Catalog.FlashModelId} · 今日费用：不可取得";
         DisableDeepSeekButton.IsEnabled = provider?.IsEnabled == true;
         EnableDeepSeekButton.IsEnabled = provider is not null && provider.IsEnabled == false;
     }

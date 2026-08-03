@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][string]$DataRoot,
     [ValidateSet('light','dark')][string]$Theme = 'light',
     [int]$ExpectedDpi = 0,
+    [switch]$ExpectConfiguredProvider,
     [string]$ReportPath = (Join-Path $DataRoot "profile-ui-smoke-$Theme.json")
 )
 
@@ -101,6 +102,16 @@ function Assert-Absent([string]$name) {
     catch { if ($_.Exception.Message -like 'Unexpected*') { throw } }
 }
 
+function Assert-Disabled([string]$name) {
+    $element = Find-Element $name
+    if ($element.Current.IsEnabled) { throw "Expected disabled element: $name" }
+}
+
+function Assert-Enabled([string]$name) {
+    $element = Find-Element $name
+    if (-not $element.Current.IsEnabled) { throw "Expected enabled element: $name" }
+}
+
 function Press-Element([string]$name) {
     $element = Find-Element $name
     $element.SetFocus()
@@ -171,14 +182,32 @@ try {
     Set-Text '方案名称' $profileName
     Select-Combo '主代理选择' 1
     Select-Combo '主代理推理强度' 3
-    Select-Combo '原生 Worker 选择' 1
-    Set-Text '最大 Worker 数量' '2'
+    Assert-Absent '外部服务商选择'
+    Select-Combo '工作代理来源' 1
+    Assert-Absent '原生工作代理选择'
+    if ($ExpectConfiguredProvider) {
+        Assert-Enabled '外部服务商选择'
+        Select-Combo '外部服务商选择' 0
+        Assert-Absent '没有可用的外部服务商'
+        Add-Pass '外部服务商条件显示' 'native controls collapsed; configured-provider selector shown enabled and accepted a real selection' $dpi
+    }
+    else {
+        Assert-Disabled '外部服务商选择'
+        $null = Find-Element '没有可用的外部服务商'
+        Add-Pass '外部服务商条件显示' 'native controls collapsed; provider selector shown disabled with a clear empty-state warning' $dpi
+    }
+    Select-Combo '工作代理来源' 0
+    $null = Find-Element '原生工作代理选择'
+    Assert-Absent '外部服务商选择'
+    Select-Combo '原生工作代理选择' 1
+    Set-Text '最大工作代理数量' '2'
     Select-Combo '路由模式' 1
+    $null = Find-Element '路由模式说明'
     Select-Combo '回退策略' 2
     Set-Text '单任务预算' '1.25'
     Set-Text '每日预算' '5'
     Set-Text '每月预算' '50'
-    Set-Text 'Token 上限' '200000'
+    Set-Text '令牌上限' '200000'
     Set-Text '请求上限' '100'
     Press-Element '保存'
     $null = Find-Element $profileName
