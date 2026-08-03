@@ -10,4 +10,3 @@ public interface IControlledTaskRuntime
 
     IWorkerAdapter NativeWorker { get; }
 }
-

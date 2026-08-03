@@ -269,4 +269,3 @@ public sealed class CodexMainAgentSession : IMainAgentSession
 
     private sealed record PendingApproval(string Method, JsonElement RequestId, JsonElement Parameters);
 }
-

@@ -1,0 +1,23 @@
+{
+  "version": "0.1.5",
+  "temp": "C:\\Users\\GreyHat\\AppData\\Local\\Temp",
+  "bundleExtractOverride": null,
+  "monitoredPhysicalEntriesBefore": 9,
+  "monitoredPhysicalEntriesAfter": 9,
+  "physicalChanges": [],
+  "launches": [
+    {
+      "entryPoint": "portable-app",
+      "started": true
+    },
+    {
+      "entryPoint": "installed-app",
+      "started": true
+    },
+    {
+      "entryPoint": "runtime-bootstrapper",
+      "started": true
+    }
+  ],
+  "passed": true
+}
