@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Tasks;
 
 namespace CodexAgentSwitch.Application.Tasks;
@@ -8,6 +9,7 @@ public enum MainAgentEventKind
     TurnStarted,
     OutputDelta,
     StatusChanged,
+    TraceItem,
     ApprovalRequested,
     TurnCompleted,
 }
@@ -18,7 +20,8 @@ public sealed record MainAgentEvent(
     string TurnId,
     string? Text,
     string? Status,
-    JsonElement? RawEvent);
+    JsonElement? RawEvent,
+    TaskMessageKind? MessageKind = null);
 
 public sealed record MainAgentTurnHandle(string ThreadId, string TurnId);
 
@@ -37,12 +40,14 @@ public interface IMainAgentSession
     Task<string> CreateThreadAsync(
         string modelId,
         string workingDirectory,
+        ExecutionApprovalMode approvalMode,
         CancellationToken cancellationToken = default);
 
     Task ResumeThreadAsync(
         string threadId,
         string modelId,
         string workingDirectory,
+        ExecutionApprovalMode approvalMode,
         CancellationToken cancellationToken = default);
 
     Task<MainAgentTurnHandle> StartTurnAsync(
@@ -51,6 +56,7 @@ public interface IMainAgentSession
         string modelId,
         string reasoningEffort,
         string workingDirectory,
+        ExecutionApprovalMode approvalMode,
         CancellationToken cancellationToken = default);
 
     Task<MainAgentTurnResult> WaitForTurnAsync(

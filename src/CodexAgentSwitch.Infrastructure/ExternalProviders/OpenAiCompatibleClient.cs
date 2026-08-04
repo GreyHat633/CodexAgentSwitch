@@ -13,6 +13,7 @@ public sealed record ExternalCompletion(
     string Content,
     string? ResponseModel,
     ProviderUsage? Usage,
+    Uri RequestUri,
     JsonElement RawResponse);
 
 public sealed class ProviderRequestException(
@@ -132,6 +133,8 @@ public sealed class OpenAiCompatibleClient(HttpClient httpClient, ICredentialSto
             JsonOptions);
         using var request = await CreateRequestAsync(provider, HttpMethod.Post, "chat/completions", cancellationToken);
         request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+        var requestUri = request.RequestUri
+            ?? throw new ProviderRequestException(ProviderErrorKind.InvalidConfiguration, "Provider 请求地址无效。");
         using var response = await SendAsync(provider, request, cancellationToken);
         using var document = await ReadJsonAsync(response, cancellationToken);
         var root = document.RootElement;
@@ -149,7 +152,7 @@ public sealed class OpenAiCompatibleClient(HttpClient httpClient, ICredentialSto
 
         var responseModel = root.TryGetProperty("model", out var model) ? model.GetString() : null;
         var usage = ParseUsage(root);
-        return new ExternalCompletion(content, responseModel, usage, root.Clone());
+        return new ExternalCompletion(content, responseModel, usage, requestUri, root.Clone());
     }
 
     private async Task<HttpRequestMessage> CreateRequestAsync(

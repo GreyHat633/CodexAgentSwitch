@@ -72,9 +72,13 @@ public sealed class ControlledTaskEndToEndTests
             var service = new ControlledTaskService(
                 taskRepository,
                 profileRepository,
-                providerRepository,
-                new RejectExternalWorkerFactory(),
                 controlledRuntime,
+                new TaskProfileSnapshotFactory(providerRepository, clock),
+                new DelegationDecisionService(clock),
+                new WorkerOrchestrator(
+                    new RejectExternalWorkerFactory(),
+                    controlledRuntime,
+                    new ExternalProviderResolver()),
                 usageRepository,
                 usageCollector,
                 clock);

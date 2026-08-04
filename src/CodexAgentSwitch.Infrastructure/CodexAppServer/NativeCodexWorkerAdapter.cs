@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using CodexAgentSwitch.Application.Abstractions;
 using CodexAgentSwitch.Application.Workers;
+using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Workers;
 
 namespace CodexAgentSwitch.Infrastructure.CodexAppServer;
@@ -10,12 +11,14 @@ public sealed class NativeCodexWorkerAdapter : IWorkerAdapter
 {
     private readonly CodexAppServerClient _client;
     private readonly IClock _clock;
+    private readonly ICodexModelResolver _modelResolver;
     private readonly ConcurrentDictionary<string, JobRuntime> _jobs = new(StringComparer.Ordinal);
 
-    public NativeCodexWorkerAdapter(CodexAppServerClient client, IClock clock)
+    public NativeCodexWorkerAdapter(CodexAppServerClient client, IClock clock, ICodexModelResolver? modelResolver = null)
     {
         _client = client;
         _clock = clock;
+        _modelResolver = modelResolver ?? new CodexModelResolver();
         _client.NotificationReceived += OnNotificationAsync;
         _client.ServerRequestReceived += OnServerRequestAsync;
     }
@@ -57,38 +60,46 @@ public sealed class NativeCodexWorkerAdapter : IWorkerAdapter
             throw new InvalidOperationException("Native Worker concurrency limit of 3 has been reached.");
         }
 
-        var sandbox = task.Scope.Operations.Any(operation => operation is ScopeOperation.Modify or ScopeOperation.Execute or ScopeOperation.Test)
-            ? "workspace-write"
-            : "read-only";
+        var model = await _modelResolver.ResolveAsync(_client, task.ModelId, cancellationToken);
+        var resolvedTask = task with { ModelId = model.ModelId };
+        var sandbox = resolvedTask.ApprovalMode switch
+        {
+            ExecutionApprovalMode.Safe => "read-only",
+            ExecutionApprovalMode.FullAuto => "danger-full-access",
+            _ => resolvedTask.Scope.Operations.Any(operation => operation is ScopeOperation.Modify or ScopeOperation.Execute or ScopeOperation.Test)
+                ? "workspace-write"
+                : "read-only",
+        };
+        var approvalPolicy = ExecutionApprovalPolicy.Resolve(resolvedTask.ApprovalMode).ApprovalPolicy;
         var threadResponse = await _client.RequestAsync(
             "thread/start",
             new
             {
-                model = task.ModelId,
-                cwd = task.WorkingDirectory,
-                approvalPolicy = "on-request",
+                model = resolvedTask.ModelId,
+                cwd = resolvedTask.WorkingDirectory,
+                approvalPolicy,
                 sandbox,
                 ephemeral = false,
             },
             cancellationToken);
         var threadId = threadResponse.GetProperty("thread").GetProperty("id").GetString()
             ?? throw new InvalidDataException("thread/start did not return a thread id.");
-        var textInput = new { type = "text", text = task.Prompt, text_elements = Array.Empty<object>() };
+        var textInput = new { type = "text", text = resolvedTask.Prompt, text_elements = Array.Empty<object>() };
         var turnResponse = await _client.RequestAsync(
             "turn/start",
             new
             {
                 threadId,
                 input = new[] { textInput },
-                effort = task.ReasoningEffort,
-                outputSchema = task.OutputSchema,
+                effort = resolvedTask.ReasoningEffort,
+                outputSchema = resolvedTask.OutputSchema,
             },
             cancellationToken);
         var turnId = turnResponse.GetProperty("turn").GetProperty("id").GetString()
             ?? throw new InvalidDataException("turn/start did not return a turn id.");
         var jobId = Guid.NewGuid().ToString("D");
-        var job = new WorkerJob(AdapterId, jobId, threadId, turnId, task.TaskId, WorkerJobStatus.Running, _clock.UtcNow, null, null);
-        if (!_jobs.TryAdd(jobId, new JobRuntime(task, job)))
+        var job = new WorkerJob(AdapterId, jobId, threadId, turnId, resolvedTask.TaskId, WorkerJobStatus.Running, _clock.UtcNow, null, null);
+        if (!_jobs.TryAdd(jobId, new JobRuntime(resolvedTask, job)))
         {
             throw new InvalidOperationException("Unable to register Worker job.");
         }

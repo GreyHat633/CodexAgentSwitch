@@ -32,15 +32,15 @@
             </Border>
             <Border Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="16">
-                    <TextBlock Text="最近任务报告" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="最近对话 Usage" Style="{StaticResource SectionTitleStyle}" />
                     <Grid ColumnSpacing="16">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                        <StackPanel><TextBlock Text="主代理" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="Sol（高）" /></StackPanel>
-                        <StackPanel Grid.Column="1"><TextBlock Text="工作代理" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="DeepSeek ×1" /></StackPanel>
-                        <StackPanel Grid.Column="2"><TextBlock Text="采用" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="部分采用" /></StackPanel>
-                        <StackPanel Grid.Column="3"><TextBlock Text="经济结论" Style="{StaticResource CaptionTextStyle}" /><TextBlock Text="可能节省" /></StackPanel>
+                        <StackPanel><TextBlock Text="主代理" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ReportMainAgentText" Text="尚无记录" TextWrapping="Wrap" /></StackPanel>
+                        <StackPanel Grid.Column="1"><TextBlock Text="工作代理" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ReportWorkerText" Text="尚无记录" TextWrapping="Wrap" /></StackPanel>
+                        <StackPanel Grid.Column="2"><TextBlock Text="采用" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ReportAdoptionText" Text="尚无记录" TextWrapping="Wrap" /></StackPanel>
+                        <StackPanel Grid.Column="3"><TextBlock Text="经济结论" Style="{StaticResource CaptionTextStyle}" /><TextBlock x:Name="ReportEconomicText" Text="尚无记录" TextWrapping="Wrap" /></StackPanel>
                     </Grid>
-                    <InfoBar x:Name="LatestReportBar" IsOpen="True" Severity="Informational" Title="尚无已归档任务" Message="工作代理删除前保存结果与用量后，此处会显示有证据的经济结论。" />
+                    <InfoBar x:Name="LatestReportBar" IsOpen="False" Severity="Informational" />
                 </StackPanel>
             </Border>
         </StackPanel>

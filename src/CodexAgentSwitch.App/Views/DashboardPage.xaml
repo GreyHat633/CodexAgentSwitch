@@ -4,22 +4,56 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:CodexAgentSwitch.App.Views">
     <ScrollViewer>
-        <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="1180" HorizontalAlignment="Stretch">
-            <Grid ColumnSpacing="16">
+        <StackPanel Padding="{StaticResource PagePadding}" Spacing="22" MaxWidth="1180" HorizontalAlignment="Stretch">
+            <local:PageHeader
+                Title="选择工作模式"
+                Subtitle="原生 Codex 使用原版界面；CodexAgentSwitch 模式在本程序内完整管理项目、对话、Worker、预算与 Usage。" />
+            <InfoBar x:Name="DashboardActionBar" IsOpen="False" />
+
+            <Grid x:Name="ModeGrid" ColumnSpacing="14" RowSpacing="14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <local:PageHeader
-                    Title="早上好"
-                    Subtitle="当前会话已准备好，所有高成本操作都会先经过预算与委派边界检查。" />
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Button Content="停止应用服务器" Click="StopCodex" AutomationProperties.Name="停止 Codex 应用服务器" />
-                    <Button x:Name="StartCodexButton" Content="连接任务服务" Click="StartCodex" Style="{StaticResource HeroButtonStyle}" AutomationProperties.Name="检测协议并连接受控 Codex 任务服务" />
-                </StackPanel>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Border x:Name="NativeModeCard" Grid.Column="0" Style="{StaticResource CardBorderStyle}">
+                    <Grid RowSpacing="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="原生 Codex 模式" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="配置并启动原生 Codex" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="应用当前方案的主模型、推理强度和 Worker 配置，然后交由原版 Codex 界面运行。Agent Switch 不监控完整会话，也不声称精确统计主线程 Usage。" TextWrapping="Wrap" Style="{StaticResource BodyTextStyle}" />
+                        </StackPanel>
+                        <Button Grid.Row="1" Content="配置并启动" HorizontalAlignment="Left" Style="{StaticResource HeroButtonStyle}" Tag="dashboard:launch-native" AutomationProperties.Name="配置并启动原生 Codex" />
+                    </Grid>
+                </Border>
+                <Border x:Name="ManagedModeCard" Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                    <Grid RowSpacing="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="CodexAgentSwitch 模式" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="本程序内的受控对话客户端" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="按项目创建和恢复对话；同一对话持续绑定主 Thread，并记录真实 Worker、预算、Usage、历史和归档。" TextWrapping="Wrap" Style="{StaticResource BodyTextStyle}" />
+                        </StackPanel>
+                        <Button Grid.Row="1" Content="进入模式" HorizontalAlignment="Left" Style="{StaticResource HeroButtonStyle}" Tag="navigate:tasks" AutomationProperties.Name="进入 CodexAgentSwitch 模式" />
+                    </Grid>
+                </Border>
             </Grid>
-
-            <InfoBar x:Name="DashboardActionBar" IsOpen="False" />
 
             <Border Style="{StaticResource CardBorderStyle}" Background="{ThemeResource AccentFillColorDefaultBrush}">
                 <Grid ColumnSpacing="24">
@@ -29,122 +63,117 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel Spacing="8">
                         <TextBlock x:Name="ProfileNameText" Text="正在加载方案" FontSize="14" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                        <TextBlock x:Name="AgentSummaryText" Text="正在读取本地配置" FontSize="28" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                        <TextBlock x:Name="WorkerPolicyText" Text="预算与工作代理边界正在加载" Foreground="{ThemeResource TextOnAccentFillColorSecondaryBrush}" />
+                        <TextBlock x:Name="AgentSummaryText" Text="正在读取本地配置" FontSize="28" FontWeight="SemiBold" TextWrapping="Wrap" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+                        <TextBlock x:Name="WorkerPolicyText" Text="正在解析 Worker 配置" TextWrapping="Wrap" Foreground="{ThemeResource TextOnAccentFillColorSecondaryBrush}" />
                     </StackPanel>
-                    <Button Grid.Column="1" Content="更改方案" VerticalAlignment="Center" Tag="navigate:profiles" />
+                    <Button Grid.Column="1" Content="编辑方案" VerticalAlignment="Center" Tag="navigate:profiles" />
                 </Grid>
             </Border>
 
-            <Grid ColumnSpacing="16">
+            <Grid x:Name="StatusGrid" ColumnSpacing="14" RowSpacing="14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}">
-                    <StackPanel Spacing="12">
-                        <Grid>
-                            <TextBlock Text="主代理" Style="{StaticResource SectionTitleStyle}" />
-                            <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}">
-                                <TextBlock Text="已就绪" Foreground="{ThemeResource SuccessBrush}" />
-                            </Border>
-                        </Grid>
-                        <TextBlock Text="Sol" FontSize="24" FontWeight="SemiBold" />
-                        <TextBlock Text="推理强度：高" Style="{StaticResource CaptionTextStyle}" />
-                        <TextBlock Text="负责复杂规划、集成与最终审查" Style="{StaticResource BodyTextStyle}" />
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Border x:Name="MainAgentCard" Grid.Column="0" Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="主代理" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock x:Name="MainAgentNameText" Text="正在加载" FontSize="24" FontWeight="SemiBold" />
+                        <TextBlock x:Name="MainReasoningText" Style="{StaticResource CaptionTextStyle}" />
+                        <TextBlock Text="负责规划、集成与最终回答" Style="{StaticResource BodyTextStyle}" />
                     </StackPanel>
                 </Border>
-                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
-                    <StackPanel Spacing="12">
+                <Border x:Name="WorkerCard" Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="10">
                         <Grid>
-                            <TextBlock Text="工作代理策略" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="工作代理" Style="{StaticResource SectionTitleStyle}" />
                             <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}">
-                                <TextBlock Text="原生" />
+                                <TextBlock x:Name="WorkerSourceBadgeText" Text="正在加载" />
                             </Border>
                         </Grid>
-                        <TextBlock Text="Luna ×1" FontSize="24" FontWeight="SemiBold" />
-                        <TextBlock Text="优先明确、可独立验收的任务" Style="{StaticResource CaptionTextStyle}" />
-                        <Button x:Name="DisableWorkerButton" Content="停用工作代理" HorizontalAlignment="Left" Tag="dashboard:disable-worker" />
+                        <TextBlock x:Name="WorkerNameText" Text="正在加载" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock x:Name="WorkerDescriptionText" TextWrapping="Wrap" Style="{StaticResource CaptionTextStyle}" />
+                        <Button Content="编辑方案" HorizontalAlignment="Left" Tag="navigate:profiles" />
                     </StackPanel>
                 </Border>
-                <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
-                    <StackPanel Spacing="12">
-                        <Grid>
-                            <TextBlock Text="预算" Style="{StaticResource SectionTitleStyle}" />
-                            <TextBlock Text="安全" HorizontalAlignment="Right" Foreground="{ThemeResource SuccessBrush}" />
-                        </Grid>
-                        <TextBlock Text="¥0.00 / ¥3.00" FontSize="24" FontWeight="SemiBold" />
-                        <ProgressBar Value="0" Maximum="3" AutomationProperties.Name="今日外部 API 预算使用 0%" />
-                        <TextBlock Text="外部 API 当前未启用" Style="{StaticResource CaptionTextStyle}" />
+                <Border x:Name="BudgetCard" Grid.Column="2" Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="预算" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock x:Name="BudgetSummaryText" Text="正在加载" FontSize="24" FontWeight="SemiBold" />
+                        <ProgressBar x:Name="BudgetProgressBar" Value="0" Maximum="100" />
+                        <TextBlock x:Name="BudgetStateText" TextWrapping="Wrap" Style="{StaticResource CaptionTextStyle}" />
                     </StackPanel>
                 </Border>
             </Grid>
 
-            <Grid ColumnSpacing="16">
+            <Grid ColumnSpacing="14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="2*" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}">
-                    <StackPanel Spacing="16">
+                    <StackPanel Spacing="12">
                         <Grid>
-                            <TextBlock x:Name="LatestTaskTitleText" Text="最近一次真实任务" Style="{StaticResource SectionTitleStyle}" />
-                            <Button Content="查看报告" HorizontalAlignment="Right" Tag="navigate:history" />
+                            <TextBlock x:Name="LatestTaskTitleText" Text="最近对话" Style="{StaticResource SectionTitleStyle}" />
+                            <Button Content="打开对话" HorizontalAlignment="Right" Tag="navigate:tasks" />
                         </Grid>
-                        <Grid ColumnSpacing="16">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel>
-                                <TextBlock Text="工作代理结果" Style="{StaticResource CaptionTextStyle}" />
-                                <TextBlock x:Name="LatestWorkerResultText" Text="尚无任务" FontWeight="SemiBold" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="重复劳动" Style="{StaticResource CaptionTextStyle}" />
-                                <TextBlock x:Name="LatestDuplicateText" Text="尚无记录" FontWeight="SemiBold" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="2">
-                                <TextBlock Text="经济判断" Style="{StaticResource CaptionTextStyle}" />
-                                <TextBlock x:Name="LatestEconomicText" Text="无法判断" FontWeight="SemiBold" />
-                            </StackPanel>
-                        </Grid>
-                        <InfoBar x:Name="LatestTaskInfoBar" IsOpen="True" Severity="Informational" Title="尚无真实任务" Message="请在“运行任务”页面提交第一条受控任务。" />
+                        <TextBlock x:Name="LatestTaskSummaryText" Text="尚无对话。" TextWrapping="Wrap" Style="{StaticResource BodyTextStyle}" />
+                        <InfoBar x:Name="LatestTaskInfoBar" IsOpen="False" />
                     </StackPanel>
                 </Border>
                 <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" MinWidth="0">
                     <StackPanel Spacing="12">
                         <TextBlock Text="环境状态" Style="{StaticResource SectionTitleStyle}" />
                         <Grid ColumnSpacing="10" MinWidth="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <FontIcon x:Name="CodexStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" AutomationProperties.Name="Codex 状态图标" />
-                            <TextBlock x:Name="CodexDetectedText" Grid.Column="1" Text="Codex 尚未检测" TextWrapping="Wrap" MinWidth="0" AutomationProperties.Name="Codex 状态文字" />
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <FontIcon x:Name="CodexStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" />
+                            <TextBlock x:Name="CodexDetectedText" Grid.Column="1" Text="Codex 尚未检测" TextWrapping="Wrap" MinWidth="0" />
                         </Grid>
                         <Grid ColumnSpacing="10" MinWidth="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <FontIcon x:Name="AppServerStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" AutomationProperties.Name="应用服务器状态图标" />
-                            <TextBlock x:Name="AppServerStatusText" Grid.Column="1" Text="应用服务器尚未启动" TextWrapping="Wrap" MinWidth="0" AutomationProperties.Name="应用服务器状态文字" />
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <FontIcon x:Name="AppServerStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" />
+                            <TextBlock x:Name="AppServerStatusText" Grid.Column="1" Text="受控服务按需启动" TextWrapping="Wrap" MinWidth="0" />
                         </Grid>
                         <Grid ColumnSpacing="10" MinWidth="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <FontIcon x:Name="CredentialStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" AutomationProperties.Name="凭据状态图标" />
-                            <TextBlock x:Name="CredentialStatusText" Grid.Column="1" Text="凭据存储安全" TextWrapping="Wrap" MinWidth="0" AutomationProperties.Name="凭据状态文字" />
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <FontIcon x:Name="CredentialStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" />
+                            <TextBlock x:Name="CredentialStatusText" Grid.Column="1" Text="正在检查 Provider" TextWrapping="Wrap" MinWidth="0" />
                         </Grid>
                         <Button Content="打开诊断" HorizontalAlignment="Left" Tag="navigate:diagnostics" />
                     </StackPanel>
                 </Border>
             </Grid>
+
+            <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup>
+                    <VisualState x:Name="Wide" />
+                    <VisualState x:Name="Narrow">
+                        <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="0" /></VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="NativeModeCard.(Grid.ColumnSpan)" Value="2" />
+                            <Setter Target="ManagedModeCard.(Grid.Row)" Value="1" />
+                            <Setter Target="ManagedModeCard.(Grid.Column)" Value="0" />
+                            <Setter Target="ManagedModeCard.(Grid.ColumnSpan)" Value="2" />
+                            <Setter Target="MainAgentCard.(Grid.ColumnSpan)" Value="3" />
+                            <Setter Target="WorkerCard.(Grid.Row)" Value="1" />
+                            <Setter Target="WorkerCard.(Grid.Column)" Value="0" />
+                            <Setter Target="WorkerCard.(Grid.ColumnSpan)" Value="3" />
+                            <Setter Target="BudgetCard.(Grid.Row)" Value="2" />
+                            <Setter Target="BudgetCard.(Grid.Column)" Value="0" />
+                            <Setter Target="BudgetCard.(Grid.ColumnSpan)" Value="3" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="VeryWide">
+                        <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="1500" /></VisualState.StateTriggers>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
         </StackPanel>
     </ScrollViewer>
 </Page>

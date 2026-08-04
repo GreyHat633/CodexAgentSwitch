@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using CodexAgentSwitch.App.ViewModels;
 using CodexAgentSwitch.Application.Profiles;
 using CodexAgentSwitch.Application.Providers;
+using CodexAgentSwitch.Application.Tasks;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.Common;
@@ -108,10 +109,18 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         CurrentProfileSummaryText.Text = profile is null
             ? string.Empty
             : $"{profile.MainAgent.ModelId} / 推理强度{ReasoningLabel(profile.MainAgent.ReasoningEffort)} · "
+              + $"{ApprovalLabel(profile.ApprovalMode)} · "
               + (profile.WorkerPolicy.Enabled
                   ? $"工作代理 {profile.WorkerPolicy.MaxWorkers} 个 · {RoutingLabel(profile.WorkerPolicy.RoutingMode)}"
                   : "未启用工作代理 · 单代理模式");
     }
+
+    private static string ApprovalLabel(ExecutionApprovalMode mode) => mode switch
+    {
+        ExecutionApprovalMode.Safe => "安全模式",
+        ExecutionApprovalMode.FullAuto => "完全自动",
+        _ => "自动模式",
+    };
 
     private async void SaveEditor(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
@@ -295,9 +304,37 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
 
     private async Task ShowEditorAsync(ProfileEditorViewModel editor)
     {
+        try
+        {
+            editor.SetAvailableNativeRoles(await LoadAvailableNativeRolesAsync());
+        }
+        catch (Exception exception)
+        {
+            ShowError("无法读取 Codex 模型目录", "将保留全部角色选项；保存和启动时仍会重新校验。" + Environment.NewLine + exception.Message);
+        }
+
         Editor = editor;
         await ProfileEditorDialog.ShowAsync();
         Editor = null;
+    }
+
+    private async Task<IReadOnlyList<string>> LoadAvailableNativeRolesAsync()
+    {
+        var runtime = App.Services.GetRequiredService<IControlledTaskRuntime>();
+        await runtime.EnsureStartedAsync();
+        var capabilities = await runtime.NativeWorker.GetCapabilitiesAsync();
+        return capabilities.Models
+            .Select(model => model.Id switch
+            {
+                "gpt-5.6-sol" => "Sol",
+                "gpt-5.6-terra" => "Terra",
+                "gpt-5.6-luna" => "Luna",
+                _ => null,
+            })
+            .Where(role => role is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
     private async Task<IReadOnlyList<ProviderSelectionOption>> LoadExternalProviderOptionsAsync()

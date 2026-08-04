@@ -111,9 +111,9 @@ public sealed partial class HistoryPage : Page, IContentActionHandler
         Directory.CreateDirectory(directory);
         var destination = Path.Combine(directory, $"task-{task.Id}-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.md");
         var report = new StringBuilder()
-            .AppendLine("# Codex Agent Switch 真实任务报告")
+            .AppendLine("# CodexAgentSwitch 对话报告")
             .AppendLine()
-            .AppendLine($"- 任务 ID：{task.Id}")
+            .AppendLine($"- 对话 ID：{task.Id}")
             .AppendLine($"- 标题：{task.Title}")
             .AppendLine($"- 状态：{task.Status}")
             .AppendLine($"- 配置方案：{task.ProfileName}")
@@ -128,7 +128,7 @@ public sealed partial class HistoryPage : Page, IContentActionHandler
 
         await File.WriteAllTextAsync(destination, report.ToString());
         HistoryActionBar.Severity = InfoBarSeverity.Success;
-        HistoryActionBar.Title = "真实任务报告已导出";
+        HistoryActionBar.Title = "对话报告已导出";
         HistoryActionBar.Message = destination;
         HistoryActionBar.IsOpen = true;
     }
@@ -136,7 +136,7 @@ public sealed partial class HistoryPage : Page, IContentActionHandler
     private void ClearDetails()
     {
         selectedTaskId = null;
-        HistoryTitleText.Text = "选择任务查看历史";
+        HistoryTitleText.Text = "选择对话查看历史";
         HistoryMetadataText.Text = string.Empty;
         HistoryMessagesItemsControl.ItemsSource = null;
         HistoryStatusBar.IsOpen = false;

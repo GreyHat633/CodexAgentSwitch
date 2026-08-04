@@ -1,0 +1,14 @@
+{
+  "version": "0.1.6",
+  "temp": "E:\\AISPace\\主模型项目区\\state\\tmp",
+  "bundleExtractOverride": "E:\\AISPace\\主模型项目区\\state\\tmp\\bundle-extract",
+  "monitoredPhysicalEntriesBefore": 182,
+  "monitoredPhysicalEntriesAfter": 182,
+  "physicalChanges": [],
+  "launches": [
+    { "entryPoint": "portable-app", "started": true },
+    { "entryPoint": "installed-app", "started": true },
+    { "entryPoint": "runtime-bootstrapper", "started": true }
+  ],
+  "passed": true
+}

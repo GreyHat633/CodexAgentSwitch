@@ -26,6 +26,13 @@ public sealed class ProfileListItemViewModel(Profile profile)
     public string DefaultLabel => Value.DefaultLabel;
 
     public bool IsDefault => Value.IsDefault;
+
+    public string ApprovalModeLabel => Value.ApprovalMode switch
+    {
+        ExecutionApprovalMode.Safe => "安全批准",
+        ExecutionApprovalMode.FullAuto => "完全自动",
+        _ => "自动批准",
+    };
 }
 
 public sealed class ProfileEditorViewModel : INotifyPropertyChanged
@@ -35,6 +42,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     private string _name;
     private string _mainAgentSlot;
     private string _reasoningStrength;
+    private ExecutionApprovalMode _approvalMode;
     private bool _workerEnabled;
     private WorkerSource _workerSource;
     private string _nativeWorkerSlot;
@@ -48,6 +56,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     private string _tokenLimit;
     private string _requestLimit;
     private string _currency;
+    private IReadOnlyList<string> _mainAgentSlots = ["Sol", "Terra", "Luna"];
+    private IReadOnlyList<string> _nativeWorkerSlots = ["Sol", "Terra", "Luna"];
 
     private ProfileEditorViewModel(
         Profile? source,
@@ -63,6 +73,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         _reasoningStrength = profile.MainAgent.ReasoningEffort is "low" or "medium" or "high" or "xhigh"
             ? profile.MainAgent.ReasoningEffort
             : "high";
+        _approvalMode = profile.ApprovalMode;
         _workerEnabled = profile.WorkerPolicy.Enabled;
         _workerSource = profile.WorkerPolicy.Source == WorkerSource.ExternalProvider
             ? WorkerSource.ExternalProvider
@@ -96,7 +107,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public string DialogTitle => _isNew ? "新建方案" : "编辑方案";
 
-    public IReadOnlyList<string> MainAgentSlots { get; } = ["Sol", "Terra", "Luna"];
+    public IReadOnlyList<string> MainAgentSlots => _mainAgentSlots;
 
     public IReadOnlyList<SelectionOption<string>> ReasoningStrengthOptions { get; } =
     [
@@ -106,13 +117,36 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         new("xhigh", "极高", "用于最复杂且允许更高耗时的任务"),
     ];
 
+    public IReadOnlyList<SelectionOption<ExecutionApprovalMode>> ApprovalModeOptions { get; } =
+    [
+        new(ExecutionApprovalMode.Safe, "安全模式", "只读沙箱；非可信命令与任何越界写入都必须经过批准。"),
+        new(ExecutionApprovalMode.Automatic, "自动模式", "允许在项目工作区内正常读写；风险操作由代理请求批准。"),
+        new(ExecutionApprovalMode.FullAuto, "完全自动", "不请求批准并使用不受限访问。仅应在完全可信的项目和任务中使用。"),
+    ];
+
     public IReadOnlyList<SelectionOption<WorkerSource>> WorkerSourceOptions { get; } =
     [
         new(WorkerSource.NativeCodex, "原生工作代理", "使用 Codex 的 Sol、Terra 或 Luna"),
         new(WorkerSource.ExternalProvider, "外部服务商", "使用已配置并启用的外部服务商"),
     ];
 
-    public IReadOnlyList<string> NativeWorkerSlots { get; } = ["Sol", "Terra", "Luna"];
+    public IReadOnlyList<string> NativeWorkerSlots => _nativeWorkerSlots;
+
+    public Visibility MainAgentUnavailableVisibility =>
+        MainAgentSlots.Contains(MainAgentSlot, StringComparer.Ordinal) ? Visibility.Collapsed : Visibility.Visible;
+
+    public string MainAgentUnavailableMessage =>
+        $"当前 Codex 账户不支持主代理 {MainAgentSlot}。请改选可用主代理后再保存或启动。";
+
+    public Visibility NativeWorkerUnavailableVisibility =>
+        WorkerEnabled
+        && WorkerSource == DomainWorkerSource.NativeCodex
+        && !NativeWorkerSlots.Contains(NativeWorkerSlot, StringComparer.Ordinal)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public string NativeWorkerUnavailableMessage =>
+        $"当前 Codex 账户不支持原生 Worker {NativeWorkerSlot}。请改选可用 Worker，或改用外部服务商。";
 
     public IReadOnlyList<SelectionOption<RoutingMode>> RoutingModeOptions { get; } =
     [
@@ -187,6 +221,18 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         }
     }
 
+    public SelectionOption<ExecutionApprovalMode> SelectedApprovalModeOption
+    {
+        get => ApprovalModeOptions.First(option => option.Value == ApprovalMode);
+        set
+        {
+            if (value is not null)
+            {
+                ApprovalMode = value.Value;
+            }
+        }
+    }
+
     public SelectionOption<FallbackAction> SelectedFallbackActionOption
     {
         get => FallbackActionOptions.First(option => option.Value == FallbackAction);
@@ -200,7 +246,37 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     }
 
     public string Name { get => _name; set => Set(ref _name, value); }
-    public string MainAgentSlot { get => _mainAgentSlot; set => Set(ref _mainAgentSlot, value); }
+    public string MainAgentSlot
+    {
+        get => _mainAgentSlot;
+        set
+        {
+            if (Set(ref _mainAgentSlot, value))
+            {
+                OnPropertyChanged(nameof(MainAgentUnavailableVisibility));
+                OnPropertyChanged(nameof(MainAgentUnavailableMessage));
+            }
+        }
+    }
+    public ExecutionApprovalMode ApprovalMode
+    {
+        get => _approvalMode;
+        set
+        {
+            if (Set(ref _approvalMode, value))
+            {
+                OnPropertyChanged(nameof(SelectedApprovalModeOption));
+                OnPropertyChanged(nameof(ApprovalModeDescription));
+                OnPropertyChanged(nameof(FullAutoWarningVisibility));
+            }
+        }
+    }
+
+    public string ApprovalModeDescription =>
+        ApprovalModeOptions.First(option => option.Value == ApprovalMode).Description;
+
+    public Visibility FullAutoWarningVisibility =>
+        ApprovalMode == ExecutionApprovalMode.FullAuto ? Visibility.Visible : Visibility.Collapsed;
     public string ReasoningStrength
     {
         get => _reasoningStrength;
@@ -247,6 +323,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(WorkerSettingsVisibility));
             OnPropertyChanged(nameof(WorkerDisabledHintVisibility));
             OnPropertyChanged(nameof(NativeWorkerVisibility));
+            OnPropertyChanged(nameof(NativeWorkerUnavailableVisibility));
             OnPropertyChanged(nameof(ExternalProviderVisibility));
             OnPropertyChanged(nameof(ExternalProviderEmptyVisibility));
             OnPropertyChanged(nameof(SelectedWorkerSourceOption));
@@ -275,7 +352,18 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             }
         }
     }
-    public string NativeWorkerSlot { get => _nativeWorkerSlot; set => Set(ref _nativeWorkerSlot, value); }
+    public string NativeWorkerSlot
+    {
+        get => _nativeWorkerSlot;
+        set
+        {
+            if (Set(ref _nativeWorkerSlot, value))
+            {
+                OnPropertyChanged(nameof(NativeWorkerUnavailableVisibility));
+                OnPropertyChanged(nameof(NativeWorkerUnavailableMessage));
+            }
+        }
+    }
     public string ExternalProviderId { get => _externalProviderId; set => Set(ref _externalProviderId, value); }
     public string WorkerCount { get => _workerCount; set => Set(ref _workerCount, value); }
     public RoutingMode RoutingMode
@@ -314,6 +402,18 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public Profile BuildProfile(DateTimeOffset now)
     {
+        if (!MainAgentSlots.Contains(MainAgentSlot, StringComparer.Ordinal))
+        {
+            throw new FormatException(MainAgentUnavailableMessage);
+        }
+
+        if (WorkerEnabled
+            && WorkerSource == DomainWorkerSource.NativeCodex
+            && !NativeWorkerSlots.Contains(NativeWorkerSlot, StringComparer.Ordinal))
+        {
+            throw new FormatException(NativeWorkerUnavailableMessage);
+        }
+
         var id = _isNew ? Guid.NewGuid() : _source!.Id;
         var source = WorkerEnabled ? this.WorkerSource : DomainWorkerSource.Disabled;
         var preferredWorker = !WorkerEnabled
@@ -347,6 +447,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             _isNew ? null : _source!.LastUsedAt)
         {
             IsBuiltIn = _isNew ? false : _source!.IsBuiltIn,
+            ApprovalMode = this.ApprovalMode,
         };
     }
 
@@ -377,6 +478,22 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         "Luna" => "native-luna",
         _ => "native-sol",
     };
+
+    public void SetAvailableNativeRoles(IEnumerable<string> roles)
+    {
+        var allowed = roles
+            .Where(role => role is "Sol" or "Terra" or "Luna")
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        _mainAgentSlots = allowed;
+        _nativeWorkerSlots = allowed;
+        OnPropertyChanged(nameof(MainAgentSlots));
+        OnPropertyChanged(nameof(NativeWorkerSlots));
+        OnPropertyChanged(nameof(MainAgentUnavailableVisibility));
+        OnPropertyChanged(nameof(MainAgentUnavailableMessage));
+        OnPropertyChanged(nameof(NativeWorkerUnavailableVisibility));
+        OnPropertyChanged(nameof(NativeWorkerUnavailableMessage));
+    }
 
     private static string Format(decimal? value) => value?.ToString("0.##", CultureInfo.InvariantCulture) ?? string.Empty;
 

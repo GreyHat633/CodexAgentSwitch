@@ -1,3 +1,5 @@
+using CodexAgentSwitch.Domain.Profiles;
+using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Domain.Workers;
 
 namespace CodexAgentSwitch.Domain.Tasks;
@@ -22,6 +24,51 @@ public enum TaskMessageActor
     System,
 }
 
+public enum TaskMessageKind
+{
+    Text,
+    ToolCall,
+    FileChange,
+    Diff,
+    WorkerProgress,
+    Usage,
+}
+
+public enum DelegationDecisionKind
+{
+    Skip,
+    InvokeWorker,
+}
+
+public sealed record TaskProviderSnapshot(
+    string Id,
+    string Name,
+    ProviderKind Kind,
+    Uri? BaseUri,
+    string? CredentialReference,
+    string? ModelId,
+    TimeSpan Timeout,
+    bool IsEnabled,
+    ProviderPricing? Pricing);
+
+public sealed record TaskProfileSnapshot(
+    Guid ProfileId,
+    string ProfileName,
+    AgentSelection MainAgent,
+    WorkerPolicy WorkerPolicy,
+    BudgetLimits Budget,
+    TaskProviderSnapshot? Provider,
+    DateTimeOffset CapturedAt,
+    ExecutionApprovalMode ApprovalMode = ExecutionApprovalMode.Automatic);
+
+public sealed record DelegationDecision(
+    DelegationDecisionKind Kind,
+    string Reason,
+    bool Forced,
+    string? ProviderId,
+    string? ModelId,
+    DateTimeOffset DecidedAt);
+
 public sealed record ControlledTaskMessage(
     Guid Id,
     string TurnId,
@@ -29,7 +76,10 @@ public sealed record ControlledTaskMessage(
     string Content,
     DateTimeOffset CreatedAt,
     bool IsFinal,
-    string? WorkerJobId = null);
+    string? WorkerJobId = null,
+    TaskMessageKind Kind = TaskMessageKind.Text,
+    bool IsCollapsible = false,
+    string? Metadata = null);
 
 public sealed record ControlledWorkerRun(
     string JobId,
@@ -42,7 +92,13 @@ public sealed record ControlledWorkerRun(
     DateTimeOffset StartedAt,
     DateTimeOffset? CompletedAt,
     string? ResultSummary,
-    string? StatusMessage);
+    string? StatusMessage,
+    string? ProviderId = null,
+    string? ProviderName = null,
+    string? RequestUri = null,
+    string? ResponseModelId = null,
+    ProviderUsage? Usage = null,
+    string? FailureKind = null);
 
 public sealed record ControlledTaskTurn(
     string Id,
@@ -53,7 +109,9 @@ public sealed record ControlledTaskTurn(
     IReadOnlyList<ControlledTaskMessage> Messages,
     DateTimeOffset StartedAt,
     DateTimeOffset? CompletedAt,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    TaskProfileSnapshot? ProfileSnapshot = null,
+    DelegationDecision? Delegation = null);
 
 public sealed record ControlledTaskSession(
     string Id,
@@ -69,5 +127,6 @@ public sealed record ControlledTaskSession(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     DateTimeOffset? CompletedAt,
-    string? ErrorMessage);
-
+    string? ErrorMessage,
+    string? ProjectId = null,
+    bool IsArchived = false);

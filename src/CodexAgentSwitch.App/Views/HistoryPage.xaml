@@ -6,18 +6,18 @@
     Loaded="OnLoaded">
     <Grid Padding="{StaticResource PagePadding}" RowSpacing="20" MaxWidth="1180">
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
-        <local:PageHeader Title="历史记录" Subtitle="仅显示 Agent Switch 实际创建并持久化的任务、结果和 Usage 归档。" />
+        <local:PageHeader Title="历史记录" Subtitle="仅显示 CodexAgentSwitch 模式实际创建并持久化的项目对话、结果和 Usage。" />
         <Grid Grid.Row="1" ColumnSpacing="16">
             <Grid.ColumnDefinitions><ColumnDefinition Width="360" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
             <Border Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="12">
-                    <TextBox x:Name="SearchTextBox" PlaceholderText="搜索任务" Header="搜索" TextChanged="OnFilterChanged" />
+                    <TextBox x:Name="SearchTextBox" PlaceholderText="搜索对话" Header="搜索" TextChanged="OnFilterChanged" />
                     <ComboBox x:Name="StatusFilterComboBox" Header="状态" SelectedIndex="0" SelectionChanged="OnStatusFilterChanged">
                         <ComboBoxItem Content="全部" Tag="all" />
                         <ComboBoxItem Content="已完成" Tag="completed" />
                         <ComboBoxItem Content="失败或需恢复" Tag="failed" />
                     </ComboBox>
-                    <TextBlock x:Name="EmptyHistoryText" Text="尚无真实任务历史。" Style="{StaticResource CaptionTextStyle}" />
+                    <TextBlock x:Name="EmptyHistoryText" Text="尚无对话历史。" Style="{StaticResource CaptionTextStyle}" />
                     <ListView x:Name="HistoryListView" SelectionChanged="OnHistorySelectionChanged" AutomationProperties.Name="真实历史任务列表">
                         <ListView.ItemTemplate>
                             <DataTemplate>
@@ -33,7 +33,7 @@
             <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="14">
                     <Grid>
-                        <TextBlock x:Name="HistoryTitleText" Text="选择任务查看历史" Style="{StaticResource SectionTitleStyle}" TextWrapping="Wrap" />
+                        <TextBlock x:Name="HistoryTitleText" Text="选择对话查看历史" Style="{StaticResource SectionTitleStyle}" TextWrapping="Wrap" />
                         <Button x:Name="ExportHistoryButton" Content="导出报告" HorizontalAlignment="Right" Tag="history:export" IsEnabled="False" />
                     </Grid>
                     <TextBlock x:Name="HistoryMetadataText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />

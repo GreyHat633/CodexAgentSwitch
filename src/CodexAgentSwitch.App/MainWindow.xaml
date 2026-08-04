@@ -12,14 +12,18 @@
         IsSettingsVisible="False"
         IsTabStop="False"
         IsTitleBarAutoPaddingEnabled="True"
-        PaneDisplayMode="Left"
+        PaneDisplayMode="Auto"
+        CompactModeThresholdWidth="1120"
+        ExpandedModeThresholdWidth="1480"
+        CompactPaneLength="48"
+        OpenPaneLength="300"
         PaneTitle="Codex Agent Switch"
         SelectionChanged="OnSelectionChanged">
         <NavigationView.MenuItems>
             <NavigationViewItem Content="首页" Icon="Home" Tag="dashboard" />
             <NavigationViewItem Content="配置方案" Icon="Library" Tag="profiles" />
             <NavigationViewItem Content="服务商" Icon="Globe" Tag="providers" />
-            <NavigationViewItem Content="运行任务" Icon="Play" Tag="tasks" />
+            <NavigationViewItem Content="CodexAgentSwitch 模式" Icon="Play" Tag="tasks" />
             <NavigationViewItem Content="用量与预算" Icon="Document" Tag="usage" />
             <NavigationViewItem Content="历史记录" Icon="Clock" Tag="history" />
             <NavigationViewItem Content="设置" Icon="Setting" Tag="settings" />

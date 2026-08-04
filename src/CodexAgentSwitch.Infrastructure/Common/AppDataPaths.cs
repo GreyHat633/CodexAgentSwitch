@@ -8,6 +8,8 @@ public sealed record AppDataPaths(string Root)
 
     public string LogsDirectory => Path.Combine(Root, "logs");
 
+    public string NativeCodexDirectory => Path.Combine(Root, "native-codex");
+
     public static AppDataPaths Resolve()
     {
         var configured = Environment.GetEnvironmentVariable("CAS_DATA_ROOT");
@@ -22,5 +24,6 @@ public sealed record AppDataPaths(string Root)
         Directory.CreateDirectory(Root);
         Directory.CreateDirectory(ProtocolCacheDirectory);
         Directory.CreateDirectory(LogsDirectory);
+        Directory.CreateDirectory(NativeCodexDirectory);
     }
 }

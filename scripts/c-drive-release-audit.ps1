@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.5',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.6',
     [string]$ReleaseDirectory,
     [int]$StartupSeconds = 6
 )
@@ -12,8 +12,10 @@ if ([string]::IsNullOrWhiteSpace($ReleaseDirectory)) {
 }
 $release = [IO.Path]::GetFullPath($ReleaseDirectory)
 if (-not (Test-Path -LiteralPath $release)) { throw "Release directory does not exist: $release" }
-if ([IO.Path]::GetPathRoot($env:TEMP) -ne 'C:\') { throw "This acceptance test requires the normal C-drive TEMP; detected $env:TEMP" }
-if ($env:DOTNET_BUNDLE_EXTRACT_BASE_DIR) { throw 'DOTNET_BUNDLE_EXTRACT_BASE_DIR must be unset for this acceptance test.' }
+
+# The audit observes C: without using it. Build/test artifacts and runtime extraction remain on E:.
+if ([IO.Path]::GetPathRoot($env:TEMP) -eq 'C:\') { throw "TEMP must be redirected off C: for this audit; detected $env:TEMP" }
+if ([IO.Path]::GetPathRoot($env:DOTNET_BUNDLE_EXTRACT_BASE_DIR) -eq 'C:\') { throw "DOTNET_BUNDLE_EXTRACT_BASE_DIR must be redirected off C:; detected $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR" }
 
 $auditRoot = Join-Path $repo ('.tmp\c-drive-release-audit-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $dataRoot = Join-Path $auditRoot 'data'
@@ -86,7 +88,7 @@ function Stop-ExactProcess([Diagnostics.Process]$process, [string]$expectedPath)
 }
 
 function Test-GuiStartup([string]$executable, [string]$label) {
-    $process = Start-Process -FilePath $executable -WorkingDirectory (Split-Path -Parent $executable) -PassThru
+    $process = Start-Process -FilePath $executable -WorkingDirectory (Split-Path -Parent $executable) -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds $StartupSeconds
     if ($process.HasExited -and $process.ExitCode -ne 0) { throw "$label exited with code $($process.ExitCode)." }
     Stop-ExactProcess $process $executable

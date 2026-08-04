@@ -1,4 +1,6 @@
 using System.Text.Json;
+using CodexAgentSwitch.Domain.Profiles;
+using CodexAgentSwitch.Domain.Providers;
 
 namespace CodexAgentSwitch.Domain.Workers;
 
@@ -42,7 +44,8 @@ public sealed record WorkerTask(
     IReadOnlyList<string> Deliverables,
     IReadOnlyList<string> AcceptanceCriteria,
     IReadOnlyList<string> StopConditions,
-    JsonElement? OutputSchema = null);
+    JsonElement? OutputSchema = null,
+    ExecutionApprovalMode ApprovalMode = ExecutionApprovalMode.Automatic);
 
 public enum WorkerJobStatus
 {
@@ -73,7 +76,13 @@ public sealed record WorkerResult(
     string? Summary,
     JsonElement? RawResult,
     IReadOnlyList<string> Risks,
-    IReadOnlyList<string> Unresolved);
+    IReadOnlyList<string> Unresolved,
+    string? ProviderId = null,
+    string? ProviderName = null,
+    Uri? RequestUri = null,
+    string? ResponseModelId = null,
+    ProviderUsage? Usage = null,
+    string? FailureKind = null);
 
 public enum WorkerSteerKind
 {

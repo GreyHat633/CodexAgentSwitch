@@ -56,6 +56,38 @@ public sealed class SqliteControlledTaskRepository(SqliteDatabase database) : IC
         return result;
     }
 
+    public async Task DeleteAsync(string id, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(database.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await using (var usage = connection.CreateCommand())
+        {
+            usage.Transaction = transaction;
+            usage.CommandText = "DELETE FROM usage_snapshots WHERE task_group_id = $id";
+            usage.Parameters.AddWithValue("$id", id);
+            await usage.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var ledger = connection.CreateCommand())
+        {
+            ledger.Transaction = transaction;
+            ledger.CommandText = "DELETE FROM task_groups WHERE id = $id";
+            ledger.Parameters.AddWithValue("$id", id);
+            await ledger.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var task = connection.CreateCommand())
+        {
+            task.Transaction = transaction;
+            task.CommandText = "DELETE FROM controlled_tasks WHERE id = $id";
+            task.Parameters.AddWithValue("$id", id);
+            await task.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     private static ControlledTaskSession Deserialize(string json)
     {
         try

@@ -9,9 +9,10 @@ $env:NUGET_HTTP_CACHE_PATH = Join-Path $repo '.nuget\http-cache'
 $env:TEMP = Join-Path $repo '.tmp'
 $env:TMP = $env:TEMP
 $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = Join-Path $env:TEMP 'bundle-extract'
+$env:CAS_TEST_ROOT = Join-Path $env:TEMP 'tests'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
-New-Item -ItemType Directory -Force -Path $env:DOTNET_CLI_HOME,$env:NUGET_PACKAGES,$env:NUGET_HTTP_CACHE_PATH,$env:TEMP,$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR | Out-Null
+New-Item -ItemType Directory -Force -Path $env:DOTNET_CLI_HOME,$env:NUGET_PACKAGES,$env:NUGET_HTTP_CACHE_PATH,$env:TEMP,$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR,$env:CAS_TEST_ROOT | Out-Null
 
 dotnet restore (Join-Path $repo 'CodexAgentSwitch.sln') --nologo
 if ($LASTEXITCODE -ne 0) { throw 'dotnet restore failed.' }

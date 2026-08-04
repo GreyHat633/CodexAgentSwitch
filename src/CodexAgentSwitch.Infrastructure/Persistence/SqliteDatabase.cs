@@ -68,6 +68,18 @@ public sealed class SqliteDatabase(string databasePath)
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS agent_projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                working_directory TEXT NOT NULL,
+                is_archived INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_projects_name
+                ON agent_projects(name COLLATE NOCASE);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

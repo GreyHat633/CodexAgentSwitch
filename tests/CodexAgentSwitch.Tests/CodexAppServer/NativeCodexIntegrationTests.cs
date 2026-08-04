@@ -28,6 +28,7 @@ public sealed class NativeCodexIntegrationTests
             await using var client = new CodexAppServerClient(discovery.Command!);
             var adapter = new NativeCodexWorkerAdapter(client, new SystemClock());
             var capabilities = await adapter.GetCapabilitiesAsync();
+            Console.WriteLine($"CAS_MODEL_LIST={string.Join(",", capabilities.Models.Select(item => $"{item.Id}|default={item.IsDefault}"))}");
             var model = capabilities.Models.FirstOrDefault(candidate => candidate.Id.Contains("luna", StringComparison.OrdinalIgnoreCase))
                 ?? capabilities.Models.First(candidate => candidate.IsDefault);
             Assert.NotEmpty(model.SupportedReasoningEfforts);

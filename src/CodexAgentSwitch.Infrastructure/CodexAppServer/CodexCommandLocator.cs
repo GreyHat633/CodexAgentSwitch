@@ -7,9 +7,9 @@ public sealed record CodexCommandDiscovery(CodexCommand? Command, string? Versio
     public bool IsAvailable => Command is not null;
 }
 
-public sealed class CodexCommandLocator
+public class CodexCommandLocator
 {
-    public async Task<CodexCommandDiscovery> LocateAsync(CancellationToken cancellationToken = default)
+    public virtual async Task<CodexCommandDiscovery> LocateAsync(CancellationToken cancellationToken = default)
     {
         var candidates = new List<CodexCommand>();
         var configuredExecutable = Environment.GetEnvironmentVariable("CAS_CODEX_EXECUTABLE");

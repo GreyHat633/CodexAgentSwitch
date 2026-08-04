@@ -46,6 +46,25 @@ public sealed class SqliteProfileRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task Round_trip_preserves_full_automatic_approval_mode()
+    {
+        Directory.CreateDirectory(_directory);
+        var database = new SqliteDatabase(Path.Combine(_directory, "approval.db"));
+        await database.InitializeAsync();
+        var repository = new SqliteProfileRepository(database);
+        var profile = Profile.CreateDefault(DateTimeOffset.UtcNow) with
+        {
+            ApprovalMode = ExecutionApprovalMode.FullAuto,
+        };
+
+        await repository.UpsertAsync(profile);
+
+        var reloaded = await new SqliteProfileRepository(database).GetAsync(profile.Id);
+
+        Assert.Equal(ExecutionApprovalMode.FullAuto, reloaded!.ApprovalMode);
+    }
+
+    [Fact]
     public async Task Legacy_economic_profile_is_classified_as_built_in_without_migration()
     {
         Directory.CreateDirectory(_directory);
@@ -83,6 +102,7 @@ public sealed class SqliteProfileRepositoryTests : IDisposable
 
         Assert.True(reloaded!.IsBuiltIn);
         Assert.Equal("内置预设", reloaded.KindLabel);
+        Assert.Equal(ExecutionApprovalMode.Automatic, reloaded.ApprovalMode);
     }
 
     public void Dispose()

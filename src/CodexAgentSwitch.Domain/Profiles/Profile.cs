@@ -26,6 +26,25 @@ public enum FallbackAction
     StopDelegation,
 }
 
+public enum ExecutionApprovalMode
+{
+    Automatic,
+    Safe,
+    FullAuto,
+}
+
+public sealed record ExecutionApprovalSettings(string ApprovalPolicy, string SandboxMode);
+
+public static class ExecutionApprovalPolicy
+{
+    public static ExecutionApprovalSettings Resolve(ExecutionApprovalMode mode) => mode switch
+    {
+        ExecutionApprovalMode.Safe => new("untrusted", "read-only"),
+        ExecutionApprovalMode.FullAuto => new("never", "danger-full-access"),
+        _ => new("on-request", "workspace-write"),
+    };
+}
+
 public sealed record WorkerPolicy(
     bool Enabled,
     WorkerSource Source,
@@ -55,6 +74,8 @@ public sealed record Profile(
     DateTimeOffset? LastUsedAt)
 {
     public bool IsBuiltIn { get; init; }
+
+    public ExecutionApprovalMode ApprovalMode { get; init; } = ExecutionApprovalMode.Automatic;
 
     public static bool IsBuiltInPresetName(string? name) =>
         string.Equals(name?.Trim(), "经济模式", StringComparison.OrdinalIgnoreCase);

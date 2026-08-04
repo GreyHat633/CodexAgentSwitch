@@ -57,6 +57,7 @@
                                             <StackPanel>
                                                 <TextBlock Text="{Binding Name}" Style="{StaticResource BodyTextStyle}" />
                                                 <TextBlock Text="{Binding KindLabel}" Style="{StaticResource CaptionTextStyle}" />
+                                                <TextBlock Text="{Binding ApprovalModeLabel}" Style="{StaticResource CaptionTextStyle}" />
                                             </StackPanel>
                                             <Border Grid.Column="1" Style="{StaticResource StatusBadgeStyle}">
                                                 <TextBlock Text="{Binding DefaultLabel}" />
@@ -133,6 +134,33 @@
                                   SelectedItem="{Binding SelectedReasoningStrengthOption, Mode=TwoWay}"
                                   AutomationProperties.Name="主代理推理强度" />
                     </Grid>
+                    <InfoBar IsOpen="True"
+                             Severity="Warning"
+                             Title="当前账户不支持所选主代理"
+                             Message="{Binding MainAgentUnavailableMessage}"
+                             Visibility="{Binding MainAgentUnavailableVisibility}" />
+                    <TextBlock Text="批准与访问" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="260" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox Header="批准操作模式"
+                                  ItemsSource="{Binding ApprovalModeOptions}"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedItem="{Binding SelectedApprovalModeOption, Mode=TwoWay}"
+                                  AutomationProperties.Name="批准操作模式" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding ApprovalModeDescription}"
+                                   TextWrapping="Wrap"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource CaptionTextStyle}" />
+                    </Grid>
+                    <InfoBar IsOpen="True"
+                             Severity="Error"
+                             Title="完全自动模式具有高风险"
+                             Message="主代理与原生 Worker 将使用 never 批准策略和 danger-full-access 沙箱；外部 Worker 仍仅通过 Provider API 返回文本。"
+                             Visibility="{Binding FullAutoWarningVisibility}" />
                     <StackPanel Spacing="12">
                         <TextBlock Text="工作代理与路由" Style="{StaticResource SectionTitleStyle}" />
                         <CheckBox Content="启用工作代理"
@@ -143,6 +171,11 @@
                                    Style="{StaticResource CaptionTextStyle}"
                                    TextWrapping="Wrap" />
                         <StackPanel Visibility="{Binding WorkerSettingsVisibility}" Spacing="12">
+                            <InfoBar IsOpen="True"
+                                     Severity="Warning"
+                                     Title="当前账户不支持所选原生 Worker"
+                                     Message="{Binding NativeWorkerUnavailableMessage}"
+                                     Visibility="{Binding NativeWorkerUnavailableVisibility}" />
                             <Grid ColumnSpacing="16" RowSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />

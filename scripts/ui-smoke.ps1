@@ -48,7 +48,6 @@ public static class CasUiNative {
     }
 }
 '@
-[CasUiNative]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
 
 $results = [Collections.Generic.List[object]]::new()
 $script:process = $null
@@ -127,12 +126,6 @@ function Click-AppElement([string]$name, [string]$expectedAction = '') {
     $element = Find-AppElement $name -AllowOffscreen
     $bounds = $element.Current.BoundingRectangle
     if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw "Element has empty bounds: $name" }
-    if ($name -eq '更改方案') {
-        [CasUiNative]::SetForegroundWindow([IntPtr]$script:process.MainWindowHandle) | Out-Null
-        [CasUiNative]::ClickDashboardAction([IntPtr]$script:process.MainWindowHandle)
-        Start-Sleep -Milliseconds 650
-        if (Test-ButtonTrace $expectedAction) { return }
-    }
     $offsets = @(@(0,0), @(-50,0), @(50,0), @(0,-35), @(0,35))
     foreach ($offset in $offsets) {
         [CasUiNative]::SetForegroundWindow([IntPtr]$script:process.MainWindowHandle) | Out-Null
@@ -190,13 +183,13 @@ function Add-Pass([string]$page, [string]$action, [string]$inputMethod, [int]$dp
 
 try {
     $dpi = Start-CasApp 'dashboard' 'dashboard-mouse'
-    if ($Theme -eq 'light') { Click-AppElement '更改方案' 'navigate:profiles'; $dashboardInput = 'mouse' }
-    else { Press-AppElement '更改方案' 'ENTER'; $dashboardInput = 'Enter' }
+    if ($Theme -eq 'light') { Click-AppElement '编辑方案' 'navigate:profiles'; $dashboardInput = 'mouse' }
+    else { Press-AppElement '编辑方案' 'ENTER'; $dashboardInput = 'Enter' }
     if ($Theme -eq 'light') { Assert-Trace 'pointer-pressed' }
     Assert-Trace 'button-click' 'navigate:profiles'
     Assert-Trace 'action-completed' 'navigate:profiles'
     Assert-Visible '新建方案'
-    Add-Pass '首页' '更改方案' $dashboardInput $dpi 'input activation navigated to ProfilesPage'
+    Add-Pass '首页' '编辑方案' $dashboardInput $dpi 'input activation navigated to ProfilesPage'
 
     $dpi = Start-CasApp 'profiles' 'profiles-enter'
     Press-AppElement '新建方案' 'ENTER'
@@ -214,19 +207,34 @@ try {
     Assert-Visible '服务商 API 密钥'
     Add-Pass 'Provider' '添加服务商' $providerInput $dpi 'editor expanded and API Key control became reachable'
 
-    $dpi = Start-CasApp 'tasks' 'tasks-scroll'
-    Set-AppText '任务内容' 'Return exactly CAS_UI_TASK_OK. Do not call tools.'
+    $dpi = Start-CasApp 'tasks' 'managed-conversation'
+    if ($Theme -eq 'light' -and -not $PreferKeyboard) { Click-AppElement '新建项目' 'cas:project-new'; $taskInput = 'mouse' }
+    else { Press-AppElement '新建项目' 'ENTER'; $taskInput = 'Enter' }
+    Assert-Trace 'button-click' 'cas:project-new'
+    Set-AppText '项目名称' 'CAS UI Smoke Project'
+    Set-AppText '工作目录' $TaskWorkingDirectory
+    Press-AppElement '保存' 'ENTER'
+    $null = Wait-AppElement 'CAS UI Smoke Project' 20
+    if ($Theme -eq 'light' -and -not $PreferKeyboard) { Click-AppElement '新建对话' 'cas:conversation-new' }
+    else { Press-AppElement '新建对话' 'ENTER' }
+    Assert-Trace 'button-click' 'cas:conversation-new'
+    $null = Wait-AppElement '对话输入框' 20
+    Set-AppText '对话输入框' '请先委派 Worker 独立计算 1+1，然后由主代理最终只回复 CAS_UI_TASK_OK。'
     if ($Theme -eq 'light' -and -not $PreferKeyboard) {
-        Click-AppElement '运行真实受控任务' 'task:start'
-        $taskInput = 'mouse'
+        Click-AppElement '发送对话' 'cas:send'
     } else {
-        Press-AppElement '运行真实受控任务' 'ENTER'
-        $taskInput = 'Enter'
+        Press-AppElement '发送对话' 'ENTER'
     }
-    Assert-Trace 'button-click' 'task:start'
-    Assert-Trace 'action-completed' 'task:start'
+    Assert-Trace 'button-click' 'cas:send'
+    Assert-Trace 'action-completed' 'cas:send'
     $null = Wait-AppElement 'CAS_UI_TASK_OK' 240
-    Add-Pass '运行任务' '运行真实受控任务' $taskInput $dpi 'real Worker and Sol result appeared in the WinUI control tree'
+    Add-Pass 'CodexAgentSwitch 模式' '新建项目、对话并发送' $taskInput $dpi 'project and conversation controls created a real same-Thread turn and rendered the final Sol result'
+
+    $dpi = Start-CasApp 'tasks' 'managed-restart-recovery'
+    Assert-Visible 'CAS UI Smoke Project'
+    Assert-Visible '新对话'
+    Assert-Visible 'CAS_UI_TASK_OK'
+    Add-Pass 'CodexAgentSwitch 模式' '重启恢复' 'restart' $dpi 'persisted project, conversation and rendered result recovered after process restart'
 
     $dpi = Start-CasApp 'usage' 'usage-keyboard'
     $range = Find-AppElement '报告时间范围'

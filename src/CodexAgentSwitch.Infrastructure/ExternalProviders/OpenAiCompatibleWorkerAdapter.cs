@@ -224,23 +224,64 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                     completion.Content,
                     completion.RawResponse,
                     completion.Usage is null ? ["Provider 未返回 Usage；费用只能标记为不可用或估算。"] : [],
-                    []));
+                    [],
+                    provider.Id,
+                    provider.Name,
+                    completion.RequestUri,
+                    completion.ResponseModel ?? runtime.ModelId,
+                    completion.Usage));
         }
         catch (ProviderRequestException exception)
         {
             var status = exception.Kind == ProviderErrorKind.Cancelled ? WorkerJobStatus.Interrupted : WorkerJobStatus.Failed;
             runtime.Job = runtime.Job with { Status = status, CompletedAt = clock.UtcNow, StatusMessage = exception.Message };
-            Complete(runtime, new WorkerResult(runtime.Task.TaskId, status, exception.Message, null, [], [exception.Kind.ToString()]));
+            Complete(runtime, new WorkerResult(
+                runtime.Task.TaskId,
+                status,
+                exception.Message,
+                null,
+                [],
+                [exception.Kind.ToString()],
+                provider.Id,
+                provider.Name,
+                ProviderEndpoint(),
+                runtime.ModelId,
+                null,
+                exception.Kind.ToString()));
         }
         catch (OperationCanceledException)
         {
             runtime.Job = runtime.Job with { Status = WorkerJobStatus.Interrupted, CompletedAt = clock.UtcNow, StatusMessage = "Provider request cancelled." };
-            Complete(runtime, new WorkerResult(runtime.Task.TaskId, WorkerJobStatus.Interrupted, "Provider request cancelled.", null, [], []));
+            Complete(runtime, new WorkerResult(
+                runtime.Task.TaskId,
+                WorkerJobStatus.Interrupted,
+                "Provider request cancelled.",
+                null,
+                [],
+                [],
+                provider.Id,
+                provider.Name,
+                ProviderEndpoint(),
+                runtime.ModelId,
+                null,
+                ProviderErrorKind.Cancelled.ToString()));
         }
         catch (Exception exception)
         {
             runtime.Job = runtime.Job with { Status = WorkerJobStatus.Failed, CompletedAt = clock.UtcNow, StatusMessage = "Unexpected Provider failure." };
-            Complete(runtime, new WorkerResult(runtime.Task.TaskId, WorkerJobStatus.Failed, "Unexpected Provider failure.", null, [], [exception.GetType().Name]));
+            Complete(runtime, new WorkerResult(
+                runtime.Task.TaskId,
+                WorkerJobStatus.Failed,
+                "Unexpected Provider failure.",
+                null,
+                [],
+                [exception.GetType().Name],
+                provider.Id,
+                provider.Name,
+                ProviderEndpoint(),
+                runtime.ModelId,
+                null,
+                exception.GetType().Name));
         }
         finally
         {
@@ -270,6 +311,10 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
     private ExternalJobRuntime Runtime(string jobId) => jobs.TryGetValue(jobId, out var runtime)
         ? runtime
         : throw new KeyNotFoundException($"External Worker job not found: {jobId}");
+
+    private Uri? ProviderEndpoint() => provider.BaseUri is null
+        ? null
+        : new Uri($"{provider.BaseUri.AbsoluteUri.TrimEnd('/')}/chat/completions", UriKind.Absolute);
 
     private static bool IsTerminal(WorkerJobStatus status) => status is WorkerJobStatus.Completed or WorkerJobStatus.Failed or WorkerJobStatus.Interrupted or WorkerJobStatus.UnknownRecoverable or WorkerJobStatus.Deleted;
 

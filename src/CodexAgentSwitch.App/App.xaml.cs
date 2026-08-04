@@ -1,8 +1,10 @@
 using CodexAgentSwitch.Application.Abstractions;
 using CodexAgentSwitch.Application.Credentials;
 using CodexAgentSwitch.Application.Profiles;
+using CodexAgentSwitch.Application.Projects;
 using CodexAgentSwitch.Application.Providers;
 using CodexAgentSwitch.Application.Orchestration;
+using CodexAgentSwitch.Application.NativeCodex;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Application.Tasks;
 using CodexAgentSwitch.Domain.Providers;
@@ -33,6 +35,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton(new SqliteDatabase(paths.DatabasePath));
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IProfileRepository, SqliteProfileRepository>();
+        services.AddSingleton<IProjectRepository, SqliteProjectRepository>();
         services.AddSingleton<IProviderRepository, SqliteProviderRepository>();
         services.AddSingleton<ICredentialStore, WindowsCredentialStore>();
         services.AddSingleton<HttpClient>();
@@ -54,10 +57,18 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<SafeWorkerDeletionCoordinator>();
         services.AddSingleton<ProfileValidator>();
         services.AddSingleton<ProfileService>();
+        services.AddSingleton<ProjectService>();
         services.AddSingleton<CodexCommandLocator>();
+        services.AddSingleton<CodexModelResolver>();
+        services.AddSingleton<INativeCodexProcessStarter, NativeCodexProcessStarter>();
+        services.AddSingleton<INativeCodexLauncher, NativeCodexLauncher>();
         services.AddSingleton(new CodexSchemaCache(paths.ProtocolCacheDirectory));
         services.AddSingleton<CodexRuntimeManager>();
         services.AddSingleton<IControlledTaskRuntime, ControlledTaskRuntime>();
+        services.AddSingleton<TaskProfileSnapshotFactory>();
+        services.AddSingleton<DelegationDecisionService>();
+        services.AddSingleton<ExternalProviderResolver>();
+        services.AddSingleton<WorkerOrchestrator>();
         services.AddSingleton<ControlledTaskService>();
         services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Information));
         Services = services.BuildServiceProvider(validateScopes: true);
@@ -72,6 +83,7 @@ public partial class App : Microsoft.UI.Xaml.Application
             var profileService = Services.GetRequiredService<ProfileService>();
             await profileService.EnsureDefaultAsync();
             await EnsureBuiltInProvidersAsync();
+            await EnsureProjectMigrationAsync();
             _window = new MainWindow();
             _window.Activate();
         }
@@ -151,6 +163,46 @@ public partial class App : Microsoft.UI.Xaml.Application
             // Keep the persisted reasoning effort unchanged: deepseek-reasoner was
             // a thinking-intent selection and V4 Flash carries that intent forward.
             await profileRepository.UpsertAsync(DeepSeekV4Migration.Migrate(profile) with { UpdatedAt = clock.UtcNow });
+        }
+    }
+
+    private async Task EnsureProjectMigrationAsync()
+    {
+        var taskRepository = Services.GetRequiredService<IControlledTaskRepository>();
+        var projectRepository = Services.GetRequiredService<IProjectRepository>();
+        var projectService = Services.GetRequiredService<ProjectService>();
+        var conversations = await taskRepository.ListAsync();
+        var projects = (await projectRepository.ListAsync()).ToList();
+        foreach (var group in conversations
+                     .Where(conversation => string.IsNullOrWhiteSpace(conversation.ProjectId))
+                     .GroupBy(conversation => conversation.WorkingDirectory, StringComparer.OrdinalIgnoreCase))
+        {
+            var project = projects.FirstOrDefault(candidate =>
+                string.Equals(candidate.WorkingDirectory, group.Key, StringComparison.OrdinalIgnoreCase));
+            if (project is null)
+            {
+                if (!Directory.Exists(group.Key))
+                {
+                    continue;
+                }
+
+                var folderName = Path.GetFileName(group.Key.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                var baseName = string.IsNullOrWhiteSpace(folderName) ? "迁移项目" : $"迁移项目 · {folderName}";
+                var name = baseName;
+                var suffix = 2;
+                while (projects.Any(item => string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    name = $"{baseName} ({suffix++})";
+                }
+
+                project = await projectService.CreateAsync(name, group.Key);
+                projects.Add(project);
+            }
+
+            foreach (var conversation in group)
+            {
+                await taskRepository.UpsertAsync(conversation with { ProjectId = project.Id });
+            }
         }
     }
 }

@@ -9,5 +9,6 @@ public interface IControlledTaskRepository
     Task<ControlledTaskSession?> GetAsync(string id, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ControlledTaskSession>> ListAsync(CancellationToken cancellationToken = default);
-}
 
+    Task DeleteAsync(string id, CancellationToken cancellationToken = default);
+}

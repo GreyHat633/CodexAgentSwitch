@@ -17,9 +17,10 @@ public sealed class ControlledTaskService
 {
     private readonly IControlledTaskRepository tasks;
     private readonly IProfileRepository profiles;
-    private readonly IProviderRepository providers;
-    private readonly IExternalWorkerAdapterFactory externalWorkers;
     private readonly IControlledTaskRuntime runtime;
+    private readonly TaskProfileSnapshotFactory snapshotFactory;
+    private readonly DelegationDecisionService delegationDecisions;
+    private readonly WorkerOrchestrator workerOrchestrator;
     private readonly IUsageLedgerRepository usageLedger;
     private readonly IWorkerUsageCollector usageCollector;
     private readonly IClock clock;
@@ -29,18 +30,20 @@ public sealed class ControlledTaskService
     public ControlledTaskService(
         IControlledTaskRepository tasks,
         IProfileRepository profiles,
-        IProviderRepository providers,
-        IExternalWorkerAdapterFactory externalWorkers,
         IControlledTaskRuntime runtime,
+        TaskProfileSnapshotFactory snapshotFactory,
+        DelegationDecisionService delegationDecisions,
+        WorkerOrchestrator workerOrchestrator,
         IUsageLedgerRepository usageLedger,
         IWorkerUsageCollector usageCollector,
         IClock clock)
     {
         this.tasks = tasks;
         this.profiles = profiles;
-        this.providers = providers;
-        this.externalWorkers = externalWorkers;
         this.runtime = runtime;
+        this.snapshotFactory = snapshotFactory;
+        this.delegationDecisions = delegationDecisions;
+        this.workerOrchestrator = workerOrchestrator;
         this.usageLedger = usageLedger;
         this.usageCollector = usageCollector;
         this.clock = clock;
@@ -54,11 +57,139 @@ public sealed class ControlledTaskService
     public Task<ControlledTaskSession?> GetAsync(string id, CancellationToken cancellationToken = default) =>
         tasks.GetAsync(id, cancellationToken);
 
-    public async Task<ControlledTaskSession> StartAsync(
+    public async Task<IReadOnlyList<ControlledTaskSession>> ListProjectConversationsAsync(
+        string projectId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        return (await tasks.ListAsync(cancellationToken))
+            .Where(task => string.Equals(task.ProjectId, projectId, StringComparison.Ordinal))
+            .OrderByDescending(task => task.UpdatedAt)
+            .ToArray();
+    }
+
+    public async Task<ControlledTaskSession> RenameConversationAsync(
+        string taskId,
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var normalized = name.Trim();
+        if (normalized.Length > 120)
+        {
+            throw new InvalidOperationException("对话名称不能超过 120 个字符。");
+        }
+
+        await MutateAsync(taskId, session => session with
+        {
+            Title = normalized,
+            UpdatedAt = clock.UtcNow,
+        }, cancellationToken);
+        return await RequireAsync(taskId, cancellationToken);
+    }
+
+    public async Task DeleteConversationAsync(
+        string taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var session = await RequireAsync(taskId, cancellationToken);
+        if (active.ContainsKey(taskId) || IsRunning(session.Status))
+        {
+            throw new InvalidOperationException("运行中的对话不能删除，请先停止生成。");
+        }
+
+        await tasks.DeleteAsync(taskId, cancellationToken);
+    }
+
+    public async Task DeleteProjectConversationsAsync(
+        string projectId,
+        CancellationToken cancellationToken = default)
+    {
+        foreach (var conversation in await ListProjectConversationsAsync(projectId, cancellationToken))
+        {
+            await DeleteConversationAsync(conversation.Id, cancellationToken);
+        }
+    }
+
+    public async Task<ControlledTaskSession> RetryLastTurnAsync(
+        string taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var session = await RequireAsync(taskId, cancellationToken);
+        var turn = session.Turns.LastOrDefault()
+            ?? throw new InvalidOperationException("该对话没有可重试的内容。");
+        if (IsRunning(session.Status))
+        {
+            throw new InvalidOperationException("当前对话仍在生成，不能重试。");
+        }
+
+        return await ContinueAsync(
+            taskId,
+            turn.UserInput,
+            turn.Delegation?.Kind == DelegationDecisionKind.InvokeWorker,
+            cancellationToken);
+    }
+
+    public Task<ControlledTaskSession> StartAsync(
+        string input,
+        string workingDirectory,
+        bool? useWorker = null,
+        CancellationToken cancellationToken = default) =>
+        StartCoreAsync(null, input, workingDirectory, useWorker, cancellationToken);
+
+    public Task<ControlledTaskSession> StartInProjectAsync(
+        string projectId,
         string input,
         string workingDirectory,
         bool? useWorker = null,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        return StartCoreAsync(projectId, input, workingDirectory, useWorker, cancellationToken);
+    }
+
+    public async Task<ControlledTaskSession> CreateConversationAsync(
+        string projectId,
+        string workingDirectory,
+        string? title = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        var cwd = Path.GetFullPath(workingDirectory);
+        if (!Directory.Exists(cwd))
+        {
+            throw new DirectoryNotFoundException($"工作目录不存在：{cwd}");
+        }
+
+        var profile = await profiles.GetDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+        var now = clock.UtcNow;
+        var session = new ControlledTaskSession(
+            Guid.NewGuid().ToString("D"),
+            profile.Id,
+            profile.Name,
+            string.IsNullOrWhiteSpace(title) ? "新对话" : title.Trim(),
+            cwd,
+            profile.MainAgent.ModelId,
+            profile.MainAgent.ReasoningEffort,
+            null,
+            ControlledTaskStatus.Completed,
+            [],
+            now,
+            now,
+            null,
+            null,
+            projectId);
+        await SaveAndPublishAsync(session, cancellationToken);
+        return session;
+    }
+
+    private async Task<ControlledTaskSession> StartCoreAsync(
+        string? projectId,
+        string input,
+        string workingDirectory,
+        bool? useWorker,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input);
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
@@ -70,25 +201,28 @@ public sealed class ControlledTaskService
 
         var profile = await profiles.GetDefaultAsync(cancellationToken)
             ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+        var snapshot = await snapshotFactory.CaptureAsync(profile, cancellationToken);
+        var decision = delegationDecisions.Decide(snapshot, useWorker);
         var now = clock.UtcNow;
         var localTurnId = Guid.NewGuid().ToString("D");
         var session = new ControlledTaskSession(
             Guid.NewGuid().ToString("D"),
-            profile.Id,
-            profile.Name,
+            snapshot.ProfileId,
+            snapshot.ProfileName,
             CreateTitle(input),
             fullWorkingDirectory,
-            profile.MainAgent.ModelId,
-            profile.MainAgent.ReasoningEffort,
+            snapshot.MainAgent.ModelId,
+            snapshot.MainAgent.ReasoningEffort,
             null,
             ControlledTaskStatus.Queued,
-            [NewTurn(localTurnId, input, now)],
+            [NewTurn(localTurnId, input, now, snapshot, decision)],
             now,
             now,
             null,
-            null);
+            null,
+            projectId);
         await SaveAndPublishAsync(session, cancellationToken);
-        StartBackground(session.Id, localTurnId, profile, ShouldUseWorker(profile, useWorker));
+        StartBackground(session.Id, localTurnId, snapshot, decision);
         return session;
     }
 
@@ -108,22 +242,58 @@ public sealed class ControlledTaskService
         var profile = await profiles.GetAsync(session.ProfileId, cancellationToken)
             ?? await profiles.GetDefaultAsync(cancellationToken)
             ?? throw new InvalidOperationException("任务对应的配置方案已不存在，且没有默认方案可用。");
+        var snapshot = await snapshotFactory.CaptureAsync(profile, cancellationToken);
+        var decision = delegationDecisions.Decide(snapshot, useWorker);
         var now = clock.UtcNow;
         var localTurnId = Guid.NewGuid().ToString("D");
         session = session with
         {
-            ProfileId = profile.Id,
-            ProfileName = profile.Name,
-            MainModelId = profile.MainAgent.ModelId,
-            MainReasoningEffort = profile.MainAgent.ReasoningEffort,
+            ProfileId = snapshot.ProfileId,
+            ProfileName = snapshot.ProfileName,
+            MainModelId = snapshot.MainAgent.ModelId,
+            MainReasoningEffort = snapshot.MainAgent.ReasoningEffort,
             Status = ControlledTaskStatus.Queued,
-            Turns = session.Turns.Append(NewTurn(localTurnId, input, now)).ToArray(),
+            Turns = session.Turns.Append(NewTurn(localTurnId, input, now, snapshot, decision)).ToArray(),
             UpdatedAt = now,
             CompletedAt = null,
             ErrorMessage = null,
         };
         await SaveAndPublishAsync(session, cancellationToken);
-        StartBackground(session.Id, localTurnId, profile, ShouldUseWorker(profile, useWorker));
+        StartBackground(session.Id, localTurnId, snapshot, decision);
+        return session;
+    }
+
+    public async Task<ControlledTaskSession> ForceTestCurrentWorkerAsync(
+        string taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var session = await RequireAsync(taskId, cancellationToken);
+        if (active.ContainsKey(taskId) || IsRunning(session.Status))
+        {
+            throw new InvalidOperationException("当前对话仍在运行，请等待完成或先停止生成。");
+        }
+
+        var profile = await profiles.GetDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+        var snapshot = await snapshotFactory.CaptureAsync(profile, cancellationToken);
+        var decision = delegationDecisions.Decide(snapshot, requested: true, forced: true);
+        var now = clock.UtcNow;
+        var localTurnId = Guid.NewGuid().ToString("D");
+        const string input = "强制测试当前 Worker：请仅返回当前 Provider 和模型可用性的简短确认。";
+        session = session with
+        {
+            ProfileId = snapshot.ProfileId,
+            ProfileName = snapshot.ProfileName,
+            MainModelId = snapshot.MainAgent.ModelId,
+            MainReasoningEffort = snapshot.MainAgent.ReasoningEffort,
+            Status = ControlledTaskStatus.Queued,
+            Turns = session.Turns.Append(NewTurn(localTurnId, input, now, snapshot, decision)).ToArray(),
+            UpdatedAt = now,
+            CompletedAt = null,
+            ErrorMessage = null,
+        };
+        await SaveAndPublishAsync(session, cancellationToken);
+        StartWorkerTestBackground(session.Id, localTurnId, snapshot);
         return session;
     }
 
@@ -177,7 +347,12 @@ public sealed class ControlledTaskService
             try
             {
                 await runtime.EnsureStartedAsync(cancellationToken);
-                await runtime.MainAgent.ResumeThreadAsync(session.MainThreadId, session.MainModelId, session.WorkingDirectory, cancellationToken);
+                await runtime.MainAgent.ResumeThreadAsync(
+                    session.MainThreadId,
+                    session.MainModelId,
+                    session.WorkingDirectory,
+                    turn.ProfileSnapshot?.ApprovalMode ?? ExecutionApprovalMode.Automatic,
+                    cancellationToken);
                 var result = await runtime.MainAgent.ReadTurnAsync(session.MainThreadId, turn.ServerTurnId, cancellationToken);
                 await CompleteMainTurnAsync(session.Id, turn.Id, result, cancellationToken);
             }
@@ -188,7 +363,11 @@ public sealed class ControlledTaskService
         }
     }
 
-    private void StartBackground(string taskId, string localTurnId, Profile profile, bool useWorker)
+    private void StartBackground(
+        string taskId,
+        string localTurnId,
+        TaskProfileSnapshot snapshot,
+        DelegationDecision decision)
     {
         var cancellation = new CancellationTokenSource();
         if (!active.TryAdd(taskId, cancellation))
@@ -201,7 +380,7 @@ public sealed class ControlledTaskService
         {
             try
             {
-                await ExecuteAsync(taskId, localTurnId, profile, useWorker, cancellation.Token);
+                await ExecuteAsync(taskId, localTurnId, snapshot, decision, cancellation.Token);
             }
             catch (OperationCanceledException)
             {
@@ -219,45 +398,133 @@ public sealed class ControlledTaskService
         });
     }
 
-    private async Task ExecuteAsync(string taskId, string localTurnId, Profile profile, bool useWorker, CancellationToken cancellationToken)
+    private void StartWorkerTestBackground(
+        string taskId,
+        string localTurnId,
+        TaskProfileSnapshot snapshot)
+    {
+        var cancellation = new CancellationTokenSource();
+        if (!active.TryAdd(taskId, cancellation))
+        {
+            cancellation.Dispose();
+            throw new InvalidOperationException("任务已经在运行。");
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (snapshot.WorkerPolicy.Source == WorkerSource.NativeCodex)
+                {
+                    await runtime.EnsureStartedAsync(cancellation.Token);
+                }
+
+                var session = await RequireAsync(taskId, cancellation.Token);
+                var ledger = await EnsureLedgerAsync(session, cancellation.Token);
+                var worker = await ExecuteWorkerAsync(session, localTurnId, snapshot, ledger, forceNative: false, cancellation.Token);
+                await CompleteWorkerOnlyTurnAsync(
+                    taskId,
+                    localTurnId,
+                    worker.Succeeded,
+                    worker.Summary,
+                    cancellation.Token);
+                await usageLedger.UpsertTaskGroupAsync(worker.Ledger with
+                {
+                    CompletedAt = clock.UtcNow,
+                    UpdatedAt = clock.UtcNow,
+                }, cancellation.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                await FailAsync(taskId, localTurnId, ControlledTaskStatus.Interrupted, "Worker 测试已取消。", CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                await FailAsync(taskId, localTurnId, ControlledTaskStatus.Failed, exception.Message, CancellationToken.None);
+            }
+            finally
+            {
+                active.TryRemove(taskId, out _);
+                cancellation.Dispose();
+            }
+        });
+    }
+
+    private async Task ExecuteAsync(
+        string taskId,
+        string localTurnId,
+        TaskProfileSnapshot snapshot,
+        DelegationDecision decision,
+        CancellationToken cancellationToken)
     {
         await runtime.EnsureStartedAsync(cancellationToken);
         var session = await RequireAsync(taskId, cancellationToken);
         var mainThreadId = session.MainThreadId;
         if (mainThreadId is null)
         {
-            mainThreadId = await runtime.MainAgent.CreateThreadAsync(profile.MainAgent.ModelId, session.WorkingDirectory, cancellationToken);
+            mainThreadId = await runtime.MainAgent.CreateThreadAsync(
+                snapshot.MainAgent.ModelId,
+                session.WorkingDirectory,
+                snapshot.ApprovalMode,
+                cancellationToken);
             session = session with { MainThreadId = mainThreadId, UpdatedAt = clock.UtcNow };
             await SaveAndPublishAsync(session, cancellationToken);
         }
         else
         {
-            await runtime.MainAgent.ResumeThreadAsync(mainThreadId, profile.MainAgent.ModelId, session.WorkingDirectory, cancellationToken);
+            await runtime.MainAgent.ResumeThreadAsync(
+                mainThreadId,
+                snapshot.MainAgent.ModelId,
+                session.WorkingDirectory,
+                snapshot.ApprovalMode,
+                cancellationToken);
         }
 
         var ledger = await EnsureLedgerAsync(session, cancellationToken);
+        var effectiveDecision = decision;
+        if (decision.Kind == DelegationDecisionKind.InvokeWorker && !decision.Forced)
+        {
+            (effectiveDecision, ledger) = await ConfirmDelegationWithSolAsync(
+                session,
+                localTurnId,
+                mainThreadId,
+                snapshot,
+                ledger,
+                cancellationToken);
+            await SetDelegationAsync(taskId, localTurnId, effectiveDecision, cancellationToken);
+        }
+
         string? workerSummary = null;
-        if (useWorker)
+        if (effectiveDecision.Kind == DelegationDecisionKind.InvokeWorker)
         {
             try
             {
-                var workerExecution = await ExecuteWorkerAsync(session, localTurnId, profile, ledger, forceNative: false, cancellationToken);
+                var workerExecution = await ExecuteWorkerAsync(session, localTurnId, snapshot, ledger, forceNative: false, cancellationToken);
                 workerSummary = workerExecution.Summary;
                 ledger = workerExecution.Ledger;
                 if (!workerExecution.Succeeded
-                    && profile.WorkerPolicy.FallbackAction == FallbackAction.NativeLuna
-                    && profile.WorkerPolicy.Source == WorkerSource.ExternalProvider)
+                    && snapshot.WorkerPolicy.FallbackAction == FallbackAction.NativeLuna
+                    && snapshot.WorkerPolicy.Source == WorkerSource.ExternalProvider)
                 {
-                    var fallback = await ExecuteWorkerAsync(session, localTurnId, profile, ledger, forceNative: true, cancellationToken);
+                    var fallback = await ExecuteWorkerAsync(session, localTurnId, snapshot, ledger, forceNative: true, cancellationToken);
+                    if (!fallback.Succeeded)
+                    {
+                        throw new InvalidOperationException($"外部 Worker 和方案指定的原生 Luna 回退均失败：{fallback.Summary}");
+                    }
+
                     workerSummary = fallback.Summary;
                     ledger = fallback.Ledger;
                 }
-                else if (!workerExecution.Succeeded && profile.WorkerPolicy.FallbackAction == FallbackAction.AskUser)
+                else if (!workerExecution.Succeeded && snapshot.WorkerPolicy.FallbackAction == FallbackAction.AskUser)
                 {
                     throw new InvalidOperationException("工作代理失败；当前方案要求先询问用户，任务已停止在主代理执行前。");
                 }
+                else if (!workerExecution.Succeeded && snapshot.WorkerPolicy.FallbackAction == FallbackAction.StopDelegation)
+                {
+                    throw new InvalidOperationException($"工作代理失败；当前方案要求停止委派链：{workerExecution.Summary}");
+                }
             }
-            catch (Exception exception) when (profile.WorkerPolicy.FallbackAction is FallbackAction.SingleAgent or FallbackAction.StopDelegation)
+            catch (Exception exception) when (snapshot.WorkerPolicy.FallbackAction == FallbackAction.SingleAgent)
             {
                 workerSummary = $"工作代理未能启动或完成，已按当前方案由主代理接管。原因：{exception.Message}";
             }
@@ -266,13 +533,14 @@ public sealed class ControlledTaskService
         await UpdateStatusAsync(taskId, localTurnId, ControlledTaskStatus.MainAgentRunning, null, cancellationToken);
         session = await RequireAsync(taskId, cancellationToken);
         var userInput = session.Turns.Single(turn => turn.Id == localTurnId).UserInput;
-        var prompt = BuildMainPrompt(userInput, profile, workerSummary);
+        var prompt = BuildMainPrompt(userInput, snapshot, workerSummary);
         var handle = await runtime.MainAgent.StartTurnAsync(
             mainThreadId,
             prompt,
-            profile.MainAgent.ModelId,
-            profile.MainAgent.ReasoningEffort,
+            snapshot.MainAgent.ModelId,
+            snapshot.MainAgent.ReasoningEffort,
             session.WorkingDirectory,
+            snapshot.ApprovalMode,
             cancellationToken);
         await SetServerTurnAsync(taskId, localTurnId, handle.TurnId, cancellationToken);
 
@@ -286,6 +554,16 @@ public sealed class ControlledTaskService
             if (activity.Kind == MainAgentEventKind.OutputDelta && !string.IsNullOrEmpty(activity.Text))
             {
                 await AppendMainOutputAsync(taskId, localTurnId, activity.Text, false, CancellationToken.None);
+            }
+            else if (activity.Kind == MainAgentEventKind.TraceItem && !string.IsNullOrWhiteSpace(activity.Text))
+            {
+                await AppendTraceAsync(
+                    taskId,
+                    localTurnId,
+                    activity.Text,
+                    activity.MessageKind ?? TaskMessageKind.ToolCall,
+                    activity.Status,
+                    CancellationToken.None);
             }
             else if (activity.Kind == MainAgentEventKind.ApprovalRequested)
             {
@@ -309,83 +587,153 @@ public sealed class ControlledTaskService
             taskId,
             $"main:{handle.TurnId}",
             new WorkerResult(localTurnId, ToWorkerStatus(mainResult.Status), mainResult.FinalText, mainResult.RawTurn, [], []),
-            new WorkerUsageContext("native-codex", profile.MainAgent.ModelId, profile.Budget.Currency, null));
+            new WorkerUsageContext("native-codex", snapshot.MainAgent.ModelId, snapshot.Budget.Currency, null));
         await usageLedger.AppendUsageAsync(mainUsage, cancellationToken);
         ledger = ledger with { CompletedAt = clock.UtcNow, UpdatedAt = clock.UtcNow };
         await usageLedger.UpsertTaskGroupAsync(ledger, cancellationToken);
     }
 
+    private async Task<(DelegationDecision Decision, TaskGroupLedger Ledger)> ConfirmDelegationWithSolAsync(
+        ControlledTaskSession session,
+        string localTurnId,
+        string mainThreadId,
+        TaskProfileSnapshot snapshot,
+        TaskGroupLedger ledger,
+        CancellationToken cancellationToken)
+    {
+        await UpdateStatusAsync(session.Id, localTurnId, ControlledTaskStatus.MainAgentRunning, null, cancellationToken);
+        var userInput = session.Turns.Single(turn => turn.Id == localTurnId).UserInput;
+        var prompt = $"""
+            你是当前受控对话的主代理。只判断本轮是否应委派给配置好的 Worker，不要执行用户任务。
+            路由模式：{snapshot.WorkerPolicy.RoutingMode}
+            Worker：{snapshot.Provider?.Name ?? snapshot.WorkerPolicy.PreferredProviderId}
+            用户任务：{userInput}
+
+            任务若存在可独立、可核验并能减少主线程重复工作的子问题，回复且只回复 DELEGATE；否则只回复 SINGLE。
+            """;
+        var handle = await runtime.MainAgent.StartTurnAsync(
+            mainThreadId,
+            prompt,
+            snapshot.MainAgent.ModelId,
+            snapshot.MainAgent.ReasoningEffort,
+            session.WorkingDirectory,
+            snapshot.ApprovalMode,
+            cancellationToken);
+        var result = await runtime.MainAgent.WaitForTurnAsync(mainThreadId, handle.TurnId, cancellationToken);
+        if (result.Status != ControlledTaskStatus.Completed)
+        {
+            throw new InvalidOperationException($"主代理委派判定失败：{result.ErrorMessage ?? result.Status.ToString()}");
+        }
+
+        var routingReply = result.FinalText?.Trim();
+        var delegated = string.Equals(routingReply, "DELEGATE", StringComparison.OrdinalIgnoreCase);
+        if (!delegated && !string.Equals(routingReply, "SINGLE", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("主代理委派判定没有返回有效的 DELEGATE 或 SINGLE。为避免误调用 Worker，本轮已停止。");
+        }
+        var decision = new DelegationDecision(
+            delegated ? DelegationDecisionKind.InvokeWorker : DelegationDecisionKind.Skip,
+            delegated ? "Sol 判定本轮存在适合 Worker 的独立工作。" : "Sol 判定本轮应由主代理独立完成。",
+            false,
+            delegated ? snapshot.Provider?.Id ?? "native-codex" : null,
+            delegated ? snapshot.Provider?.ModelId ?? NativeWorkerModel(snapshot.WorkerPolicy) : null,
+            clock.UtcNow);
+        await AppendTraceAsync(
+            session.Id,
+            localTurnId,
+            decision.Reason,
+            TaskMessageKind.ToolCall,
+            "委派决策",
+            cancellationToken);
+        var usage = usageCollector.Capture(
+            session.Id,
+            $"main-decision:{handle.TurnId}",
+            new WorkerResult(localTurnId, ToWorkerStatus(result.Status), result.FinalText, result.RawTurn, [], []),
+            new WorkerUsageContext("native-codex", snapshot.MainAgent.ModelId, snapshot.Budget.Currency, null));
+        await usageLedger.AppendUsageAsync(usage, cancellationToken);
+        return (decision, ledger);
+    }
+
     private async Task<(string? Summary, TaskGroupLedger Ledger, bool Succeeded)> ExecuteWorkerAsync(
         ControlledTaskSession session,
         string localTurnId,
-        Profile profile,
+        TaskProfileSnapshot snapshot,
         TaskGroupLedger ledger,
         bool forceNative,
         CancellationToken cancellationToken)
     {
-        var resolved = await ResolveWorkerAsync(profile, forceNative, cancellationToken);
-        try
-        {
-            var workerTask = new WorkerTask(
+        var workerTask = new WorkerTask(
             session.Id,
             $"{session.Id}-W1",
             "为主代理提供独立、可审查的工作结果",
             BuildWorkerPrompt(session.Turns.Single(turn => turn.Id == localTurnId).UserInput),
             session.WorkingDirectory,
-            resolved.ModelId,
-            resolved.ReasoningEffort,
+            snapshot.Provider?.ModelId ?? "pending-resolution",
+            "medium",
             new WorkerScope([session.WorkingDirectory], [], [ScopeOperation.Read, ScopeOperation.Search]),
             ["简明工作结果", "风险和未决项"],
             ["结果与用户任务直接相关", "不冒充主代理最终回答"],
-            ["需要扩大权限或修改范围时停止"]);
-            var job = await resolved.Adapter.SpawnAsync(workerTask, cancellationToken);
+            ["需要扩大权限或修改范围时停止"],
+            null,
+            snapshot.ApprovalMode);
+
+        var execution = await workerOrchestrator.ExecuteAsync(
+            snapshot,
+            workerTask,
+            forceNative,
+            async activity =>
+            {
+                var job = activity.Job;
             var run = new ControlledWorkerRun(
-            job.JobId,
-            job.ThreadId,
-            job.TurnId,
-            job.AdapterId,
-            resolved.ModelId,
-            resolved.ReasoningEffort,
-            job.Status,
-            job.StartedAt,
-            null,
-            null,
-            job.StatusMessage);
-            await AddWorkerAsync(session.Id, localTurnId, run, cancellationToken);
-            await UpdateStatusAsync(session.Id, localTurnId, ControlledTaskStatus.WorkerRunning, null, cancellationToken);
+                job.JobId,
+                job.ThreadId,
+                job.TurnId,
+                job.AdapterId,
+                activity.ModelId,
+                activity.ReasoningEffort,
+                job.Status,
+                job.StartedAt,
+                null,
+                null,
+                job.StatusMessage,
+                activity.ProviderId,
+                activity.ProviderName);
+                await AddWorkerAsync(session.Id, localTurnId, run, cancellationToken);
+                await UpdateStatusAsync(session.Id, localTurnId, ControlledTaskStatus.WorkerRunning, null, cancellationToken);
 
             var workerLedger = new WorkerLedgerEntry(
-            job.JobId,
-            job.ThreadId,
-            job.AdapterId,
-            resolved.ModelId,
-            resolved.ReasoningEffort,
-            job.Status,
-            job.StartedAt,
-            null,
-            AdoptionStatus.Pending,
-            "为主代理提供独立分析结果",
-            "主代理跳过相同的重复初步分析",
-            null,
-            false,
-            null,
-            null);
-            ledger = ledger with { Workers = ledger.Workers.Append(workerLedger).ToArray(), UpdatedAt = clock.UtcNow };
-            await usageLedger.UpsertTaskGroupAsync(ledger, cancellationToken);
+                job.JobId,
+                job.ThreadId,
+                job.AdapterId,
+                activity.ModelId,
+                activity.ReasoningEffort,
+                job.Status,
+                job.StartedAt,
+                null,
+                AdoptionStatus.Pending,
+                "为主代理提供独立分析结果",
+                "主代理跳过相同的重复初步分析",
+                null,
+                false,
+                null,
+                null);
+                ledger = ledger with { Workers = ledger.Workers.Append(workerLedger).ToArray(), UpdatedAt = clock.UtcNow };
+                await usageLedger.UpsertTaskGroupAsync(ledger, cancellationToken);
+            },
+            cancellationToken);
 
-            var result = await resolved.Adapter.WaitAsync(job.JobId, TimeSpan.FromHours(2), cancellationToken)
-                ?? throw new TimeoutException("Worker 在等待期限内没有返回终态。");
-            var finalJob = await resolved.Adapter.ReadStatusAsync(job.JobId, cancellationToken);
-            await CompleteWorkerAsync(session.Id, localTurnId, finalJob, result, cancellationToken);
-            var snapshot = usageCollector.Capture(
-            session.Id,
-            job.JobId,
-            result,
-            new WorkerUsageContext(resolved.ProviderId, resolved.ModelId, profile.Budget.Currency, resolved.Pricing));
-            await usageLedger.AppendUsageAsync(snapshot, cancellationToken);
-            ledger = ledger with
-            {
-                Workers = ledger.Workers.Select(worker => worker.JobId == job.JobId
+        var result = execution.Result;
+        var finalJob = execution.FinalJob;
+        await CompleteWorkerAsync(session.Id, localTurnId, finalJob, result, cancellationToken);
+        var usageSnapshot = usageCollector.Capture(
+                session.Id,
+                finalJob.JobId,
+                result,
+                new WorkerUsageContext(execution.ProviderId, execution.ModelId, snapshot.Budget.Currency, execution.Pricing));
+        await usageLedger.AppendUsageAsync(usageSnapshot, cancellationToken);
+        ledger = ledger with
+        {
+            Workers = ledger.Workers.Select(worker => worker.JobId == finalJob.JobId
                     ? worker with
                     {
                         Status = finalJob.Status,
@@ -395,52 +743,12 @@ public sealed class ControlledTaskService
                         ResultSummary = result.Summary,
                     }
                     : worker).ToArray(),
-                UpdatedAt = clock.UtcNow,
-            };
-            await usageLedger.UpsertTaskGroupAsync(ledger, cancellationToken);
+            UpdatedAt = clock.UtcNow,
+        };
+        await usageLedger.UpsertTaskGroupAsync(ledger, cancellationToken);
 
-            var succeeded = result.Status == WorkerJobStatus.Completed;
-            return (succeeded ? result.Summary : $"Worker 未成功完成：{result.Summary}", ledger, succeeded);
-        }
-        finally
-        {
-            if (resolved.OwnedAdapter is not null)
-            {
-                await resolved.OwnedAdapter.DisposeAsync();
-            }
-        }
-    }
-
-    private async Task<ResolvedWorker> ResolveWorkerAsync(Profile profile, bool forceNative, CancellationToken cancellationToken)
-    {
-        if (forceNative || profile.WorkerPolicy.Source == WorkerSource.NativeCodex)
-        {
-            var modelId = profile.WorkerPolicy.PreferredProviderId switch
-            {
-                "native-sol" => "gpt-5.6-sol",
-                "native-terra" => "gpt-5.6-terra",
-                _ => "gpt-5.6-luna",
-            };
-            return new ResolvedWorker(runtime.NativeWorker, modelId, "medium", "native-codex", null, null);
-        }
-
-        if (profile.WorkerPolicy.Source == WorkerSource.ExternalProvider)
-        {
-            var providerId = profile.WorkerPolicy.PreferredProviderId
-                ?? throw new InvalidOperationException("当前方案没有选择外部 Provider。");
-            var provider = await providers.GetAsync(providerId, cancellationToken)
-                ?? throw new InvalidOperationException($"Provider {providerId} 不存在。");
-            if (!provider.IsEnabled)
-            {
-                throw new InvalidOperationException($"Provider {provider.Name} 已停用。");
-            }
-
-            var adapter = externalWorkers.Create(provider);
-            var modelId = provider.ModelId ?? throw new InvalidOperationException($"Provider {provider.Name} 没有选择模型。");
-            return new ResolvedWorker(adapter, modelId, "medium", provider.Id, provider.Pricing, adapter as IAsyncDisposable);
-        }
-
-        throw new InvalidOperationException("当前方案未启用 Worker。");
+        var succeeded = result.Status == WorkerJobStatus.Completed;
+        return (succeeded ? result.Summary : $"Worker 未成功完成：{result.Summary}", ledger, succeeded);
     }
 
     private async Task<TaskGroupLedger> EnsureLedgerAsync(ControlledTaskSession session, CancellationToken cancellationToken)
@@ -503,6 +811,12 @@ public sealed class ControlledTaskService
                             CompletedAt = job.CompletedAt,
                             ResultSummary = result.Summary,
                             StatusMessage = job.StatusMessage,
+                            ProviderId = result.ProviderId ?? worker.ProviderId,
+                            ProviderName = result.ProviderName ?? worker.ProviderName,
+                            RequestUri = result.RequestUri?.AbsoluteUri,
+                            ResponseModelId = result.ResponseModelId,
+                            Usage = result.Usage,
+                            FailureKind = result.FailureKind,
                         }
                         : worker).ToArray(),
                     Messages = string.IsNullOrWhiteSpace(result.Summary)
@@ -514,11 +828,20 @@ public sealed class ControlledTaskService
                             result.Summary,
                             clock.UtcNow,
                             true,
-                            job.JobId)).ToArray(),
+                            job.JobId,
+                            TaskMessageKind.WorkerProgress,
+                            true,
+                            result.ProviderId is null
+                                ? null
+                                : $"Provider={result.ProviderName ?? result.ProviderId}; Model={result.ResponseModelId ?? workerModel(turn, job.JobId)}; Endpoint={result.RequestUri}"))
+                            .ToArray(),
                 }
                 : turn).ToArray(),
             UpdatedAt = clock.UtcNow,
         }, cancellationToken);
+
+        static string? workerModel(ControlledTaskTurn turn, string jobId) =>
+            turn.Workers.FirstOrDefault(worker => worker.JobId == jobId)?.ModelId;
     }
 
     private async Task AppendMainOutputAsync(
@@ -536,6 +859,34 @@ public sealed class ControlledTaskService
             UpdatedAt = clock.UtcNow,
         }, cancellationToken);
     }
+
+    private Task AppendTraceAsync(
+        string taskId,
+        string localTurnId,
+        string text,
+        TaskMessageKind kind,
+        string? metadata,
+        CancellationToken cancellationToken) =>
+        MutateAsync(taskId, session => session with
+        {
+            Turns = session.Turns.Select(turn => turn.Id == localTurnId
+                ? turn with
+                {
+                    Messages = turn.Messages.Append(new ControlledTaskMessage(
+                        Guid.NewGuid(),
+                        localTurnId,
+                        TaskMessageActor.System,
+                        text,
+                        clock.UtcNow,
+                        true,
+                        null,
+                        kind,
+                        true,
+                        metadata)).ToArray(),
+                }
+                : turn).ToArray(),
+            UpdatedAt = clock.UtcNow,
+        }, cancellationToken);
 
     private async Task CompleteMainTurnAsync(
         string taskId,
@@ -565,6 +916,34 @@ public sealed class ControlledTaskService
         }, cancellationToken);
     }
 
+    private Task CompleteWorkerOnlyTurnAsync(
+        string taskId,
+        string localTurnId,
+        bool succeeded,
+        string? summary,
+        CancellationToken cancellationToken) =>
+        MutateAsync(taskId, session =>
+        {
+            var now = clock.UtcNow;
+            var status = succeeded ? ControlledTaskStatus.Completed : ControlledTaskStatus.Failed;
+            var error = succeeded ? null : summary ?? "Worker 测试失败。";
+            return session with
+            {
+                Status = status,
+                Turns = session.Turns.Select(turn => turn.Id == localTurnId
+                    ? turn with
+                    {
+                        Status = status,
+                        CompletedAt = now,
+                        ErrorMessage = error,
+                    }
+                    : turn).ToArray(),
+                UpdatedAt = now,
+                CompletedAt = now,
+                ErrorMessage = error,
+            };
+        }, cancellationToken);
+
     private async Task UpdateStatusAsync(
         string taskId,
         string localTurnId,
@@ -582,6 +961,19 @@ public sealed class ControlledTaskService
             ErrorMessage = status == ControlledTaskStatus.Failed ? message : session.ErrorMessage,
         }, cancellationToken);
     }
+
+    private Task SetDelegationAsync(
+        string taskId,
+        string localTurnId,
+        DelegationDecision decision,
+        CancellationToken cancellationToken) =>
+        MutateAsync(taskId, session => session with
+        {
+            Turns = session.Turns.Select(turn => turn.Id == localTurnId
+                ? turn with { Delegation = decision }
+                : turn).ToArray(),
+            UpdatedAt = clock.UtcNow,
+        }, cancellationToken);
 
     private Task FailAsync(
         string taskId,
@@ -642,7 +1034,12 @@ public sealed class ControlledTaskService
         await tasks.GetAsync(id, cancellationToken)
             ?? throw new KeyNotFoundException($"任务 {id} 不存在。");
 
-    private static ControlledTaskTurn NewTurn(string id, string input, DateTimeOffset now) => new(
+    private static ControlledTaskTurn NewTurn(
+        string id,
+        string input,
+        DateTimeOffset now,
+        TaskProfileSnapshot snapshot,
+        DelegationDecision decision) => new(
         id,
         null,
         input.Trim(),
@@ -651,7 +1048,9 @@ public sealed class ControlledTaskService
         [new ControlledTaskMessage(Guid.NewGuid(), id, TaskMessageActor.User, input.Trim(), now, true)],
         now,
         null,
-        null);
+        null,
+        snapshot,
+        decision);
 
     private static IReadOnlyList<ControlledTaskMessage> UpsertMainMessage(
         IReadOnlyList<ControlledTaskMessage> messages,
@@ -688,13 +1087,6 @@ public sealed class ControlledTaskService
             : message).ToArray();
     }
 
-    private static bool ShouldUseWorker(Profile profile, bool? requested) =>
-        profile.WorkerPolicy.Enabled
-        && profile.WorkerPolicy.Source != WorkerSource.Disabled
-        && profile.WorkerPolicy.RoutingMode != RoutingMode.Single
-        && (profile.WorkerPolicy.RoutingMode != RoutingMode.Manual || requested == true)
-        && requested != false;
-
     private static bool IsRunning(ControlledTaskStatus status) => status is
         ControlledTaskStatus.Queued or
         ControlledTaskStatus.WorkerRunning or
@@ -708,14 +1100,14 @@ public sealed class ControlledTaskService
     }
 
     private static string BuildWorkerPrompt(string input) => $"""
-        你是受控工作代理。请对下面的用户任务进行一次独立、简明、可核验的分析，输出可供主代理 Sol 最终审查的工作结果。
+        你是受控工作代理。请对下面的用户任务进行一次独立、简明、可核验的分析，输出可供主代理最终审查的工作结果。
         不要声称自己是最终回答者，不要扩大文件或权限范围；如果任务需要修改、执行或网络权限，只列出建议和风险并停止。
 
         用户任务：
         {input}
         """;
 
-    private static string BuildMainPrompt(string input, Profile profile, string? workerSummary)
+    private static string BuildMainPrompt(string input, TaskProfileSnapshot snapshot, string? workerSummary)
     {
         var workerSection = string.IsNullOrWhiteSpace(workerSummary)
             ? "本轮没有工作代理结果。请由主代理独立完成。"
@@ -727,7 +1119,7 @@ public sealed class ControlledTaskService
               </worker_result>
               """;
         return $"""
-            你是 Codex Agent Switch 当前方案“{profile.Name}”指定的主代理。请直接完成用户任务并给出最终结果。
+            你是 Codex Agent Switch 当前方案“{snapshot.ProfileName}”指定的主代理。请直接完成用户任务并给出最终结果。
             {workerSection}
 
             用户任务：
@@ -744,11 +1136,12 @@ public sealed class ControlledTaskService
         _ => WorkerJobStatus.Running,
     };
 
-    private sealed record ResolvedWorker(
-        IWorkerAdapter Adapter,
-        string ModelId,
-        string ReasoningEffort,
-        string ProviderId,
-        ProviderPricing? Pricing,
-        IAsyncDisposable? OwnedAdapter);
+    private static string NativeWorkerModel(WorkerPolicy policy) => policy.PreferredProviderId switch
+    {
+        "native-sol" => "gpt-5.6-sol",
+        "native-terra" => "gpt-5.6-terra",
+        "native-luna" => "gpt-5.6-luna",
+        _ => throw new InvalidOperationException($"不支持的原生 Worker：{policy.PreferredProviderId}。"),
+    };
+
 }

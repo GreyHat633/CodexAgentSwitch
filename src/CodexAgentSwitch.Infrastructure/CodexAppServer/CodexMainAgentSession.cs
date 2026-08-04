@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using CodexAgentSwitch.Application.Tasks;
+using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Tasks;
 
 namespace CodexAgentSwitch.Infrastructure.CodexAppServer;
@@ -8,28 +9,35 @@ namespace CodexAgentSwitch.Infrastructure.CodexAppServer;
 public sealed class CodexMainAgentSession : IMainAgentSession
 {
     private readonly CodexAppServerClient client;
+    private readonly ICodexModelResolver modelResolver;
     private readonly ConcurrentDictionary<string, TurnRuntime> turns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingApproval> approvals = new(StringComparer.Ordinal);
 
-    public CodexMainAgentSession(CodexAppServerClient client)
+    public CodexMainAgentSession(CodexAppServerClient client, ICodexModelResolver? modelResolver = null)
     {
         this.client = client;
+        this.modelResolver = modelResolver ?? new CodexModelResolver();
         client.NotificationReceived += OnNotificationAsync;
         client.ServerRequestReceived += OnServerRequestAsync;
     }
 
     public event Func<MainAgentEvent, Task>? EventReceived;
 
-    public async Task<string> CreateThreadAsync(string modelId, string workingDirectory, CancellationToken cancellationToken = default)
+    public async Task<string> CreateThreadAsync(
+        string modelId,
+        string workingDirectory,
+        ExecutionApprovalMode approvalMode,
+        CancellationToken cancellationToken = default)
     {
+        var model = await modelResolver.ResolveAsync(client, modelId, cancellationToken);
         var response = await client.RequestAsync(
             "thread/start",
             new
             {
-                model = modelId,
+                model = model.ModelId,
                 cwd = workingDirectory,
-                approvalPolicy = "on-request",
-                sandbox = "workspace-write",
+                approvalPolicy = ApprovalPolicy(approvalMode),
+                sandbox = SandboxMode(approvalMode),
                 ephemeral = false,
                 serviceName = "codex-agent-switch",
             },
@@ -38,17 +46,23 @@ public sealed class CodexMainAgentSession : IMainAgentSession
             ?? throw new InvalidDataException("thread/start did not return a thread id.");
     }
 
-    public async Task ResumeThreadAsync(string threadId, string modelId, string workingDirectory, CancellationToken cancellationToken = default)
+    public async Task ResumeThreadAsync(
+        string threadId,
+        string modelId,
+        string workingDirectory,
+        ExecutionApprovalMode approvalMode,
+        CancellationToken cancellationToken = default)
     {
+        var model = await modelResolver.ResolveAsync(client, modelId, cancellationToken);
         await client.RequestAsync(
             "thread/resume",
             new
             {
                 threadId,
-                model = modelId,
+                model = model.ModelId,
                 cwd = workingDirectory,
-                approvalPolicy = "on-request",
-                sandbox = "workspace-write",
+                approvalPolicy = ApprovalPolicy(approvalMode),
+                sandbox = SandboxMode(approvalMode),
             },
             cancellationToken);
     }
@@ -59,8 +73,10 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         string modelId,
         string reasoningEffort,
         string workingDirectory,
+        ExecutionApprovalMode approvalMode,
         CancellationToken cancellationToken = default)
     {
+        var model = await modelResolver.ResolveAsync(client, modelId, cancellationToken);
         var response = await client.RequestAsync(
             "turn/start",
             new
@@ -68,14 +84,9 @@ public sealed class CodexMainAgentSession : IMainAgentSession
                 threadId,
                 input = new[] { new { type = "text", text = prompt, text_elements = Array.Empty<object>() } },
                 cwd = workingDirectory,
-                approvalPolicy = "on-request",
-                sandboxPolicy = new
-                {
-                    type = "workspaceWrite",
-                    writableRoots = new[] { workingDirectory },
-                    networkAccess = false,
-                },
-                model = modelId,
+                approvalPolicy = ApprovalPolicy(approvalMode),
+                sandboxPolicy = TurnSandboxPolicy(approvalMode, workingDirectory),
+                model = model.ModelId,
                 effort = reasoningEffort,
                 summary = "concise",
             },
@@ -175,6 +186,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         {
             "turn/started" => new(MainAgentEventKind.TurnStarted, threadId, turnId, null, "running", parameters.Clone()),
             "item/agentMessage/delta" => new(MainAgentEventKind.OutputDelta, threadId, turnId, ReadDelta(parameters), null, parameters.Clone()),
+            "item/completed" => CreateTraceEvent(threadId, turnId, parameters),
             "thread/status/changed" => new(MainAgentEventKind.StatusChanged, threadId, turnId, null, ReadStatus(parameters), parameters.Clone()),
             "turn/completed" => new(MainAgentEventKind.TurnCompleted, threadId, turnId, ExtractAgentText(turn), ReadStatus(turn), parameters.Clone()),
             _ => null,
@@ -214,6 +226,49 @@ public sealed class CodexMainAgentSession : IMainAgentSession
 
     private static string? ReadDelta(JsonElement parameters) =>
         parameters.TryGetProperty("delta", out var delta) ? delta.GetString() : null;
+
+    private static MainAgentEvent? CreateTraceEvent(string threadId, string turnId, JsonElement parameters)
+    {
+        if (!parameters.TryGetProperty("item", out var item) || item.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var type = item.TryGetProperty("type", out var typeElement) ? typeElement.GetString() : null;
+        if (type == "agentMessage")
+        {
+            return null;
+        }
+
+        var kind = type switch
+        {
+            "fileChange" => TaskMessageKind.FileChange,
+            "patch" or "diff" => TaskMessageKind.Diff,
+            _ => TaskMessageKind.ToolCall,
+        };
+        var summary = type switch
+        {
+            "commandExecution" => ReadString(item, "command") ?? "命令执行完成",
+            "fileChange" => ReadString(item, "path") ?? "文件修改完成",
+            "mcpToolCall" => $"工具调用：{ReadString(item, "tool") ?? ReadString(item, "name") ?? "未命名工具"}",
+            "collabToolCall" => $"工作代理活动：{ReadString(item, "tool") ?? ReadString(item, "name") ?? "任务更新"}",
+            null => "工具活动完成",
+            _ => $"{type} 已完成",
+        };
+        return new MainAgentEvent(
+            MainAgentEventKind.TraceItem,
+            threadId,
+            turnId,
+            summary,
+            ReadStatus(item),
+            parameters.Clone(),
+            kind);
+    }
+
+    private static string? ReadString(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     private static string? ReadStatus(JsonElement value)
     {
@@ -259,6 +314,24 @@ public sealed class CodexMainAgentSession : IMainAgentSession
     }
 
     private static string Key(string threadId, string turnId) => $"{threadId}:{turnId}";
+
+    private static string ApprovalPolicy(ExecutionApprovalMode mode) =>
+        ExecutionApprovalPolicy.Resolve(mode).ApprovalPolicy;
+
+    private static string SandboxMode(ExecutionApprovalMode mode) =>
+        ExecutionApprovalPolicy.Resolve(mode).SandboxMode;
+
+    private static object TurnSandboxPolicy(ExecutionApprovalMode mode, string workingDirectory) => mode switch
+    {
+        ExecutionApprovalMode.Safe => new { type = "readOnly" },
+        ExecutionApprovalMode.FullAuto => new { type = "dangerFullAccess" },
+        _ => new
+        {
+            type = "workspaceWrite",
+            writableRoots = new[] { workingDirectory },
+            networkAccess = false,
+        },
+    };
 
     private sealed class TurnRuntime(string threadId, string turnId)
     {

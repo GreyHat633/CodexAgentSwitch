@@ -137,6 +137,11 @@ public sealed class OpenAiCompatibleClientTests
         Assert.NotNull(result);
         Assert.Equal(WorkerJobStatus.Completed, result.Status);
         Assert.Equal("worker-result", result.Summary);
+        Assert.Equal("deepseek-test", result.ProviderId);
+        Assert.Equal("DeepSeek Test", result.ProviderName);
+        Assert.Equal(new Uri("https://api.deepseek.test/v1/chat/completions"), result.RequestUri);
+        Assert.Equal("deepseek-v4-flash", result.ResponseModelId);
+        Assert.Equal(8, result.Usage?.TotalTokens);
         await adapter.DeleteAsync(job.JobId);
         await Assert.ThrowsAsync<KeyNotFoundException>(() => adapter.ReadStatusAsync(job.JobId));
     }

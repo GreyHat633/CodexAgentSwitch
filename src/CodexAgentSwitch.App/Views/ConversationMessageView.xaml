@@ -1,0 +1,27 @@
+<UserControl
+    x:Class="CodexAgentSwitch.App.Views.ConversationMessageView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid x:Name="RootGrid" HorizontalAlignment="Stretch">
+        <Border
+            x:Name="MessageBorder"
+            MaxWidth="920"
+            Padding="14,10"
+            CornerRadius="10"
+            BorderThickness="1"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+            <StackPanel Spacing="8">
+                <Grid ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="ActorText" FontWeight="SemiBold" />
+                    <TextBlock x:Name="TimeText" Grid.Column="1" Style="{StaticResource CaptionTextStyle}" />
+                </Grid>
+                <ContentPresenter x:Name="MessageContent" HorizontalContentAlignment="Stretch" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

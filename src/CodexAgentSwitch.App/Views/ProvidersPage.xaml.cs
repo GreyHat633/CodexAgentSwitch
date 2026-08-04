@@ -146,7 +146,9 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         await repository.UpsertAsync(provider with { IsEnabled = enabled, UpdatedAt = DateTimeOffset.UtcNow });
         ProviderResultBar.Severity = InfoBarSeverity.Informational;
         ProviderResultBar.Title = enabled ? "服务商已启用" : "服务商已停用";
-        ProviderResultBar.Message = enabled ? "新的工作代理将使用所选 DeepSeek V4 模型。" : "新任务将回退到原生 Luna；凭据仍保留。";
+        ProviderResultBar.Message = enabled
+            ? "当前方案选择此 Provider 后，新的 Worker 请求将使用所选 DeepSeek V4 模型。"
+            : "Provider 已停用且凭据仍保留；任务将严格按当前 Profile 的回退策略处理，不会静默切换 Worker。";
         ProviderResultBar.IsOpen = true;
         await RefreshDeepSeekAsync();
     }

@@ -47,8 +47,17 @@ public sealed partial class UsageBudgetPage : Page
         if (ledgers.FirstOrDefault() is { } latest)
         {
             var report = App.Services.GetRequiredService<EconomicReportService>().Create(latest, await repository.ListUsageAsync(latest.Id));
+            ReportMainAgentText.Text = $"{latest.MainModelId}（{latest.MainReasoningEffort}）";
+            ReportWorkerText.Text = latest.Workers.Count == 0
+                ? "未调用"
+                : string.Join("、", latest.Workers.Select(worker => $"{worker.AdapterId} / {worker.ModelId}"));
+            ReportAdoptionText.Text = latest.Workers.Count == 0
+                ? "不适用"
+                : string.Join("、", latest.Workers.Select(worker => worker.AdoptionStatus.ToString()));
+            ReportEconomicText.Text = EconomicConclusionLabel(report.Conclusion);
             LatestReportBar.Title = $"经济结论：{EconomicConclusionLabel(report.Conclusion)}";
             LatestReportBar.Message = report.ConclusionReason;
+            LatestReportBar.IsOpen = true;
         }
     }
 
