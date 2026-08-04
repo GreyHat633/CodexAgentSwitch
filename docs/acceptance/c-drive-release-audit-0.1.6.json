@@ -1,5 +1,7 @@
 {
   "version": "0.1.6",
+  "releaseSourceCommit": "992f55ae4cdbbc32d538317b9870de2d3eaee9ec",
+  "auditRun": "c-drive-release-audit-20260804-104956",
   "temp": "E:\\AISPace\\主模型项目区\\state\\tmp",
   "bundleExtractOverride": "E:\\AISPace\\主模型项目区\\state\\tmp\\bundle-extract",
   "monitoredPhysicalEntriesBefore": 182,
