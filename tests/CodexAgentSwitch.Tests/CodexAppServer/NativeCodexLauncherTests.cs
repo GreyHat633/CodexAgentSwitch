@@ -1,10 +1,12 @@
 using System.Diagnostics;
 using CodexAgentSwitch.Application.Credentials;
+using CodexAgentSwitch.Application.NativeCodex;
 using CodexAgentSwitch.Application.Providers;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Common;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CodexAgentSwitch.Tests.CodexAppServer;
 
@@ -12,14 +14,35 @@ public sealed class NativeCodexLauncherTests
 {
     private const string Secret = "native-launch-secret-must-not-be-written";
 
-    [Theory]
-    [InlineData(ExecutionApprovalMode.Safe, "untrusted", "read-only")]
-    [InlineData(ExecutionApprovalMode.Automatic, "on-request", "workspace-write")]
-    [InlineData(ExecutionApprovalMode.FullAuto, "never", "danger-full-access")]
-    public async Task External_profile_generates_real_codex_arguments_and_secret_free_audit(
-        ExecutionApprovalMode approvalMode,
-        string expectedApprovalPolicy,
-        string expectedSandbox)
+    [Fact]
+    public void Formal_composition_root_can_resolve_native_launcher_and_model_resolver()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        Assert.StartsWith("E:\\", testRoot, StringComparison.OrdinalIgnoreCase);
+        var services = new ServiceCollection();
+        services.AddSingleton<CodexCommandLocator, FixedLocator>();
+        services.AddSingleton(new AppDataPaths(Path.Combine(testRoot, "cas-native-launcher-di")));
+        services.AddSingleton<INativeCodexProcessStarter, RecordingStarter>();
+        services.AddSingleton<ICodexModelResolver, FakeModelResolver>();
+        services.AddSingleton<IProviderRepository, EmptyProviderRepository>();
+        services.AddSingleton<ICredentialStore, EmptyCredentialStore>();
+        services.AddSingleton<INativeCodexLauncher, NativeCodexLauncher>();
+        services.AddSingleton<ICodexDesktopAppRegistration, RegistryCodexDesktopAppRegistration>();
+        services.AddSingleton<ICodexDesktopProcessStarter, CodexDesktopProcessStarter>();
+        services.AddSingleton<ICodexProjectConfigurationValidator, CodexProjectConfigurationValidator>();
+        services.AddSingleton<ICodexDesktopLauncher, CodexDesktopAppLauncher>();
+
+        using var container = services.BuildServiceProvider(validateScopes: true);
+
+        Assert.IsType<NativeCodexLauncher>(container.GetRequiredService<INativeCodexLauncher>());
+        Assert.IsType<FakeModelResolver>(container.GetRequiredService<ICodexModelResolver>());
+        Assert.IsType<CodexDesktopAppLauncher>(container.GetRequiredService<ICodexDesktopLauncher>());
+    }
+
+    [Fact]
+    public async Task External_profile_starts_cli_without_generating_a_fake_worker_configuration()
     {
         var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
             ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
@@ -29,37 +52,22 @@ public sealed class NativeCodexLauncherTests
         try
         {
             var now = DateTimeOffset.UtcNow;
-            var provider = new ProviderConfiguration(
-                "deepseek-default",
-                "DeepSeek",
-                ProviderKind.DeepSeek,
-                new Uri(DeepSeekV4Catalog.BaseUrl),
-                "provider/deepseek-default",
-                DeepSeekV4Catalog.FlashModelId,
-                new Dictionary<string, string>(),
-                TimeSpan.FromSeconds(60),
-                true,
-                null,
-                now,
-                now);
             var profile = new Profile(
                 Guid.NewGuid(),
                 "Sol + DeepSeek",
                 new AgentSelection("gpt-5.6-terra", "high"),
-                new WorkerPolicy(true, WorkerSource.ExternalProvider, provider.Id, null, 2, RoutingMode.Balanced, FallbackAction.StopDelegation),
+                new WorkerPolicy(true, WorkerSource.ExternalProvider, "deepseek-default", null, 2, RoutingMode.Balanced, FallbackAction.StopDelegation),
                 new BudgetLimits(null, null, null, null, null, "CNY"),
                 true,
                 now,
                 now,
                 null)
             {
-                ApprovalMode = approvalMode,
+                ApprovalMode = ExecutionApprovalMode.Automatic,
             };
             var starter = new RecordingStarter();
             var launcher = new NativeCodexLauncher(
                 new FixedLocator(),
-                new MemoryProviderRepository(provider),
-                new FakeCredentialStore(),
                 new AppDataPaths(root),
                 starter,
                 new FakeModelResolver());
@@ -68,25 +76,72 @@ public sealed class NativeCodexLauncherTests
 
             Assert.Equal(4242, result.ProcessId);
             Assert.NotNull(starter.StartInfo);
-            Assert.Equal(root, starter.StartInfo!.WorkingDirectory);
-            Assert.Contains("-m", starter.StartInfo.ArgumentList);
-            Assert.Contains("gpt-5.6-terra", starter.StartInfo.ArgumentList);
-            Assert.Contains("model_reasoning_effort=\"high\"", starter.StartInfo.ArgumentList);
-            Assert.Contains(expectedApprovalPolicy, starter.StartInfo.ArgumentList);
-            Assert.Contains(expectedSandbox, starter.StartInfo.ArgumentList);
-            Assert.Contains("agents.max_concurrent_threads_per_session=2", starter.StartInfo.ArgumentList);
-            Assert.Equal(Secret, starter.StartInfo.Environment["CAS_NATIVE_WORKER_API_KEY"]);
-            Assert.True(File.Exists(result.GeneratedConfigurationPath));
-            var workerToml = await File.ReadAllTextAsync(result.GeneratedConfigurationPath);
-            Assert.Contains("model = \"deepseek-v4-flash\"", workerToml);
-            Assert.Contains("model_provider = \"cas_external\"", workerToml);
-            Assert.Contains("wire_api = \"responses\"", workerToml);
-            Assert.DoesNotContain(Secret, workerToml);
-            var allDiskText = string.Join("\n", Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Select(File.ReadAllText));
-            Assert.DoesNotContain(Secret, allDiskText);
+            Assert.Empty(Directory.EnumerateFiles(root, "worker-*.toml", SearchOption.AllDirectories));
+            var audit = await File.ReadAllTextAsync(Path.Combine(root, "native-codex", $"launch-{profile.Id:D}.json"));
+            Assert.Contains("deepseek-default", audit, StringComparison.Ordinal);
+            Assert.Contains("externalProviderWorkerSupported", audit, StringComparison.Ordinal);
         }
         finally
         {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "LiveNative")]
+    public async Task Eligible_native_profile_starts_a_real_codex_process_and_writes_a_secret_free_audit()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("CAS_RUN_NATIVE_LAUNCH_E2E"), "1", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(Path.GetFullPath(testRoot), $"native-launch-live-{Guid.NewGuid():N}");
+        Assert.StartsWith("E:\\", root, StringComparison.OrdinalIgnoreCase);
+        Directory.CreateDirectory(root);
+        Process? process = null;
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var profile = new Profile(
+                Guid.NewGuid(),
+                "LIVE Terra native",
+                new AgentSelection("gpt-5.6-terra", "low"),
+                new WorkerPolicy(false, WorkerSource.Disabled, null, null, 1, RoutingMode.Single, FallbackAction.SingleAgent),
+                new BudgetLimits(null, null, null, null, null, "CNY"),
+                true,
+                now,
+                now,
+                null);
+            var launcher = new NativeCodexLauncher(
+                new CodexCommandLocator(),
+                new AppDataPaths(root),
+                new NativeCodexProcessStarter(),
+                new CodexModelResolver());
+
+            var result = await launcher.LaunchAsync(profile, root);
+            process = Process.GetProcessById(result.ProcessId);
+            await Task.Delay(750);
+            process.Refresh();
+            Assert.False(process.HasExited, "原生 Codex 进程在启动后立即退出。");
+            var audit = await File.ReadAllTextAsync(Path.Combine(root, "native-codex", $"launch-{profile.Id:D}.json"));
+            Assert.Contains("gpt-5.6-terra", audit);
+            Assert.DoesNotContain(Secret, audit);
+        }
+        finally
+        {
+            if (process is { HasExited: false })
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+
+            process?.Dispose();
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, true);
@@ -132,27 +187,20 @@ public sealed class NativeCodexLauncherTests
                 null);
     }
 
-    private sealed class MemoryProviderRepository(ProviderConfiguration provider) : IProviderRepository
+    private sealed class EmptyProviderRepository : IProviderRepository
     {
-        public Task<IReadOnlyList<ProviderConfiguration>> ListAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<ProviderConfiguration>>([provider]);
-
-        public Task<ProviderConfiguration?> GetAsync(string id, CancellationToken cancellationToken = default) =>
-            Task.FromResult<ProviderConfiguration?>(string.Equals(id, provider.Id, StringComparison.Ordinal) ? provider : null);
-
-        public Task UpsertAsync(ProviderConfiguration value, CancellationToken cancellationToken = default) => Task.CompletedTask;
-
+        public Task<IReadOnlyList<ProviderConfiguration>> ListAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProviderConfiguration>>([]);
+        public Task<ProviderConfiguration?> GetAsync(string id, CancellationToken cancellationToken = default) => Task.FromResult<ProviderConfiguration?>(null);
+        public Task UpsertAsync(ProviderConfiguration provider, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task DeleteAsync(string id, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
-    private sealed class FakeCredentialStore : ICredentialStore
+    private sealed class EmptyCredentialStore : ICredentialStore
     {
-        public Task<bool> ExistsAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult(true);
-
-        public Task SaveAsync(string referenceId, string value, CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-        public Task<string?> ReadAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult<string?>(Secret);
-
+        public Task<bool> ExistsAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult(false);
+        public Task SaveAsync(string referenceId, string secret, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<string?> ReadAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
         public Task DeleteAsync(string referenceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
+
 }

@@ -2,37 +2,171 @@
     x:Class="CodexAgentSwitch.App.Views.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:CodexAgentSwitch.App.Views">
-    <ScrollViewer>
-        <StackPanel Padding="{StaticResource PagePadding}" Spacing="24" MaxWidth="900">
-            <local:PageHeader Title="设置" Subtitle="普通流程不需要编辑 JSON 或 TOML；高级选项按需展开。" />
-            <Border Style="{StaticResource CardBorderStyle}">
-                <StackPanel Spacing="16">
-                    <TextBlock Text="外观与无障碍" Style="{StaticResource SectionTitleStyle}" />
-                    <Grid><StackPanel><TextBlock Text="应用主题" /><TextBlock Text="默认跟随 Windows" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ComboBox HorizontalAlignment="Right" SelectedIndex="0"><ComboBoxItem Content="使用系统设置" /><ComboBoxItem Content="浅色" /><ComboBoxItem Content="深色" /></ComboBox></Grid>
-                    <Grid><StackPanel><TextBlock Text="减少动画" /><TextBlock Text="尊重系统设置；也可在本应用中强制关闭" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" OffContent="跟随系统" OnContent="已开启" /></Grid>
-                    <Grid><StackPanel><TextBlock Text="高对比度" /><TextBlock Text="自动使用系统高对比资源" Style="{StaticResource CaptionTextStyle}" /></StackPanel><TextBlock HorizontalAlignment="Right" Text="由系统管理" Style="{StaticResource CaptionTextStyle}" /></Grid>
-                </StackPanel>
-            </Border>
-            <Border Style="{StaticResource CardBorderStyle}">
-                <StackPanel Spacing="16">
-                    <TextBlock Text="会话与数据" Style="{StaticResource SectionTitleStyle}" />
-                    <Grid><StackPanel><TextBlock Text="启动时恢复上次方案" /><TextBlock Text="不会自动恢复已取消的工作代理" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
-                    <Grid><StackPanel><TextBlock Text="诊断日志" /><TextBlock Text="默认脱敏且不记录输入内容或 API 密钥" Style="{StaticResource CaptionTextStyle}" /></StackPanel><ToggleSwitch HorizontalAlignment="Right" IsOn="True" /></Grid>
-                    <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="备份配置" Tag="settings:backup" /><Button Content="恢复配置" Tag="settings:restore" /><Button Content="导出崩溃日志" Tag="settings:diagnostics" /></StackPanel>
-                    <InfoBar x:Name="SettingsActionBar" IsOpen="False" />
-                </StackPanel>
-            </Border>
-            <Expander Header="高级设置">
-                <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0">
-                    <StackPanel Spacing="16">
-                        <TextBox Header="Codex 可执行文件" Text="自动检测" IsReadOnly="True" />
-                        <TextBox Header="协议 Schema 缓存目录" Text="应用数据目录 / protocol-cache" IsReadOnly="True" />
-                        <NumberBox Header="应用服务器请求超时（秒）" Value="30" Minimum="5" Maximum="300" SpinButtonPlacementMode="Compact" />
-                        <InfoBar IsOpen="True" Severity="Warning" Title="高级选项" Message="协议兼容性和 Thread 所有权保护不会因这里的设置而关闭。" />
+    xmlns:local="using:CodexAgentSwitch.App.Views"
+    Loaded="OnLoaded">
+    <Grid>
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+        <Grid Padding="{StaticResource PagePadding}">
+            <StackPanel HorizontalAlignment="Center" MaxWidth="{StaticResource PageContentMaxWidth}" Spacing="20">
+                <local:PageHeader Title="设置" Subtitle="普通流程不需要编辑 JSON 或 TOML；高级选项按需展开。" />
+
+                <Border Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="14">
+                        <TextBlock Text="外观与无障碍" Style="{StaticResource SectionTitleStyle}" />
+                        <Grid x:Name="ThemeSettingGrid" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="240" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="应用主题" FontWeight="SemiBold" />
+                                <TextBlock Text="默认跟随 Windows；可选择浅色或深色。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox x:Name="ThemeSelector" Grid.Column="1" HorizontalAlignment="Stretch" SelectedIndex="0" AutomationProperties.Name="应用主题">
+                                <ComboBoxItem Content="使用系统设置" />
+                                <ComboBoxItem Content="浅色" />
+                                <ComboBoxItem Content="深色" />
+                            </ComboBox>
+                        </Grid>
+                        <Grid x:Name="MotionSettingGrid" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="240" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="减少动画" FontWeight="SemiBold" />
+                                <TextBlock Text="尊重系统设置；也可在本应用中强制关闭。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch x:Name="ReduceMotionSwitch" Grid.Column="1" HorizontalAlignment="Left" OffContent="跟随系统" OnContent="已开启" />
+                        </Grid>
+                        <Grid x:Name="ContrastSettingGrid" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="240" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="高对比度" FontWeight="SemiBold" />
+                                <TextBlock Text="自动使用 Windows 高对比度资源。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <TextBlock x:Name="ContrastStatusText" Grid.Column="1" Text="由系统管理" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                        </Grid>
                     </StackPanel>
                 </Border>
-            </Expander>
-        </StackPanel>
+
+                <Border Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="14">
+                        <TextBlock Text="Codex 运行入口" Style="{StaticResource SectionTitleStyle}" />
+                        <Grid x:Name="CodexCliSettingGrid" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="240" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Codex CLI 路径" FontWeight="SemiBold" />
+                                <TextBlock Text="仅供“Codex CLI 模式（高级）”使用，不会作为桌面模式的回退。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <TextBlock x:Name="CliPathText" Grid.Column="1" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.Name="Codex CLI 状态" />
+                        </Grid>
+                        <Grid x:Name="DesktopAppSettingGrid" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="240" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Codex 桌面应用" FontWeight="SemiBold" />
+                                <TextBlock Text="“原生 Codex 模式”只会尝试启动官方图形桌面应用；未检测到时不会静默启动终端。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <TextBlock x:Name="DesktopAppStatusText" Grid.Column="1" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.Name="Codex 桌面应用状态" />
+                            <StackPanel x:Name="DesktopManualEntryPanel" Grid.Row="2" Grid.ColumnSpan="2" Spacing="6">
+                                <TextBox x:Name="DesktopEntryBox" Header="手动指定桌面应用入口" PlaceholderText="输入官方 Codex 桌面应用 .exe 的完整路径" />
+                                <Button Content="保存桌面应用入口" HorizontalAlignment="Left" Click="SaveDesktopEntry" />
+                            </StackPanel>
+                        </Grid>
+                        <Grid x:Name="AppServerSettingGrid" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="240" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="App Server 状态" FontWeight="SemiBold" />
+                                <TextBlock Text="仅由 CodexAgentSwitch 模式按需连接，用于受控对话与任务。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <TextBlock x:Name="AppServerStatusText" Grid.Column="1" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.Name="App Server 状态" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="14">
+                        <TextBlock Text="会话与数据" Style="{StaticResource SectionTitleStyle}" />
+                        <Grid x:Name="RestoreSettingGrid" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="240" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="启动时恢复上次方案" FontWeight="SemiBold" />
+                                <TextBlock Text="不会自动恢复已取消的工作代理。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch x:Name="RestoreProfileSwitch" Grid.Column="1" HorizontalAlignment="Left" IsOn="True" />
+                        </Grid>
+                        <Grid x:Name="LogSettingGrid" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="240" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="诊断日志" FontWeight="SemiBold" />
+                                <TextBlock Text="默认脱敏，不记录对话输入或 API 密钥。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch x:Name="DiagnosticLogSwitch" Grid.Column="1" HorizontalAlignment="Left" IsOn="True" />
+                        </Grid>
+                        <Grid x:Name="DataActionsGrid" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="240" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="配置与诊断" FontWeight="SemiBold" />
+                                <TextBlock Text="备份不包含 Windows 凭据；恢复包先验证并暂存。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel x:Name="DataActionsPanel" Grid.Column="1" Spacing="6">
+                                <Button Content="备份配置" Tag="settings:backup" HorizontalAlignment="Stretch" />
+                                <Button Content="恢复最新配置" Tag="settings:restore" HorizontalAlignment="Stretch" />
+                                <Button Content="导出脱敏诊断日志" Tag="settings:diagnostics" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                        </Grid>
+                        <InfoBar x:Name="SettingsActionBar" IsOpen="False" IsClosable="True" />
+                    </StackPanel>
+                </Border>
+
+                <Expander Header="高级设置">
+                    <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0">
+                        <StackPanel Spacing="14">
+                            <TextBox Header="Codex 可执行文件" Text="自动检测" IsReadOnly="True" />
+                            <TextBox Header="协议 Schema 缓存目录" Text="应用数据目录 / protocol-cache" IsReadOnly="True" />
+                            <NumberBox Header="应用服务器请求超时（秒）" Value="30" Minimum="5" Maximum="300" SpinButtonPlacementMode="Compact" />
+                            <InfoBar IsOpen="True" Severity="Warning" Title="高级选项" Message="协议兼容性和 Thread 所有权保护不会因这些设置而关闭。" />
+                        </StackPanel>
+                    </Border>
+                </Expander>
+            </StackPanel>
+        </Grid>
     </ScrollViewer>
+
+    <VisualStateManager.VisualStateGroups>
+        <VisualStateGroup>
+            <VisualState x:Name="NarrowSettingsLayout">
+                <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="0" /></VisualState.StateTriggers>
+                <VisualState.Setters>
+                    <Setter Target="ThemeSelector.(Grid.Row)" Value="1" /><Setter Target="ThemeSelector.(Grid.Column)" Value="0" />
+                    <Setter Target="ReduceMotionSwitch.(Grid.Row)" Value="1" /><Setter Target="ReduceMotionSwitch.(Grid.Column)" Value="0" />
+                    <Setter Target="ContrastStatusText.(Grid.Row)" Value="1" /><Setter Target="ContrastStatusText.(Grid.Column)" Value="0" />
+                    <Setter Target="RestoreProfileSwitch.(Grid.Row)" Value="1" /><Setter Target="RestoreProfileSwitch.(Grid.Column)" Value="0" />
+                    <Setter Target="DiagnosticLogSwitch.(Grid.Row)" Value="1" /><Setter Target="DiagnosticLogSwitch.(Grid.Column)" Value="0" />
+                    <Setter Target="DataActionsPanel.(Grid.Row)" Value="1" /><Setter Target="DataActionsPanel.(Grid.Column)" Value="0" />
+                    <Setter Target="CliPathText.(Grid.Row)" Value="1" /><Setter Target="CliPathText.(Grid.Column)" Value="0" />
+                    <Setter Target="DesktopAppStatusText.(Grid.Row)" Value="1" /><Setter Target="DesktopAppStatusText.(Grid.Column)" Value="0" />
+                    <Setter Target="AppServerStatusText.(Grid.Row)" Value="1" /><Setter Target="AppServerStatusText.(Grid.Column)" Value="0" />
+                </VisualState.Setters>
+            </VisualState>
+            <VisualState x:Name="WideSettingsLayout">
+                <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="760" /></VisualState.StateTriggers>
+                <VisualState.Setters>
+                    <Setter Target="ThemeSelector.(Grid.Row)" Value="0" /><Setter Target="ThemeSelector.(Grid.Column)" Value="1" />
+                    <Setter Target="ReduceMotionSwitch.(Grid.Row)" Value="0" /><Setter Target="ReduceMotionSwitch.(Grid.Column)" Value="1" />
+                    <Setter Target="ContrastStatusText.(Grid.Row)" Value="0" /><Setter Target="ContrastStatusText.(Grid.Column)" Value="1" />
+                    <Setter Target="RestoreProfileSwitch.(Grid.Row)" Value="0" /><Setter Target="RestoreProfileSwitch.(Grid.Column)" Value="1" />
+                    <Setter Target="DiagnosticLogSwitch.(Grid.Row)" Value="0" /><Setter Target="DiagnosticLogSwitch.(Grid.Column)" Value="1" />
+                    <Setter Target="DataActionsPanel.(Grid.Row)" Value="0" /><Setter Target="DataActionsPanel.(Grid.Column)" Value="1" />
+                    <Setter Target="CliPathText.(Grid.Row)" Value="0" /><Setter Target="CliPathText.(Grid.Column)" Value="1" />
+                    <Setter Target="DesktopAppStatusText.(Grid.Row)" Value="0" /><Setter Target="DesktopAppStatusText.(Grid.Column)" Value="1" />
+                    <Setter Target="AppServerStatusText.(Grid.Row)" Value="0" /><Setter Target="AppServerStatusText.(Grid.Column)" Value="1" />
+                </VisualState.Setters>
+            </VisualState>
+        </VisualStateGroup>
+    </VisualStateManager.VisualStateGroups>
+    </Grid>
 </Page>

@@ -96,9 +96,11 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         }
         else
         {
-            CurrentProfileBar.Severity = InfoBarSeverity.Success;
-            CurrentProfileBar.Title = $"当前方案：{SelectedProfile.Name}";
-            CurrentProfileBar.Message = "方案已从本地数据库加载。";
+            CurrentProfileBar.Severity = SelectedProfile.RequiresRepair ? InfoBarSeverity.Error : InfoBarSeverity.Success;
+            CurrentProfileBar.Title = SelectedProfile.RequiresRepair ? "发现需要修复的方案" : $"当前方案：{SelectedProfile.Name}";
+            CurrentProfileBar.Message = SelectedProfile.RequiresRepair
+                ? SelectedProfile.RepairMessage
+                : "方案已从本地数据库加载。";
         }
     }
 
@@ -108,6 +110,8 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         CurrentProfileNameText.Text = profile?.Name ?? "未选择";
         CurrentProfileSummaryText.Text = profile is null
             ? string.Empty
+            : profile.RequiresRepair
+                ? profile.RepairMessage ?? "该方案需要修复。"
             : $"{profile.MainAgent.ModelId} / 推理强度{ReasoningLabel(profile.MainAgent.ReasoningEffort)} · "
               + $"{ApprovalLabel(profile.ApprovalMode)} · "
               + (profile.WorkerPolicy.Enabled
@@ -163,19 +167,33 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
 
     private async void EditSelectedProfile(object sender, RoutedEventArgs e)
     {
-        if (SelectedProfile is not null)
+        if (EnsureOperable(SelectedProfile))
         {
-            await ShowEditorAsync(ProfileEditorViewModel.ForEdit(SelectedProfile.Value, await LoadExternalProviderOptionsAsync()));
+            try
+            {
+                await ShowEditorAsync(ProfileEditorViewModel.ForEdit(SelectedProfile!.Value, await LoadExternalProviderOptionsAsync()));
+            }
+            catch (Exception exception)
+            {
+                ShowError("无法编辑方案", exception.Message);
+            }
         }
     }
 
     private async void CopySelectedProfile(object sender, RoutedEventArgs e)
     {
-        if (SelectedProfile is not null)
+        if (EnsureOperable(SelectedProfile))
         {
-            var service = App.Services.GetRequiredService<ProfileService>();
-            var uniqueName = await service.SuggestUniqueNameAsync(SelectedProfile.Name);
-            await ShowEditorAsync(ProfileEditorViewModel.ForCopy(SelectedProfile.Value, uniqueName, await LoadExternalProviderOptionsAsync()));
+            try
+            {
+                var service = App.Services.GetRequiredService<ProfileService>();
+                var uniqueName = await service.SuggestUniqueNameAsync(SelectedProfile!.Name);
+                await ShowEditorAsync(ProfileEditorViewModel.ForCopy(SelectedProfile.Value, uniqueName, await LoadExternalProviderOptionsAsync()));
+            }
+            catch (Exception exception)
+            {
+                ShowError("无法复制方案", exception.Message);
+            }
         }
     }
 
@@ -202,14 +220,15 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
 
     private async void SetSelectedAsDefault(object sender, RoutedEventArgs e)
     {
-        if (SelectedProfile is null)
+        var selected = SelectedProfile;
+        if (!EnsureOperable(selected))
         {
             return;
         }
 
         try
         {
-            await App.Services.GetRequiredService<ProfileService>().SetDefaultAsync(SelectedProfile.Id);
+            await App.Services.GetRequiredService<ProfileService>().SetDefaultAsync(selected!.Id);
             await RefreshAsync();
             CurrentProfileBar.Severity = InfoBarSeverity.Success;
             CurrentProfileBar.Title = "默认方案已切换";
@@ -223,14 +242,15 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
 
     private async void ActivateSelectedProfile(object sender, RoutedEventArgs e)
     {
-        if (SelectedProfile is null)
+        var selected = SelectedProfile;
+        if (!EnsureOperable(selected))
         {
             return;
         }
 
         try
         {
-            var activated = await App.Services.GetRequiredService<ProfileService>().ActivateAsync(SelectedProfile.Id);
+            var activated = await App.Services.GetRequiredService<ProfileService>().ActivateAsync(selected!.Id);
             await RefreshAsync();
             CurrentProfileBar.Severity = InfoBarSeverity.Success;
             CurrentProfileBar.Title = "方案已立即启用";
@@ -244,7 +264,8 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
 
     private async void ExportSelectedProfile(object sender, RoutedEventArgs e)
     {
-        if (SelectedProfile is null)
+        var selected = SelectedProfile;
+        if (!EnsureOperable(selected))
         {
             return;
         }
@@ -252,9 +273,9 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         try
         {
             var paths = App.Services.GetRequiredService<AppDataPaths>();
-            var path = Path.Combine(paths.Root, "exports", $"profile-{SelectedProfile.Id:D}.json");
+            var path = Path.Combine(paths.Root, "exports", $"profile-{selected!.Id:D}.json");
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            var export = App.Services.GetRequiredService<ProfileService>().Export(SelectedProfile.Value);
+            var export = App.Services.GetRequiredService<ProfileService>().Export(selected.Value);
             await File.WriteAllTextAsync(path, export);
             CurrentProfileBar.Severity = InfoBarSeverity.Success;
             CurrentProfileBar.Title = "方案已导出";
@@ -418,6 +439,22 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         CurrentProfileBar.Severity = InfoBarSeverity.Error;
         CurrentProfileBar.Title = title;
         CurrentProfileBar.Message = message;
+    }
+
+    private bool EnsureOperable(ProfileListItemViewModel? profile)
+    {
+        if (profile is null)
+        {
+            return false;
+        }
+
+        if (!profile.RequiresRepair)
+        {
+            return true;
+        }
+
+        ShowError("该方案需要修复", profile.RepairMessage);
+        return false;
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>

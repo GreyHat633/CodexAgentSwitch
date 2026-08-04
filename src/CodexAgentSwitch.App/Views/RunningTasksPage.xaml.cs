@@ -1,3 +1,9 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using CodexAgentSwitch.Application.Profiles;
 using CodexAgentSwitch.Application.Projects;
 using CodexAgentSwitch.Application.Tasks;
 using CodexAgentSwitch.Domain.Profiles;
@@ -9,24 +15,38 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.System;
+using UiDispatcherQueueTimer = Microsoft.UI.Dispatching.DispatcherQueueTimer;
 
 namespace CodexAgentSwitch.App.Views;
 
 public sealed partial class RunningTasksPage : Page, IContentActionHandler
 {
     private readonly ProjectService projects = App.Services.GetRequiredService<ProjectService>();
+    private readonly IProfileRepository profiles = App.Services.GetRequiredService<IProfileRepository>();
     private readonly ControlledTaskService conversations = App.Services.GetRequiredService<ControlledTaskService>();
     private string? selectedProjectId;
     private string? selectedConversationId;
+    private string? renderedConversationId;
     private bool subscribed;
     private ScrollViewer? messageScroller;
     private bool userReadingHistory;
-    private int renderedMessageCount;
     private bool? sidebarUserPreference;
+    private readonly UiDispatcherQueueTimer autoScrollTimer;
+    private bool pendingAutoScroll;
+
+    public ObservableCollection<ProjectListItem> ProjectItems { get; } = [];
+    public ObservableCollection<ConversationListItem> ConversationItems { get; } = [];
+    public ObservableCollection<ConversationMessageItem> MessageItems { get; } = [];
 
     public RunningTasksPage()
     {
         InitializeComponent();
+        ProjectListView.ItemsSource = ProjectItems;
+        ConversationListView.ItemsSource = ConversationItems;
+        MessageListView.ItemsSource = MessageItems;
+        autoScrollTimer = DispatcherQueue.CreateTimer();
+        autoScrollTimer.Interval = TimeSpan.FromMilliseconds(180);
+        autoScrollTimer.Tick += OnAutoScrollTimerTick;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SizeChanged += OnPageSizeChanged;
@@ -65,6 +85,9 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
             messageScroller.ViewChanged -= OnMessageViewChanged;
             messageScroller = null;
         }
+
+        autoScrollTimer.Stop();
+        pendingAutoScroll = false;
     }
 
     public async Task HandleContentActionAsync(string action, Button source)
@@ -82,11 +105,17 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
                 case "cas:project-directory":
                     await ChangeProjectDirectoryAsync();
                     break;
+                case "cas:project-open-directory":
+                    await OpenProjectDirectoryAsync();
+                    break;
                 case "cas:project-archive":
                     await ToggleProjectArchiveAsync();
                     break;
                 case "cas:project-delete":
                     await DeleteProjectAsync();
+                    break;
+                case "cas:conversation-profile":
+                    ShowConversationProfileMenu(source);
                     break;
                 case "cas:conversation-new":
                     await NewConversationAsync();
@@ -113,13 +142,11 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
                     await RequireConversationAsync();
                     await conversations.RetryLastTurnAsync(selectedConversationId!);
                     break;
-                case "cas:force-worker":
-                    await RequireConversationAsync();
-                    await conversations.ForceTestCurrentWorkerAsync(selectedConversationId!);
-                    ShowInfo("Worker 测试已提交", "本次调用绕过经济路由，仅执行当前方案选中的 Worker，不使用静默回退。", InfoBarSeverity.Success);
-                    break;
                 case "cas:approval":
                     await ShowApprovalAsync();
+                    break;
+                case "cas:bottom":
+                    ScrollToBottom(userInitiated: true);
                     break;
             }
         }
@@ -144,7 +171,8 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
             return;
         }
 
-        var created = await projects.CreateAsync(name.Text, directory.Text);
+        var profile = await profiles.GetDefaultAsync() ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+        var created = await projects.CreateAsync(name.Text, directory.Text, profile.Id);
         selectedProjectId = created.Id;
         await RefreshProjectsAsync(created.Id);
         ShowInfo("项目已创建", $"“{created.Name}”已保存，工作目录为 {created.WorkingDirectory}。", InfoBarSeverity.Success);
@@ -174,6 +202,21 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
 
         await projects.ChangeWorkingDirectoryAsync(project.Id, directory.Text);
         await RefreshProjectsAsync(project.Id);
+    }
+
+    private async Task OpenProjectDirectoryAsync()
+    {
+        var project = await RequireProjectAsync();
+        if (!Directory.Exists(project.WorkingDirectory))
+        {
+            throw new DirectoryNotFoundException($"项目工作目录不存在：{project.WorkingDirectory}");
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = project.WorkingDirectory,
+            UseShellExecute = true,
+        });
     }
 
     private async Task ToggleProjectArchiveAsync()
@@ -327,7 +370,6 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
         selectedProjectId = item.Id;
         selectedConversationId = null;
         SetProjectActionsEnabled(true);
-        ArchiveProjectButton.Content = item.IsArchived ? "取消归档" : "归档";
         NewConversationButton.IsEnabled = !item.IsArchived;
         await RefreshConversationsAsync(item.Id);
     }
@@ -347,16 +389,29 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
 
     private async Task RefreshProjectsAsync(string? selectId = null)
     {
-        var list = (await projects.ListAsync()).Select(ProjectListItem.From).ToArray();
-        ProjectListView.ItemsSource = list;
+        var profileNames = (await profiles.ListAsync()).ToDictionary(profile => profile.Id, profile => profile.Name);
+        var list = (await projects.ListAsync()).Select(project => ProjectListItem.From(
+            project,
+            project.DefaultProfileId is { } profileId && profileNames.TryGetValue(profileId, out var name)
+                ? name
+                : "当前默认方案")).ToArray();
+        ProjectItems.Clear();
+        foreach (var item in list)
+        {
+            ProjectItems.Add(item);
+        }
+
+        EmptyProjectsText.Visibility = list.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         var target = selectId ?? selectedProjectId;
-        var selected = target is null ? list.FirstOrDefault(project => !project.IsArchived) ?? list.FirstOrDefault() : list.FirstOrDefault(project => project.Id == target);
+        var selected = target is null
+            ? ProjectItems.FirstOrDefault(project => !project.IsArchived) ?? ProjectItems.FirstOrDefault()
+            : ProjectItems.FirstOrDefault(project => project.Id == target);
         if (selected is null)
         {
             SetProjectActionsEnabled(false);
             NewConversationButton.IsEnabled = false;
             ClearConversation();
-            ConversationListView.ItemsSource = null;
+            ConversationItems.Clear();
             EmptyConversationsText.Visibility = Visibility.Visible;
             return;
         }
@@ -364,7 +419,6 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
         selectedProjectId = selected.Id;
         SetProjectActionsEnabled(true);
         ProjectListView.SelectedItem = selected;
-        ArchiveProjectButton.Content = selected.IsArchived ? "取消归档" : "归档";
         NewConversationButton.IsEnabled = !selected.IsArchived;
         await RefreshConversationsAsync(selected.Id, selectedConversationId);
     }
@@ -372,10 +426,15 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
     private async Task RefreshConversationsAsync(string projectId, string? selectId = null)
     {
         var list = (await conversations.ListProjectConversationsAsync(projectId)).Select(ConversationListItem.From).ToArray();
-        ConversationListView.ItemsSource = list;
+        ConversationItems.Clear();
+        foreach (var item in list)
+        {
+            ConversationItems.Add(item);
+        }
+
         EmptyConversationsText.Visibility = list.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         var target = selectId ?? selectedConversationId;
-        var selected = target is null ? list.FirstOrDefault() : list.FirstOrDefault(conversation => conversation.Id == target);
+        var selected = target is null ? ConversationItems.FirstOrDefault() : ConversationItems.FirstOrDefault(conversation => conversation.Id == target);
         if (selected is null)
         {
             ClearConversation();
@@ -397,18 +456,28 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
             return;
         }
 
+        RenderConversation(conversation);
+    }
+
+    private void RenderConversation(ControlledTaskSession conversation)
+    {
+        var selectionChanged = !string.Equals(renderedConversationId, conversation.Id, StringComparison.Ordinal);
+        renderedConversationId = conversation.Id;
         ConversationTitleText.Text = conversation.Title;
         var lastTurn = conversation.Turns.LastOrDefault();
         var lastWorker = lastTurn?.Workers.LastOrDefault();
         var workerText = lastWorker is null
             ? lastTurn?.Delegation?.Reason ?? "尚未提交内容"
             : $"Worker：{lastWorker.ProviderName ?? lastWorker.ProviderId ?? lastWorker.AdapterId} · {lastWorker.ResponseModelId ?? lastWorker.ModelId}";
-        var approvalMode = lastTurn?.ProfileSnapshot?.ApprovalMode ?? ExecutionApprovalMode.Automatic;
-        ConversationMetadataText.Text = $"方案：{conversation.ProfileName} · 主代理：{conversation.MainModelId}（{conversation.MainReasoningEffort}）· 批准：{ApprovalModeText(approvalMode)}\nThread：{conversation.MainThreadId ?? "尚未创建"} · {workerText}";
-        var messages = conversation.Turns.SelectMany(turn => turn.Messages).ToArray();
-        var shouldScroll = !userReadingHistory && messages.Length >= renderedMessageCount;
-        renderedMessageCount = messages.Length;
-        MessageListView.ItemsSource = messages;
+        var snapshot = lastTurn?.ProfileSnapshot ?? conversation.InitialProfileSnapshot;
+        var approvalMode = snapshot?.ApprovalMode ?? ExecutionApprovalMode.Automatic;
+        var providerText = snapshot?.Provider is null
+            ? "Provider：原生 Codex / 未启用"
+            : $"Provider：{snapshot.Provider.Name} · {snapshot.Provider.ModelId}";
+        var routingText = snapshot is null ? "路由：历史对话未记录" : $"路由：{snapshot.WorkerPolicy.RoutingMode}";
+        var sourceText = conversation.InitialProfileSnapshot is null ? "方案来源：旧版会话" : "方案来源：项目默认方案的对话快照";
+        ConversationMetadataText.Text = $"主代理：{conversation.MainModelId}（{conversation.MainReasoningEffort}） · {workerText}\n{providerText} · {routingText} · {sourceText}\nThread：{conversation.MainThreadId ?? "尚未创建"} · 批准：{ApprovalModeText(approvalMode)}";
+        var messagesChanged = SynchronizeMessages(conversation.Turns.SelectMany(turn => turn.Messages));
 
         var running = IsRunning(conversation.Status);
         StopButton.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
@@ -417,10 +486,13 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
             : Visibility.Collapsed;
         ApprovalButton.Visibility = conversation.Status == ControlledTaskStatus.WaitingForApproval ? Visibility.Visible : Visibility.Collapsed;
         SendButton.IsEnabled = !running;
-        ForceWorkerButton.IsEnabled = !running;
-        ComposerTextBox.IsEnabled = !running;
+        ComposerTextBox.IsEnabled = true;
+        // Keep the composer focused and editable while a response streams; only the
+        // send action is disabled until the current turn reaches a terminal state.
+        ComposerTextBox.IsReadOnly = false;
         UseWorkerCheckBox.IsEnabled = !running;
-        ConversationStatusBar.IsOpen = conversation.Turns.Count > 0;
+        ConversationStatusBar.IsOpen = conversation.Status is not ControlledTaskStatus.Completed
+            && (conversation.Turns.Count > 0 || !string.IsNullOrWhiteSpace(conversation.ErrorMessage));
         ConversationStatusBar.Title = StatusText(conversation.Status);
         ConversationStatusBar.Message = conversation.ErrorMessage ?? lastTurn?.Delegation?.Reason ?? string.Empty;
         ConversationStatusBar.Severity = conversation.Status switch
@@ -431,54 +503,207 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
             _ => InfoBarSeverity.Informational,
         };
 
-        if (shouldScroll)
+        if (selectionChanged)
         {
-            DispatcherQueue.TryEnqueue(() => messageScroller?.ChangeView(null, messageScroller.ScrollableHeight, null));
+            userReadingHistory = false;
+            QueueAutoScroll();
         }
+        else if (messagesChanged && !userReadingHistory)
+        {
+            QueueAutoScroll();
+        }
+
+        WriteStreamingLayoutTrace(conversation, messagesChanged);
+    }
+
+    private bool SynchronizeMessages(IEnumerable<ControlledTaskMessage> messages)
+    {
+        var expected = messages.ToArray();
+        var changed = false;
+        var index = 0;
+        for (; index < expected.Length; index++)
+        {
+            var message = expected[index];
+            if (index < MessageItems.Count && MessageItems[index].Id == message.Id)
+            {
+                changed |= MessageItems[index].Update(message);
+                continue;
+            }
+
+            while (MessageItems.Count > index)
+            {
+                MessageItems.RemoveAt(MessageItems.Count - 1);
+                changed = true;
+            }
+
+            MessageItems.Add(new ConversationMessageItem(message));
+            changed = true;
+        }
+
+        while (MessageItems.Count > expected.Length)
+        {
+            MessageItems.RemoveAt(MessageItems.Count - 1);
+            changed = true;
+        }
+
+        return changed;
     }
 
     private void ClearConversation()
     {
         selectedConversationId = null;
+        renderedConversationId = null;
         ConversationTitleText.Text = "选择或新建对话";
         ConversationMetadataText.Text = "一个对话始终绑定同一个主 Thread。";
-        MessageListView.ItemsSource = null;
-        renderedMessageCount = 0;
+        MessageItems.Clear();
         ConversationStatusBar.IsOpen = false;
         StopButton.Visibility = Visibility.Collapsed;
         RetryButton.Visibility = Visibility.Collapsed;
         ApprovalButton.Visibility = Visibility.Collapsed;
         SetConversationActionsEnabled(false);
         ComposerTextBox.IsEnabled = false;
+        ComposerTextBox.IsReadOnly = true;
         UseWorkerCheckBox.IsEnabled = false;
-        ForceWorkerButton.IsEnabled = false;
         SendButton.IsEnabled = false;
     }
 
     private void SetProjectActionsEnabled(bool enabled)
     {
-        RenameProjectButton.IsEnabled = enabled;
-        ProjectDirectoryButton.IsEnabled = enabled;
-        ArchiveProjectButton.IsEnabled = enabled;
-        DeleteProjectButton.IsEnabled = enabled;
+        OpenProjectDirectoryButton.IsEnabled = enabled;
     }
 
     private void SetConversationActionsEnabled(bool enabled)
     {
-        RenameConversationButton.IsEnabled = enabled;
-        DeleteConversationButton.IsEnabled = enabled;
+        // Per-conversation menus are attached to the selected list item. Keeping
+        // this hook avoids scattering selection semantics through command handlers.
     }
 
     private Task OnConversationChangedAsync(ControlledTaskSession conversation)
     {
-        DispatcherQueue.TryEnqueue(async () =>
+        DispatcherQueue.TryEnqueue(() =>
         {
-            if (conversation.ProjectId == selectedProjectId)
+            if (conversation.ProjectId == selectedProjectId && conversation.Id == selectedConversationId)
             {
-                await RefreshConversationsAsync(selectedProjectId!, selectedConversationId ?? conversation.Id);
+                RenderConversation(conversation);
+                var listIndex = -1;
+                for (var index = 0; index < ConversationItems.Count; index++)
+                {
+                    if (ConversationItems[index].Id == conversation.Id)
+                    {
+                        listIndex = index;
+                        break;
+                    }
+                }
+
+                if (listIndex >= 0)
+                {
+                    ConversationItems[listIndex] = ConversationListItem.From(conversation);
+                }
             }
         });
         return Task.CompletedTask;
+    }
+
+    private void OpenProjectMoreMenu(object sender, RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement anchor)
+        {
+            return;
+        }
+
+        if (anchor.DataContext is ProjectListItem project)
+        {
+            selectedProjectId = project.Id;
+            ProjectListView.SelectedItem = project;
+        }
+
+        var flyout = new MenuFlyout();
+        flyout.Items.Add(MenuItem("使用当前方案作为项目默认", SetProjectDefaultToCurrentProfileAsync));
+        flyout.Items.Add(MenuItem("从下一轮应用当前方案到项目全部对话", ApplyCurrentProfileToProjectAsync));
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        flyout.Items.Add(MenuItem("重命名", RenameProjectAsync));
+        flyout.Items.Add(MenuItem("更改工作目录", ChangeProjectDirectoryAsync));
+        flyout.Items.Add(MenuItem("归档", ToggleProjectArchiveAsync));
+        flyout.Items.Add(MenuItem("删除", DeleteProjectAsync, isDestructive: true));
+        flyout.ShowAt(anchor);
+    }
+
+    private void ShowConversationProfileMenu(FrameworkElement anchor)
+    {
+        var flyout = new MenuFlyout();
+        flyout.Items.Add(MenuItem("从下一轮应用当前方案到此对话", ApplyCurrentProfileToConversationAsync));
+        flyout.Items.Add(MenuItem("从下一轮应用当前方案到项目全部对话", ApplyCurrentProfileToProjectAsync));
+        flyout.ShowAt(anchor);
+    }
+
+    private async Task SetProjectDefaultToCurrentProfileAsync()
+    {
+        var project = await RequireProjectAsync();
+        var profile = await profiles.GetDefaultAsync() ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+        await projects.SetDefaultProfileAsync(project.Id, profile.Id);
+        await RefreshProjectsAsync(project.Id);
+        ShowInfo("项目默认方案已更新", $"“{profile.Name}”只会自动用于此后新建的对话；已有对话保持各自快照。", InfoBarSeverity.Success);
+    }
+
+    private async Task ApplyCurrentProfileToConversationAsync()
+    {
+        await RequireConversationAsync();
+        var profile = await profiles.GetDefaultAsync() ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+        await conversations.ApplyProfileFromNextTurnAsync(selectedConversationId!, profile.Id);
+        await ShowConversationAsync(selectedConversationId!);
+        ShowInfo("下一轮将使用新方案", $"当前对话从下一轮起改用“{profile.Name}”；历史 Turn 不会被修改。", InfoBarSeverity.Success);
+    }
+
+    private async Task ApplyCurrentProfileToProjectAsync()
+    {
+        var project = await RequireProjectAsync();
+        var profile = await profiles.GetDefaultAsync() ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+        await projects.SetDefaultProfileAsync(project.Id, profile.Id);
+        await conversations.ApplyProjectProfileFromNextTurnAsync(project.Id, profile.Id);
+        await RefreshProjectsAsync(project.Id);
+        await RefreshConversationsAsync(project.Id, selectedConversationId);
+        ShowInfo("项目方案已安排", $"“{profile.Name}”已设为默认；非运行中的项目对话将从下一轮起使用它。", InfoBarSeverity.Success);
+    }
+
+    private void OpenConversationMoreMenu(object sender, RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement anchor)
+        {
+            return;
+        }
+
+        if (anchor.DataContext is ConversationListItem conversation)
+        {
+            selectedConversationId = conversation.Id;
+            ConversationListView.SelectedItem = conversation;
+        }
+
+        var flyout = new MenuFlyout();
+        flyout.Items.Add(MenuItem("重命名", RenameConversationAsync));
+        flyout.Items.Add(MenuItem("删除", DeleteConversationAsync, isDestructive: true));
+        flyout.ShowAt(anchor);
+    }
+
+    private MenuFlyoutItem MenuItem(string text, Func<Task> action, bool isDestructive = false)
+    {
+        var item = new MenuFlyoutItem { Text = text };
+        if (isDestructive)
+        {
+            item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Microsoft.UI.Xaml.Application.Current.Resources["SystemFillColorCriticalBrush"];
+        }
+
+        item.Click += async (_, _) =>
+        {
+            try
+            {
+                await action();
+            }
+            catch (Exception exception)
+            {
+                ShowError("操作失败", exception.Message);
+            }
+        };
+        return item;
     }
 
     private void OnComposerKeyDown(object sender, KeyRoutedEventArgs args)
@@ -497,6 +722,10 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
         if (messageScroller is not null)
         {
             messageScroller.ViewChanged += OnMessageViewChanged;
+            if (MessageItems.Count > 0 && !userReadingHistory)
+            {
+                QueueAutoScroll();
+            }
         }
     }
 
@@ -507,7 +736,77 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
             return;
         }
 
-        userReadingHistory = messageScroller.ScrollableHeight - messageScroller.VerticalOffset > 80;
+        userReadingHistory = messageScroller.ScrollableHeight - messageScroller.VerticalOffset > 96;
+        BackToBottomButton.Visibility = userReadingHistory ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void QueueAutoScroll()
+    {
+        if (userReadingHistory || messageScroller is null)
+        {
+            return;
+        }
+
+        pendingAutoScroll = true;
+        if (!autoScrollTimer.IsRunning)
+        {
+            autoScrollTimer.Start();
+        }
+    }
+
+    private void OnAutoScrollTimerTick(UiDispatcherQueueTimer sender, object args)
+    {
+        sender.Stop();
+        if (!pendingAutoScroll || userReadingHistory || messageScroller is null)
+        {
+            pendingAutoScroll = false;
+            return;
+        }
+
+        pendingAutoScroll = false;
+        messageScroller.ChangeView(null, messageScroller.ScrollableHeight, null, disableAnimation: true);
+    }
+
+    private void ScrollToBottom(bool userInitiated)
+    {
+        userReadingHistory = false;
+        BackToBottomButton.Visibility = Visibility.Collapsed;
+        pendingAutoScroll = false;
+        autoScrollTimer.Stop();
+        messageScroller?.ChangeView(null, messageScroller.ScrollableHeight, null, disableAnimation: userInitiated);
+    }
+
+    private void WriteStreamingLayoutTrace(ControlledTaskSession conversation, bool messagesChanged)
+    {
+        var path = Environment.GetEnvironmentVariable("CAS_STREAM_LAYOUT_TRACE_PATH");
+        if (string.IsNullOrWhiteSpace(path) || !messagesChanged)
+        {
+            return;
+        }
+
+        // This trace is test-only and intentionally refuses the system drive so
+        // UI diagnostics follow the same E-drive storage policy as application data.
+        var fullPath = Path.GetFullPath(path);
+        if (Path.GetPathRoot(fullPath)?.Equals("C:\\", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var last = MessageItems.LastOrDefault()?.Message;
+        var trace = JsonSerializer.Serialize(new
+        {
+            at = DateTimeOffset.UtcNow,
+            conversationId = conversation.Id,
+            status = conversation.Status.ToString(),
+            messageCount = MessageItems.Count,
+            lastMessageLength = last?.Content.Length ?? 0,
+            stableItemsSource = ReferenceEquals(MessageListView.ItemsSource, MessageItems),
+            userReadingHistory,
+            verticalOffset = messageScroller?.VerticalOffset,
+            scrollableHeight = messageScroller?.ScrollableHeight,
+        });
+        File.AppendAllText(fullPath, trace + Environment.NewLine);
     }
 
     private void OnPageSizeChanged(object sender, SizeChangedEventArgs args)
@@ -521,7 +820,8 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
     private void SetSidebarVisible(bool visible)
     {
         SidebarGrid.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        SidebarColumn.Width = visible ? new GridLength(280) : new GridLength(0);
+        SidebarColumn.Width = visible ? new GridLength(248) : new GridLength(0);
+        WorkspaceGrid.ColumnSpacing = visible ? 16 : 0;
         ToggleSidebarButton.Content = visible ? "隐藏侧栏" : "显示侧栏";
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
             ToggleSidebarButton,
@@ -622,23 +922,86 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
         return null;
     }
 
-    public sealed record ProjectListItem(string Id, string Name, string WorkingDirectory, string State, bool IsArchived)
+    public sealed class ProjectListItem
     {
-        public static ProjectListItem From(AgentProject project) => new(
+        public ProjectListItem(string id, string name, string workingDirectory, string state, bool isArchived)
+        {
+            Id = id;
+            Name = name;
+            WorkingDirectory = workingDirectory;
+            State = state;
+            IsArchived = isArchived;
+        }
+
+        public string Id { get; set; }
+
+        public string Name { get; set; }
+
+        public string WorkingDirectory { get; set; }
+
+        public string State { get; set; }
+
+        public bool IsArchived { get; set; }
+
+        public static ProjectListItem From(AgentProject project, string profileName) => new(
             project.Id,
             project.Name,
             project.WorkingDirectory,
-            project.IsArchived ? "已归档" : "使用中",
+            project.IsArchived ? $"已归档 · 默认方案：{profileName}" : $"使用中 · 默认方案：{profileName}",
             project.IsArchived);
     }
 
-    public sealed record ConversationListItem(string Id, string Title, string Status, string Updated)
+    public sealed class ConversationListItem
     {
+        public ConversationListItem(string id, string title, string status, string updated)
+        {
+            Id = id;
+            Title = title;
+            Status = status;
+            Updated = updated;
+        }
+
+        public string Id { get; set; }
+
+        public string Title { get; set; }
+
+        public string Status { get; set; }
+
+        public string Updated { get; set; }
+
         public static ConversationListItem From(ControlledTaskSession conversation) => new(
             conversation.Id,
             conversation.Title,
             StatusText(conversation.Status),
             conversation.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm"));
+    }
+
+    public sealed class ConversationMessageItem : INotifyPropertyChanged
+    {
+        private ControlledTaskMessage message;
+
+        public ConversationMessageItem(ControlledTaskMessage message)
+        {
+            this.message = message;
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public Guid Id => message.Id;
+
+        public ControlledTaskMessage Message => message;
+
+        public bool Update(ControlledTaskMessage next)
+        {
+            if (Equals(message, next))
+            {
+                return false;
+            }
+
+            message = next;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Message)));
+            return true;
+        }
     }
 
     public sealed record TaskListItemViewModel(string Id, string Title, string Status, string Metadata)

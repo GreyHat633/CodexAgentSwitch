@@ -11,6 +11,8 @@ using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Streams;
 using CodexAgentSwitch.App.Views;
+using CodexAgentSwitch.Infrastructure.Common;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CodexAgentSwitch.App;
 
@@ -34,14 +36,15 @@ public sealed partial class MainWindow : Window
             "light" => ElementTheme.Light,
             _ => ElementTheme.Default,
         };
-        var initialTag = Environment.GetEnvironmentVariable("CAS_CAPTURE_PAGE") ?? "dashboard";
+        var initialTag = Environment.GetEnvironmentVariable("CAS_CAPTURE_PAGE")
+            ?? (IsFirstRun() ? "onboarding" : "dashboard");
         var initialItem = RootNavigation.MenuItems
             .Concat(RootNavigation.FooterMenuItems)
             .OfType<NavigationViewItem>()
             .FirstOrDefault(item => string.Equals(item.Tag as string, initialTag, StringComparison.Ordinal))
             ?? (NavigationViewItem)RootNavigation.MenuItems[0];
         RootNavigation.SelectedItem = initialItem;
-        if (ContentFrame.CurrentSourcePageType is null)
+        if (ContentFrame.CurrentSourcePageType != PageTypeForTag(initialTag))
         {
             ContentFrame.Navigate(PageTypeForTag(initialTag));
         }
@@ -56,6 +59,12 @@ public sealed partial class MainWindow : Window
         {
             AppWindow.SetIcon(iconPath);
         }
+    }
+
+    private static bool IsFirstRun()
+    {
+        var paths = App.Services.GetRequiredService<CodexAgentSwitch.Infrastructure.Common.AppDataPaths>();
+        return !File.Exists(Path.Combine(paths.Root, "onboarding.completed.json"));
     }
 
     private void OnContentNavigated(object sender, NavigationEventArgs args)
@@ -214,6 +223,7 @@ public sealed partial class MainWindow : Window
     private static Type PageTypeForTag(string tag) => tag switch
         {
             "dashboard" => typeof(DashboardPage),
+            "native-projects" => typeof(NativeProjectAdapterPage),
             "profiles" => typeof(ProfilesPage),
             "providers" => typeof(ProvidersPage),
             "tasks" => typeof(RunningTasksPage),

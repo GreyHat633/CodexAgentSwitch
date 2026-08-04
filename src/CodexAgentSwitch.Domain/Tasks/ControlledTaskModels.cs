@@ -67,7 +67,10 @@ public sealed record DelegationDecision(
     bool Forced,
     string? ProviderId,
     string? ModelId,
-    DateTimeOffset DecidedAt);
+    DateTimeOffset DecidedAt,
+    string? DelegatedScope = null,
+    string? Deliverable = null,
+    IReadOnlyList<string>? AcceptanceCriteria = null);
 
 public sealed record ControlledTaskMessage(
     Guid Id,
@@ -129,4 +132,5 @@ public sealed record ControlledTaskSession(
     DateTimeOffset? CompletedAt,
     string? ErrorMessage,
     string? ProjectId = null,
-    bool IsArchived = false);
+    bool IsArchived = false,
+    TaskProfileSnapshot? InitialProfileSnapshot = null);

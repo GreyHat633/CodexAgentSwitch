@@ -35,6 +35,11 @@ public sealed class SqliteDatabase(string databasePath)
             CREATE UNIQUE INDEX IF NOT EXISTS ux_profiles_default
                 ON profiles(is_default) WHERE is_default = 1;
 
+            CREATE TABLE IF NOT EXISTS profile_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                has_been_initialized INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS providers (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,

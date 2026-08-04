@@ -14,21 +14,46 @@ public sealed class ProfileService(
         WriteIndented = true,
     };
 
-    public async Task<Profile> EnsureDefaultAsync(CancellationToken cancellationToken = default)
+    public async Task<Profile?> EnsureDefaultAsync(CancellationToken cancellationToken = default)
     {
         var existing = await repository.GetDefaultAsync(cancellationToken);
         if (existing is not null)
         {
+            await repository.MarkInitializedAsync(cancellationToken);
             return existing;
+        }
+
+        var profiles = await repository.ListAsync(cancellationToken);
+        var recoverable = profiles.FirstOrDefault(profile => !profile.RequiresRepair);
+        if (recoverable is not null)
+        {
+            var normalized = recoverable with { IsDefault = true };
+            await repository.UpsertAsync(normalized, cancellationToken);
+            await repository.MarkInitializedAsync(cancellationToken);
+            return normalized;
+        }
+
+        // A profile list that was previously initialized can legitimately be
+        // empty because the user removed an obsolete preset. Do not resurrect
+        // the old economic profile on every startup.
+        if (await repository.HasBeenInitializedAsync(cancellationToken))
+        {
+            return null;
         }
 
         var profile = Profile.CreateDefault(clock.UtcNow);
         await repository.UpsertAsync(profile, cancellationToken);
+        await repository.MarkInitializedAsync(cancellationToken);
         return profile;
     }
 
     public async Task SaveAsync(Profile profile, CancellationToken cancellationToken = default)
     {
+        if (profile.RequiresRepair)
+        {
+            throw new ProfileValidationException([new("profile.repair.required", profile.RepairMessage ?? "该方案需要修复后才能保存。", "Profile")]);
+        }
+
         var existingProfiles = await repository.ListAsync(cancellationToken);
         var validation = validator.ValidateUniqueName(profile, existingProfiles);
         if (!validation.IsValid)
@@ -42,6 +67,7 @@ public sealed class ProfileService(
             UpdatedAt = clock.UtcNow,
         };
         await repository.UpsertAsync(normalized, cancellationToken);
+        await repository.MarkInitializedAsync(cancellationToken);
     }
 
     public async Task<Profile> CreateAsync(Profile template, bool makeDefault = false, CancellationToken cancellationToken = default)
@@ -135,7 +161,7 @@ public sealed class ProfileService(
             throw new InvalidDataException($"不支持配置方案版本 {envelope.Version}。");
         }
 
-        var imported = envelope.Profile with
+        var imported = ProfileDataMigration.Migrate(envelope.Profile, clock.UtcNow).Profile with
         {
             Id = Guid.NewGuid(),
             IsDefault = false,

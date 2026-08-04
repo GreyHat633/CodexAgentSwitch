@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using CodexAgentSwitch.Application.Abstractions;
 using CodexAgentSwitch.Application.Profiles;
+using CodexAgentSwitch.Application.Projects;
 using CodexAgentSwitch.Application.Providers;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Application.Workers;
@@ -24,6 +26,7 @@ public sealed class ControlledTaskService
     private readonly IUsageLedgerRepository usageLedger;
     private readonly IWorkerUsageCollector usageCollector;
     private readonly IClock clock;
+    private readonly IProjectRepository? projectRepository;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> active = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim updateGate = new(1, 1);
 
@@ -36,7 +39,8 @@ public sealed class ControlledTaskService
         WorkerOrchestrator workerOrchestrator,
         IUsageLedgerRepository usageLedger,
         IWorkerUsageCollector usageCollector,
-        IClock clock)
+        IClock clock,
+        IProjectRepository? projectRepository = null)
     {
         this.tasks = tasks;
         this.profiles = profiles;
@@ -47,6 +51,7 @@ public sealed class ControlledTaskService
         this.usageLedger = usageLedger;
         this.usageCollector = usageCollector;
         this.clock = clock;
+        this.projectRepository = projectRepository;
     }
 
     public event Func<ControlledTaskSession, Task>? TaskChanged;
@@ -161,8 +166,8 @@ public sealed class ControlledTaskService
             throw new DirectoryNotFoundException($"工作目录不存在：{cwd}");
         }
 
-        var profile = await profiles.GetDefaultAsync(cancellationToken)
-            ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+        var profile = await ResolveProfileForProjectAsync(projectId, cancellationToken);
+        var initialSnapshot = await snapshotFactory.CaptureAsync(profile, cancellationToken);
         var now = clock.UtcNow;
         var session = new ControlledTaskSession(
             Guid.NewGuid().ToString("D"),
@@ -179,9 +184,50 @@ public sealed class ControlledTaskService
             now,
             null,
             null,
-            projectId);
+            projectId,
+            false,
+            initialSnapshot);
         await SaveAndPublishAsync(session, cancellationToken);
         return session;
+    }
+
+    public async Task<ControlledTaskSession> ApplyProfileFromNextTurnAsync(
+        string taskId,
+        Guid profileId,
+        CancellationToken cancellationToken = default)
+    {
+        var session = await RequireAsync(taskId, cancellationToken);
+        if (IsRunning(session.Status))
+        {
+            throw new InvalidOperationException("对话正在生成，不能在当前轮中更换方案。");
+        }
+
+        var profile = await profiles.GetAsync(profileId, cancellationToken)
+            ?? throw new InvalidOperationException("所选方案不存在。" );
+        var snapshot = await snapshotFactory.CaptureAsync(profile, cancellationToken);
+        await MutateAsync(taskId, current => current with
+        {
+            ProfileId = snapshot.ProfileId,
+            ProfileName = snapshot.ProfileName,
+            MainModelId = snapshot.MainAgent.ModelId,
+            MainReasoningEffort = snapshot.MainAgent.ReasoningEffort,
+            UpdatedAt = clock.UtcNow,
+        }, cancellationToken);
+        return await RequireAsync(taskId, cancellationToken);
+    }
+
+    public async Task ApplyProjectProfileFromNextTurnAsync(
+        string projectId,
+        Guid profileId,
+        CancellationToken cancellationToken = default)
+    {
+        foreach (var conversation in await ListProjectConversationsAsync(projectId, cancellationToken))
+        {
+            if (!IsRunning(conversation.Status))
+            {
+                await ApplyProfileFromNextTurnAsync(conversation.Id, profileId, cancellationToken);
+            }
+        }
     }
 
     private async Task<ControlledTaskSession> StartCoreAsync(
@@ -199,8 +245,7 @@ public sealed class ControlledTaskService
             throw new DirectoryNotFoundException($"工作目录不存在：{fullWorkingDirectory}");
         }
 
-        var profile = await profiles.GetDefaultAsync(cancellationToken)
-            ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+        var profile = await ResolveProfileForProjectAsync(projectId, cancellationToken);
         var snapshot = await snapshotFactory.CaptureAsync(profile, cancellationToken);
         var decision = delegationDecisions.Decide(snapshot, useWorker);
         var now = clock.UtcNow;
@@ -220,10 +265,28 @@ public sealed class ControlledTaskService
             now,
             null,
             null,
-            projectId);
+            projectId,
+            false,
+            snapshot);
         await SaveAndPublishAsync(session, cancellationToken);
         StartBackground(session.Id, localTurnId, snapshot, decision);
         return session;
+    }
+
+    private async Task<Profile> ResolveProfileForProjectAsync(string? projectId, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(projectId) && projectRepository is not null)
+        {
+            var project = await projectRepository.GetAsync(projectId, cancellationToken);
+            if (project?.DefaultProfileId is { } profileId)
+            {
+                return await profiles.GetAsync(profileId, cancellationToken)
+                    ?? throw new InvalidOperationException("项目默认方案已被删除；请重新选择项目默认方案。");
+            }
+        }
+
+        return await profiles.GetDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("尚未设置当前配置方案。");
     }
 
     public async Task<ControlledTaskSession> ContinueAsync(
@@ -421,7 +484,7 @@ public sealed class ControlledTaskService
 
                 var session = await RequireAsync(taskId, cancellation.Token);
                 var ledger = await EnsureLedgerAsync(session, cancellation.Token);
-                var worker = await ExecuteWorkerAsync(session, localTurnId, snapshot, ledger, forceNative: false, cancellation.Token);
+                var worker = await ExecuteWorkerAsync(session, localTurnId, snapshot, ledger, forceNative: false, delegation: null, cancellationToken: cancellation.Token);
                 await CompleteWorkerOnlyTurnAsync(
                     taskId,
                     localTurnId,
@@ -499,14 +562,14 @@ public sealed class ControlledTaskService
         {
             try
             {
-                var workerExecution = await ExecuteWorkerAsync(session, localTurnId, snapshot, ledger, forceNative: false, cancellationToken);
+                var workerExecution = await ExecuteWorkerAsync(session, localTurnId, snapshot, ledger, forceNative: false, delegation: effectiveDecision, cancellationToken: cancellationToken);
                 workerSummary = workerExecution.Summary;
                 ledger = workerExecution.Ledger;
                 if (!workerExecution.Succeeded
                     && snapshot.WorkerPolicy.FallbackAction == FallbackAction.NativeLuna
                     && snapshot.WorkerPolicy.Source == WorkerSource.ExternalProvider)
                 {
-                    var fallback = await ExecuteWorkerAsync(session, localTurnId, snapshot, ledger, forceNative: true, cancellationToken);
+                    var fallback = await ExecuteWorkerAsync(session, localTurnId, snapshot, ledger, forceNative: true, delegation: effectiveDecision, cancellationToken: cancellationToken);
                     if (!fallback.Succeeded)
                     {
                         throw new InvalidOperationException($"外部 Worker 和方案指定的原生 Luna 回退均失败：{fallback.Summary}");
@@ -604,12 +667,15 @@ public sealed class ControlledTaskService
         await UpdateStatusAsync(session.Id, localTurnId, ControlledTaskStatus.MainAgentRunning, null, cancellationToken);
         var userInput = session.Turns.Single(turn => turn.Id == localTurnId).UserInput;
         var prompt = $"""
-            你是当前受控对话的主代理。只判断本轮是否应委派给配置好的 Worker，不要执行用户任务。
+            你是当前受控对话的主代理，只负责本轮的结构化委派判断，不要执行用户任务。
+
+            Agent Switch 宿主负责创建和调用 Worker。若当前方案使用外部 Provider，宿主会自行通过 Provider API 调用它；你不需要、也不能在原生 Codex 模型目录中查找外部模型。不要讨论模型目录、API 可用性或“无法直接调用 DeepSeek”。
+
             路由模式：{snapshot.WorkerPolicy.RoutingMode}
-            Worker：{snapshot.Provider?.Name ?? snapshot.WorkerPolicy.PreferredProviderId}
             用户任务：{userInput}
 
-            任务若存在可独立、可核验并能减少主线程重复工作的子问题，回复且只回复 DELEGATE；否则只回复 SINGLE。
+            只输出一个合法 JSON 对象，不要 Markdown、解释或工具调用：
+            JSON 字段必须为 decision（delegate 或 solo）、delegatedScope、deliverable、acceptanceCriteria（字符串数组）。solo 时后面三个字段使用空字符串或空数组。
             """;
         var handle = await runtime.MainAgent.StartTurnAsync(
             mainThreadId,
@@ -625,23 +691,24 @@ public sealed class ControlledTaskService
             throw new InvalidOperationException($"主代理委派判定失败：{result.ErrorMessage ?? result.Status.ToString()}");
         }
 
-        var routingReply = result.FinalText?.Trim();
-        var delegated = string.Equals(routingReply, "DELEGATE", StringComparison.OrdinalIgnoreCase);
-        if (!delegated && !string.Equals(routingReply, "SINGLE", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("主代理委派判定没有返回有效的 DELEGATE 或 SINGLE。为避免误调用 Worker，本轮已停止。");
-        }
+        var routing = ParseDelegationDecision(result.FinalText);
+        var delegated = string.Equals(routing.Decision, "delegate", StringComparison.OrdinalIgnoreCase);
         var decision = new DelegationDecision(
             delegated ? DelegationDecisionKind.InvokeWorker : DelegationDecisionKind.Skip,
-            delegated ? "Sol 判定本轮存在适合 Worker 的独立工作。" : "Sol 判定本轮应由主代理独立完成。",
+            delegated ? "主代理已返回结构化委派决定。" : "主代理已返回单代理决定。",
             false,
             delegated ? snapshot.Provider?.Id ?? "native-codex" : null,
             delegated ? snapshot.Provider?.ModelId ?? NativeWorkerModel(snapshot.WorkerPolicy) : null,
-            clock.UtcNow);
+            clock.UtcNow,
+            delegated ? routing.DelegatedScope : null,
+            delegated ? routing.Deliverable : null,
+            delegated ? routing.AcceptanceCriteria : null);
         await AppendTraceAsync(
             session.Id,
             localTurnId,
-            decision.Reason,
+            delegated
+                ? $"委派决策 · 调用 Worker · 范围：{routing.DelegatedScope}"
+                : "委派决策 · 不调用 Worker",
             TaskMessageKind.ToolCall,
             "委派决策",
             cancellationToken);
@@ -654,24 +721,101 @@ public sealed class ControlledTaskService
         return (decision, ledger);
     }
 
+    private static StructuredDelegationDecision ParseDelegationDecision(string? text)
+    {
+        var normalized = text?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            throw new InvalidOperationException("主代理没有返回结构化委派决定；本轮未调用 Worker。");
+        }
+
+        if (normalized.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstLineEnd = normalized.IndexOf('\n');
+            normalized = firstLineEnd >= 0 ? normalized[(firstLineEnd + 1)..] : normalized;
+            var closingFence = normalized.LastIndexOf("```", StringComparison.Ordinal);
+            if (closingFence >= 0)
+            {
+                normalized = normalized[..closingFence];
+            }
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(normalized);
+            var root = document.RootElement;
+            var decision = root.TryGetProperty("decision", out var decisionElement)
+                ? decisionElement.GetString()?.Trim().ToLowerInvariant()
+                : null;
+            if (decision is not ("delegate" or "solo"))
+            {
+                throw new InvalidOperationException("字段 decision 必须为 delegate 或 solo。");
+            }
+
+            var scope = ReadRequiredString(root, "delegatedScope", decision == "delegate");
+            var deliverable = ReadRequiredString(root, "deliverable", decision == "delegate");
+            var criteria = root.TryGetProperty("acceptanceCriteria", out var criteriaElement)
+                           && criteriaElement.ValueKind == JsonValueKind.Array
+                ? criteriaElement.EnumerateArray()
+                    .Where(item => item.ValueKind == JsonValueKind.String)
+                    .Select(item => item.GetString()?.Trim())
+                    .Where(item => !string.IsNullOrWhiteSpace(item))
+                    .Cast<string>()
+                    .ToArray()
+                : Array.Empty<string>();
+            if (decision == "delegate" && criteria.Length == 0)
+            {
+                throw new InvalidOperationException("delegate 决定必须提供至少一条 acceptanceCriteria。");
+            }
+
+            return new StructuredDelegationDecision(decision, scope, deliverable, criteria);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException("主代理委派判定不是合法 JSON；本轮未调用 Worker。", exception);
+        }
+        catch (InvalidOperationException exception) when (!exception.Message.StartsWith("主代理", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"主代理委派判定无效：{exception.Message} 本轮未调用 Worker。", exception);
+        }
+    }
+
+    private static string ReadRequiredString(JsonElement root, string property, bool required)
+    {
+        var value = root.TryGetProperty(property, out var element) && element.ValueKind == JsonValueKind.String
+            ? element.GetString()?.Trim()
+            : null;
+        if (required && string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException($"字段 {property} 不能为空。");
+        }
+
+        return value ?? string.Empty;
+    }
+
     private async Task<(string? Summary, TaskGroupLedger Ledger, bool Succeeded)> ExecuteWorkerAsync(
         ControlledTaskSession session,
         string localTurnId,
         TaskProfileSnapshot snapshot,
         TaskGroupLedger ledger,
         bool forceNative,
+        DelegationDecision? delegation,
         CancellationToken cancellationToken)
     {
         var workerTask = new WorkerTask(
             session.Id,
             $"{session.Id}-W1",
-            "为主代理提供独立、可审查的工作结果",
-            BuildWorkerPrompt(session.Turns.Single(turn => turn.Id == localTurnId).UserInput),
+            delegation?.Deliverable is { Length: > 0 }
+                ? delegation.Deliverable
+                : "为主代理提供独立、可审查的工作结果",
+            BuildWorkerPrompt(session.Turns.Single(turn => turn.Id == localTurnId).UserInput, delegation),
             session.WorkingDirectory,
             snapshot.Provider?.ModelId ?? "pending-resolution",
             "medium",
             new WorkerScope([session.WorkingDirectory], [], [ScopeOperation.Read, ScopeOperation.Search]),
-            ["简明工作结果", "风险和未决项"],
+            delegation?.AcceptanceCriteria is { Count: > 0 }
+                ? delegation.AcceptanceCriteria
+                : ["简明工作结果", "风险和未决项"],
             ["结果与用户任务直接相关", "不冒充主代理最终回答"],
             ["需要扩大权限或修改范围时停止"],
             null,
@@ -1099,7 +1243,12 @@ public sealed class ControlledTaskService
         return normalized.Length <= 48 ? normalized : normalized[..48] + "…";
     }
 
-    private static string BuildWorkerPrompt(string input) => $"""
+    private static string BuildWorkerPrompt(string input, DelegationDecision? delegation) => $"""
+        The Agent Switch host directly owns this Worker execution. Do not inspect a native model catalog or describe external-provider availability to the end user.
+        Delegated scope: {delegation?.DelegatedScope ?? "verify the current Worker and model availability"}
+        Expected deliverable: {delegation?.Deliverable ?? "a concise, verifiable Worker result"}
+        Acceptance criteria: {string.Join("; ", delegation?.AcceptanceCriteria ?? ["result is concise and verifiable"])}
+
         你是受控工作代理。请对下面的用户任务进行一次独立、简明、可核验的分析，输出可供主代理最终审查的工作结果。
         不要声称自己是最终回答者，不要扩大文件或权限范围；如果任务需要修改、执行或网络权限，只列出建议和风险并停止。
 
@@ -1119,6 +1268,7 @@ public sealed class ControlledTaskService
               </worker_result>
               """;
         return $"""
+            Agent Switch host owns every external Worker call and has already injected any worker_result below into this same Thread. Do not discuss the native model catalog or claim that the system cannot delegate merely because you cannot call an external API yourself, unless the user explicitly asks for diagnostics.
             你是 Codex Agent Switch 当前方案“{snapshot.ProfileName}”指定的主代理。请直接完成用户任务并给出最终结果。
             {workerSection}
 
@@ -1143,5 +1293,11 @@ public sealed class ControlledTaskService
         "native-luna" => "gpt-5.6-luna",
         _ => throw new InvalidOperationException($"不支持的原生 Worker：{policy.PreferredProviderId}。"),
     };
+
+    private sealed record StructuredDelegationDecision(
+        string Decision,
+        string DelegatedScope,
+        string Deliverable,
+        IReadOnlyList<string> AcceptanceCriteria);
 
 }

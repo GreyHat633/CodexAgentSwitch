@@ -93,7 +93,7 @@ try {
     Assert-Text 'Provider 已启用'
     Pass '重新启用' 'enabled state persisted in provider repository'
 
-    Press '停用并回退 Luna'
+    Press '停用'
     Assert-Text 'Provider 已停用'
     Pass '停用 Provider' 'disabled state displayed; credential retained'
 

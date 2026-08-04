@@ -6,7 +6,7 @@ public sealed record NativeCodexLaunchResult(
     int ProcessId,
     string Executable,
     string WorkingDirectory,
-    string GeneratedConfigurationPath,
+    string? GeneratedConfigurationPath,
     string Summary);
 
 public interface INativeCodexLauncher

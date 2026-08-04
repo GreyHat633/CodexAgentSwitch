@@ -4,7 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:CodexAgentSwitch.App.Views">
     <ScrollViewer>
-        <StackPanel Padding="{StaticResource PagePadding}" Spacing="22" MaxWidth="1180" HorizontalAlignment="Stretch">
+        <StackPanel Padding="{StaticResource PagePadding}" Spacing="22" MaxWidth="{StaticResource PageContentMaxWidth}" HorizontalAlignment="Center">
             <local:PageHeader
                 Title="选择工作模式"
                 Subtitle="原生 Codex 使用原版界面；CodexAgentSwitch 模式在本程序内完整管理项目、对话、Worker、预算与 Usage。" />
@@ -30,10 +30,13 @@
                         </Grid.RowDefinitions>
                         <StackPanel Spacing="8">
                             <TextBlock Text="原生 Codex 模式" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap" />
-                            <TextBlock Text="配置并启动原生 Codex" FontWeight="SemiBold" TextWrapping="Wrap" />
-                            <TextBlock Text="应用当前方案的主模型、推理强度和 Worker 配置，然后交由原版 Codex 界面运行。Agent Switch 不监控完整会话，也不声称精确统计主线程 Usage。" TextWrapping="Wrap" Style="{StaticResource BodyTextStyle}" />
+                            <TextBlock Text="配置并启动官方 Codex 桌面应用" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="先写入项目级 Codex 配置，再启动官方图形桌面应用。Agent Switch 不监控完整会话，也不声称精确统计主线程 Usage。" TextWrapping="Wrap" Style="{StaticResource BodyTextStyle}" />
                         </StackPanel>
-                        <Button Grid.Row="1" Content="配置并启动" HorizontalAlignment="Left" Style="{StaticResource HeroButtonStyle}" Tag="dashboard:launch-native" AutomationProperties.Name="配置并启动原生 Codex" />
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                            <Button Content="配置并启动桌面应用" HorizontalAlignment="Left" Style="{StaticResource HeroButtonStyle}" Tag="dashboard:launch-native" AutomationProperties.Name="配置并启动原生 Codex 桌面应用" />
+                            <Button Content="Codex CLI 模式（高级）" Tag="dashboard:launch-cli" AutomationProperties.Name="启动 Codex CLI 模式" />
+                        </StackPanel>
                     </Grid>
                 </Border>
                 <Border x:Name="ManagedModeCard" Grid.Column="1" Style="{StaticResource CardBorderStyle}">
@@ -143,7 +146,7 @@
                         <Grid ColumnSpacing="10" MinWidth="0">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                             <FontIcon x:Name="CredentialStatusIcon" Glyph="&#xE73E;" FontSize="14" VerticalAlignment="Top" Margin="0,2,0,0" />
-                            <TextBlock x:Name="CredentialStatusText" Grid.Column="1" Text="正在检查 Provider" TextWrapping="Wrap" MinWidth="0" />
+                            <TextBlock x:Name="CredentialStatusText" Grid.Column="1" Text="正在检查 Provider" TextWrapping="Wrap" MinWidth="0" AutomationProperties.Name="凭据状态文字" />
                         </Grid>
                         <Button Content="打开诊断" HorizontalAlignment="Left" Tag="navigate:diagnostics" />
                     </StackPanel>
@@ -152,7 +155,9 @@
 
             <VisualStateManager.VisualStateGroups>
                 <VisualStateGroup>
-                    <VisualState x:Name="Wide" />
+                    <VisualState x:Name="Wide">
+                        <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="1200" /></VisualState.StateTriggers>
+                    </VisualState>
                     <VisualState x:Name="Narrow">
                         <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="0" /></VisualState.StateTriggers>
                         <VisualState.Setters>

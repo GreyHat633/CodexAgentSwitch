@@ -6,6 +6,7 @@ using CodexAgentSwitch.Domain.Providers;
 using Microsoft.UI.Xaml;
 using DomainRoutingMode = CodexAgentSwitch.Domain.Profiles.RoutingMode;
 using DomainWorkerSource = CodexAgentSwitch.Domain.Profiles.WorkerSource;
+using DomainFallbackAction = CodexAgentSwitch.Domain.Profiles.FallbackAction;
 
 namespace CodexAgentSwitch.App.ViewModels;
 
@@ -33,6 +34,10 @@ public sealed class ProfileListItemViewModel(Profile profile)
         ExecutionApprovalMode.FullAuto => "完全自动",
         _ => "自动批准",
     };
+
+    public bool RequiresRepair => Value.RequiresRepair;
+
+    public string RepairMessage => Value.RepairMessage ?? string.Empty;
 }
 
 public sealed class ProfileEditorViewModel : INotifyPropertyChanged
@@ -73,25 +78,31 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         _reasoningStrength = profile.MainAgent.ReasoningEffort is "low" or "medium" or "high" or "xhigh"
             ? profile.MainAgent.ReasoningEffort
             : "high";
-        _approvalMode = profile.ApprovalMode;
+        _approvalMode = Enum.IsDefined(profile.ApprovalMode)
+            ? profile.ApprovalMode
+            : ExecutionApprovalMode.Automatic;
         _workerEnabled = profile.WorkerPolicy.Enabled;
-        _workerSource = profile.WorkerPolicy.Source == WorkerSource.ExternalProvider
-            ? WorkerSource.ExternalProvider
-            : WorkerSource.NativeCodex;
+        _workerSource = Enum.IsDefined(profile.WorkerPolicy.Source)
+            ? profile.WorkerPolicy.Source
+            : WorkerSource.Disabled;
         _nativeWorkerSlot = SlotFromWorkerId(profile.WorkerPolicy.PreferredProviderId);
         _externalProviderId = profile.WorkerPolicy.Source == WorkerSource.ExternalProvider
             ? profile.WorkerPolicy.PreferredProviderId ?? string.Empty
             : string.Empty;
         ExternalProviders = EnsureSelectedProvider(externalProviders, _externalProviderId);
         _workerCount = profile.WorkerPolicy.MaxWorkers.ToString(CultureInfo.InvariantCulture);
-        _routingMode = profile.WorkerPolicy.RoutingMode;
-        _fallbackAction = profile.WorkerPolicy.FallbackAction;
+        _routingMode = Enum.IsDefined(profile.WorkerPolicy.RoutingMode)
+            ? profile.WorkerPolicy.RoutingMode
+            : RoutingMode.Single;
+        _fallbackAction = Enum.IsDefined(profile.WorkerPolicy.FallbackAction)
+            ? profile.WorkerPolicy.FallbackAction
+            : FallbackAction.SingleAgent;
         _perTaskBudget = Format(profile.Budget.PerTask);
         _dailyBudget = Format(profile.Budget.Daily);
         _monthlyBudget = Format(profile.Budget.Monthly);
         _tokenLimit = profile.Budget.TokenLimit?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
         _requestLimit = profile.Budget.RequestLimit?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-        _currency = profile.Budget.Currency;
+        _currency = string.IsNullOrWhiteSpace(profile.Budget.Currency) ? "CNY" : profile.Budget.Currency;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -183,11 +194,13 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     public bool HasExternalProviders => ExternalProviders.Count > 0;
 
     public string RoutingModeDescription =>
-        RoutingModeOptions.First(option => option.Value == RoutingMode).Description;
+        RoutingModeOptions.FirstOrDefault(option => option.Value == RoutingMode)?.Description
+        ?? "该路由模式需要修复后才能使用。";
 
     public SelectionOption<WorkerSource> SelectedWorkerSourceOption
     {
-        get => WorkerSourceOptions.First(option => option.Value == WorkerSource);
+        get => WorkerSourceOptions.FirstOrDefault(option => option.Value == WorkerSource)
+               ?? WorkerSourceOptions[0];
         set
         {
             if (value is not null)
@@ -199,7 +212,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public SelectionOption<string> SelectedReasoningStrengthOption
     {
-        get => ReasoningStrengthOptions.First(option => option.Value == ReasoningStrength);
+        get => ReasoningStrengthOptions.FirstOrDefault(option => option.Value == ReasoningStrength)
+               ?? ReasoningStrengthOptions.First(option => option.Value == "high");
         set
         {
             if (value is not null)
@@ -211,7 +225,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public SelectionOption<RoutingMode> SelectedRoutingModeOption
     {
-        get => RoutingModeOptions.First(option => option.Value == RoutingMode);
+        get => RoutingModeOptions.FirstOrDefault(option => option.Value == RoutingMode)
+               ?? RoutingModeOptions.First(option => option.Value == DomainRoutingMode.Single);
         set
         {
             if (value is not null)
@@ -223,7 +238,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public SelectionOption<ExecutionApprovalMode> SelectedApprovalModeOption
     {
-        get => ApprovalModeOptions.First(option => option.Value == ApprovalMode);
+        get => ApprovalModeOptions.FirstOrDefault(option => option.Value == ApprovalMode)
+               ?? ApprovalModeOptions.First(option => option.Value == ExecutionApprovalMode.Automatic);
         set
         {
             if (value is not null)
@@ -235,7 +251,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public SelectionOption<FallbackAction> SelectedFallbackActionOption
     {
-        get => FallbackActionOptions.First(option => option.Value == FallbackAction);
+        get => FallbackActionOptions.FirstOrDefault(option => option.Value == FallbackAction)
+               ?? FallbackActionOptions.First(option => option.Value == DomainFallbackAction.SingleAgent);
         set
         {
             if (value is not null)
@@ -273,7 +290,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     }
 
     public string ApprovalModeDescription =>
-        ApprovalModeOptions.First(option => option.Value == ApprovalMode).Description;
+        ApprovalModeOptions.FirstOrDefault(option => option.Value == ApprovalMode)?.Description
+        ?? "该批准模式需要修复后才能使用。";
 
     public Visibility FullAutoWarningVisibility =>
         ApprovalMode == ExecutionApprovalMode.FullAuto ? Visibility.Visible : Visibility.Collapsed;
@@ -448,6 +466,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         {
             IsBuiltIn = _isNew ? false : _source!.IsBuiltIn,
             ApprovalMode = this.ApprovalMode,
+            SchemaVersion = Profile.CurrentSchemaVersion,
+            RepairMessage = null,
         };
     }
 
@@ -485,8 +505,13 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             .Where(role => role is "Sol" or "Terra" or "Luna")
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        _mainAgentSlots = allowed;
-        _nativeWorkerSlots = allowed;
+        // A transient capability lookup failure must not erase every option or
+        // silently remap the persisted Sol/Terra/Luna selection.
+        if (allowed.Length > 0)
+        {
+            _mainAgentSlots = allowed;
+            _nativeWorkerSlots = allowed;
+        }
         OnPropertyChanged(nameof(MainAgentSlots));
         OnPropertyChanged(nameof(NativeWorkerSlots));
         OnPropertyChanged(nameof(MainAgentUnavailableVisibility));

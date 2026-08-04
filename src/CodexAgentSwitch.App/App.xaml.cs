@@ -25,6 +25,8 @@ public partial class App : Microsoft.UI.Xaml.Application
 
     public static IServiceProvider Services { get; private set; } = null!;
 
+    public static Window? MainWindow { get; private set; }
+
     public App()
     {
         InitializeComponent();
@@ -57,11 +59,16 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<SafeWorkerDeletionCoordinator>();
         services.AddSingleton<ProfileValidator>();
         services.AddSingleton<ProfileService>();
+        services.AddSingleton<ProfileMigrationService>();
         services.AddSingleton<ProjectService>();
         services.AddSingleton<CodexCommandLocator>();
-        services.AddSingleton<CodexModelResolver>();
+        services.AddSingleton<ICodexModelResolver, CodexModelResolver>();
         services.AddSingleton<INativeCodexProcessStarter, NativeCodexProcessStarter>();
         services.AddSingleton<INativeCodexLauncher, NativeCodexLauncher>();
+        services.AddSingleton<ICodexDesktopAppRegistration, RegistryCodexDesktopAppRegistration>();
+        services.AddSingleton<ICodexDesktopProcessStarter, CodexDesktopProcessStarter>();
+        services.AddSingleton<ICodexProjectConfigurationValidator, CodexProjectConfigurationValidator>();
+        services.AddSingleton<ICodexDesktopLauncher, CodexDesktopAppLauncher>();
         services.AddSingleton(new CodexSchemaCache(paths.ProtocolCacheDirectory));
         services.AddSingleton<CodexRuntimeManager>();
         services.AddSingleton<IControlledTaskRuntime, ControlledTaskRuntime>();
@@ -80,11 +87,14 @@ public partial class App : Microsoft.UI.Xaml.Application
         {
             var database = Services.GetRequiredService<SqliteDatabase>();
             await database.InitializeAsync();
+            await Services.GetRequiredService<ProfileMigrationService>().MigrateAllAsync();
             var profileService = Services.GetRequiredService<ProfileService>();
             await profileService.EnsureDefaultAsync();
             await EnsureBuiltInProvidersAsync();
             await EnsureProjectMigrationAsync();
+            await EnsureOnboardingStateAsync();
             _window = new MainWindow();
+            MainWindow = _window;
             _window.Activate();
         }
         catch (Exception exception)
@@ -203,6 +213,28 @@ public partial class App : Microsoft.UI.Xaml.Application
             {
                 await taskRepository.UpsertAsync(conversation with { ProjectId = project.Id });
             }
+        }
+    }
+
+    private async Task EnsureOnboardingStateAsync()
+    {
+        var paths = Services.GetRequiredService<AppDataPaths>();
+        var statePath = Path.Combine(paths.Root, "onboarding.completed.json");
+        if (File.Exists(statePath))
+        {
+            return;
+        }
+
+        // Existing installations already carrying a user-created Profile are not
+        // first-run installations. Mark them complete without changing profiles or
+        // credentials, while fresh installations still open the five-step wizard.
+        var profiles = await Services.GetRequiredService<IProfileRepository>().ListAsync();
+        if (profiles.Any(profile => !profile.IsBuiltIn))
+        {
+            await File.WriteAllTextAsync(
+                statePath,
+                $"{{\"completedAt\":\"{DateTimeOffset.UtcNow:O}\",\"migratedExistingProfile\":true}}",
+                new System.Text.UTF8Encoding(false));
         }
     }
 }

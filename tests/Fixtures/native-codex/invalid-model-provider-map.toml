@@ -1,0 +1,5 @@
+# Regression fixture for the 0.1.9 failure:
+# invalid type: map, expected a string
+model_provider = { id = "cas_external" }
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"

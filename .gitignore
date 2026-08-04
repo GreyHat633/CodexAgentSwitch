@@ -27,3 +27,6 @@ protocol-cache/
 Thumbs.db
 Desktop.ini
 
+
+# Local worktree state (build temp, hotfix copies, test output)
+state/

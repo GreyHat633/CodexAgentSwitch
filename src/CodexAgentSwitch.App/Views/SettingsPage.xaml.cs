@@ -1,5 +1,7 @@
 using System.IO.Compression;
 using System.Text;
+using CodexAgentSwitch.Application.NativeCodex;
+using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml.Controls;
@@ -11,6 +13,54 @@ public sealed partial class SettingsPage : Page, IContentActionHandler
     public SettingsPage()
     {
         InitializeComponent();
+        Loaded += OnLoaded;
+    }
+
+    private async void OnLoaded(object sender, Microsoft.UI.Xaml.RoutedEventArgs args)
+    {
+        Loaded -= OnLoaded;
+        await RefreshCodexEntryStatusAsync();
+    }
+
+    private async void SaveDesktopEntry(object sender, Microsoft.UI.Xaml.RoutedEventArgs args)
+    {
+        try
+        {
+            await App.Services.GetRequiredService<ICodexDesktopLauncher>()
+                .SaveManualExecutableAsync(DesktopEntryBox.Text.Trim());
+            ShowResult(InfoBarSeverity.Success, "桌面应用入口已保存", "原生 Codex 模式将使用此图形桌面应用入口，且不会回退到 CLI。");
+            await RefreshCodexEntryStatusAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowResult(InfoBarSeverity.Error, "无法保存桌面应用入口", exception.Message);
+        }
+    }
+
+    private async Task RefreshCodexEntryStatusAsync()
+    {
+        try
+        {
+            var runtime = await App.Services.GetRequiredService<CodexRuntimeManager>().DetectAsync();
+            var cli = await App.Services.GetRequiredService<CodexCommandLocator>().LocateAsync();
+            var desktop = await App.Services.GetRequiredService<ICodexDesktopLauncher>().DetectAsync();
+            CliPathText.Text = runtime.Installed
+                ? $"已检测：{cli.Command?.Executable ?? runtime.Version ?? "路径未知"}"
+                : $"未检测：{runtime.Message}";
+            DesktopAppStatusText.Text = desktop.IsAvailable
+                ? $"已检测：{desktop.AppUserModelId ?? desktop.ExecutablePath ?? "官方桌面应用"}"
+                : $"未检测：{desktop.Status}";
+            DesktopEntryBox.Text = desktop.IsManualEntry ? desktop.ExecutablePath ?? string.Empty : string.Empty;
+            AppServerStatusText.Text = runtime.AppServerRunning
+                ? "已连接"
+                : "未连接；CodexAgentSwitch 模式将在需要时启动";
+        }
+        catch (Exception exception)
+        {
+            CliPathText.Text = "状态读取失败";
+            DesktopAppStatusText.Text = "状态读取失败";
+            AppServerStatusText.Text = exception.Message;
+        }
     }
 
     public Task HandleContentActionAsync(string action, Button source) => action switch

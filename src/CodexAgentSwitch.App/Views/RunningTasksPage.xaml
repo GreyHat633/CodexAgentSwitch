@@ -3,7 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:CodexAgentSwitch.App.Views">
-    <Grid Padding="28,24,28,20" RowSpacing="14">
+    <Grid Padding="{StaticResource PagePadding}" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -13,135 +13,124 @@
         <local:PageHeader
             Title="CodexAgentSwitch 模式"
             Subtitle="在本程序内按项目管理受控对话、主 Thread、Worker、预算、Usage 与归档。" />
-        <InfoBar x:Name="ActionBar" Grid.Row="1" IsOpen="False" />
+        <InfoBar x:Name="ActionBar" Grid.Row="1" IsOpen="False" IsClosable="True" />
 
-        <Grid x:Name="WorkspaceGrid" Grid.Row="2" ColumnSpacing="12" MinHeight="520">
+        <Grid x:Name="WorkspaceGrid" Grid.Row="2" ColumnSpacing="16" MinHeight="0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="SidebarColumn" Width="280" />
-                <ColumnDefinition Width="*" MinWidth="360" />
+                <ColumnDefinition x:Name="SidebarColumn" Width="248" />
+                <ColumnDefinition Width="*" MinWidth="0" />
             </Grid.ColumnDefinitions>
 
-            <Grid x:Name="SidebarGrid" Grid.Column="0" RowSpacing="10">
+            <Grid x:Name="SidebarGrid" Grid.Column="0" RowSpacing="12" MinWidth="0">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-            <Border Style="{StaticResource CardBorderStyle}" Padding="0">
-                <Grid RowSpacing="8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid Padding="12,12,8,4">
-                        <TextBlock Text="项目" Style="{StaticResource SectionTitleStyle}" VerticalAlignment="Center" />
-                        <Button Content="新建" HorizontalAlignment="Right" Tag="cas:project-new" AutomationProperties.Name="新建项目" />
+                <Border Style="{StaticResource CardBorderStyle}" Padding="0" MinWidth="0">
+                    <Grid RowSpacing="6">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid Padding="12,10,8,4">
+                            <TextBlock Text="项目" Style="{StaticResource SectionTitleStyle}" VerticalAlignment="Center" />
+                            <Button Content="新建" HorizontalAlignment="Right" Tag="cas:project-new" AutomationProperties.Name="新建项目" />
+                        </Grid>
+                        <Grid Grid.Row="1">
+                            <TextBlock x:Name="EmptyProjectsText" Text="还没有项目。新建项目后即可按项目保存对话。" Margin="14" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            <ListView
+                                x:Name="ProjectListView"
+                                SelectionChanged="OnProjectSelectionChanged"
+                                AutomationProperties.Name="项目列表">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Padding="4" ColumnSpacing="6">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" MinWidth="0" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding WorkingDirectory}" Style="{StaticResource CaptionTextStyle}" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding State}" Style="{StaticResource CaptionTextStyle}" />
+                                            </StackPanel>
+                                            <Button Grid.Column="1" Content="•••" Padding="8,2" ToolTipService.ToolTip="项目操作" Click="OpenProjectMoreMenu" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Grid>
+                        <Grid Grid.Row="2" Padding="8">
+                            <Button x:Name="OpenProjectDirectoryButton" Content="打开工作目录" Tag="cas:project-open-directory" IsEnabled="False" HorizontalAlignment="Stretch" />
+                        </Grid>
                     </Grid>
-                    <ListView
-                        x:Name="ProjectListView"
-                        Grid.Row="1"
-                        MaxHeight="170"
-                        SelectionChanged="OnProjectSelectionChanged"
-                        AutomationProperties.Name="项目列表">
-                        <ListView.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Padding="4" Spacing="3">
-                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{Binding WorkingDirectory}" Style="{StaticResource CaptionTextStyle}" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{Binding State}" Style="{StaticResource CaptionTextStyle}" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
-                    <StackPanel Grid.Row="2" Padding="10" Spacing="6">
-                        <Grid ColumnSpacing="6">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Button x:Name="RenameProjectButton" Content="重命名" HorizontalAlignment="Stretch" Tag="cas:project-rename" IsEnabled="False" />
-                            <Button x:Name="ProjectDirectoryButton" Grid.Column="1" Content="工作目录" HorizontalAlignment="Stretch" Tag="cas:project-directory" IsEnabled="False" />
-                        </Grid>
-                        <Grid ColumnSpacing="6">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Button x:Name="ArchiveProjectButton" Content="归档" HorizontalAlignment="Stretch" Tag="cas:project-archive" IsEnabled="False" />
-                            <Button x:Name="DeleteProjectButton" Grid.Column="1" Content="删除" Foreground="{ThemeResource SystemFillColorCriticalBrush}" HorizontalAlignment="Stretch" Tag="cas:project-delete" IsEnabled="False" />
-                        </Grid>
-                    </StackPanel>
-                </Grid>
-            </Border>
+                </Border>
 
-            <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="0">
-                <Grid RowSpacing="8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid Padding="12,12,8,4">
-                        <TextBlock Text="对话" Style="{StaticResource SectionTitleStyle}" VerticalAlignment="Center" />
-                        <Button x:Name="NewConversationButton" Content="新建" HorizontalAlignment="Right" Tag="cas:conversation-new" AutomationProperties.Name="新建对话" IsEnabled="False" />
+                <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="0" MinWidth="0">
+                    <Grid RowSpacing="6">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid Padding="12,10,8,4">
+                            <TextBlock Text="对话" Style="{StaticResource SectionTitleStyle}" VerticalAlignment="Center" />
+                            <Button x:Name="NewConversationButton" Content="新建" HorizontalAlignment="Right" Tag="cas:conversation-new" AutomationProperties.Name="新建对话" IsEnabled="False" />
+                        </Grid>
+                        <Grid Grid.Row="1">
+                            <TextBlock x:Name="EmptyConversationsText" Text="当前项目还没有对话。" Margin="14" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            <ListView
+                                x:Name="ConversationListView"
+                                SelectionChanged="OnConversationSelectionChanged"
+                                AutomationProperties.Name="对话列表">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Padding="4" ColumnSpacing="6">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" MinWidth="0" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding Status}" Style="{StaticResource CaptionTextStyle}" />
+                                                <TextBlock Text="{Binding Updated}" Style="{StaticResource CaptionTextStyle}" />
+                                            </StackPanel>
+                                            <Button Grid.Column="1" Content="•••" Padding="8,2" ToolTipService.ToolTip="对话操作" Click="OpenConversationMoreMenu" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Grid>
                     </Grid>
-                    <TextBlock x:Name="EmptyConversationsText" Grid.Row="1" Text="当前项目还没有对话。" Margin="14" Style="{StaticResource CaptionTextStyle}" />
-                    <ListView
-                        x:Name="ConversationListView"
-                        Grid.Row="1"
-                        SelectionChanged="OnConversationSelectionChanged"
-                        AutomationProperties.Name="对话列表">
-                        <ListView.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Padding="4" Spacing="3">
-                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{Binding Status}" Style="{StaticResource CaptionTextStyle}" />
-                                    <TextBlock Text="{Binding Updated}" Style="{StaticResource CaptionTextStyle}" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
-                    <Grid Grid.Row="2" Padding="10" ColumnSpacing="6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Button x:Name="RenameConversationButton" Content="重命名" HorizontalAlignment="Stretch" Tag="cas:conversation-rename" IsEnabled="False" />
-                        <Button x:Name="DeleteConversationButton" Grid.Column="1" Content="删除" Foreground="{ThemeResource SystemFillColorCriticalBrush}" HorizontalAlignment="Stretch" Tag="cas:conversation-delete" IsEnabled="False" />
-                    </Grid>
-                </Grid>
-            </Border>
+                </Border>
             </Grid>
 
             <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" Padding="0" MinWidth="0">
-                <Grid RowSpacing="0">
+                <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <Grid Padding="16,12" ColumnSpacing="12">
+                    <Grid Padding="16,12" ColumnSpacing="12" RowSpacing="8">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" MinWidth="0" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="3">
-                            <TextBlock x:Name="ConversationTitleText" Text="选择或新建对话" FontSize="20" FontWeight="SemiBold" />
+                        <StackPanel Spacing="3" MinWidth="0">
+                            <TextBlock x:Name="ConversationTitleText" Text="选择或新建对话" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                             <TextBlock x:Name="ConversationMetadataText" Text="一个对话始终绑定同一个主 Thread。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                         </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <StackPanel x:Name="HeaderActionsPanel" Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <Button Content="方案" Tag="cas:conversation-profile" ToolTipService.ToolTip="从下一轮应用方案" />
+                            <CheckBox x:Name="UseWorkerCheckBox" Content="本轮允许 Worker" IsChecked="True" IsEnabled="False" AutomationProperties.Name="允许当前方案调用 Worker" />
                             <Button x:Name="ToggleSidebarButton" Content="隐藏侧栏" Tag="cas:toggle-sidebar" />
                             <Button x:Name="RetryButton" Content="重试" Tag="cas:retry" Visibility="Collapsed" />
-                            <Button x:Name="StopButton" Content="停止生成" Tag="cas:stop" Visibility="Collapsed" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                            <Button x:Name="StopButton" Content="停止" Tag="cas:stop" Visibility="Collapsed" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
                         </StackPanel>
                     </Grid>
 
                     <ListView
                         x:Name="MessageListView"
                         Grid.Row="1"
-                        Padding="14,8"
+                        Padding="16,8"
                         SelectionMode="None"
                         IsItemClickEnabled="False"
                         HorizontalContentAlignment="Stretch"
@@ -154,42 +143,40 @@
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <local:ConversationMessageView Message="{Binding}" HorizontalAlignment="Stretch" Margin="0,0,0,10" />
+                                <local:ConversationMessageView Message="{Binding Message}" HorizontalAlignment="Stretch" Margin="0,0,0,8" />
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
+                    <Button x:Name="BackToBottomButton" Grid.Row="1" Content="回到底部" Tag="cas:bottom" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,20,16" />
 
-                    <Border Grid.Row="2" Padding="14,12" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
-                        <StackPanel Spacing="8">
-                            <InfoBar x:Name="ConversationStatusBar" IsOpen="False" />
+                    <Border Grid.Row="2" Padding="14,10" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                        <Grid RowSpacing="8">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <InfoBar x:Name="ConversationStatusBar" IsOpen="False" IsClosable="True" />
                             <TextBox
                                 x:Name="ComposerTextBox"
-                                MinHeight="82"
-                                MaxHeight="220"
+                                Grid.Row="1"
+                                MinHeight="64"
+                                MaxHeight="180"
                                 AcceptsReturn="True"
                                 IsEnabled="False"
                                 TextWrapping="Wrap"
                                 PlaceholderText="输入下一轮内容；Ctrl+Enter 发送"
                                 KeyDown="OnComposerKeyDown"
                                 AutomationProperties.Name="对话输入框" />
-                            <Grid x:Name="ComposerActionsGrid" ColumnSpacing="8" RowSpacing="8">
+                            <Grid Grid.Row="2" ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <StackPanel x:Name="WorkerControlsPanel" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <CheckBox x:Name="UseWorkerCheckBox" Content="允许当前方案调用 Worker" IsChecked="True" IsEnabled="False" />
-                                    <Button x:Name="ForceWorkerButton" Content="强制测试当前 Worker" Tag="cas:force-worker" IsEnabled="False" />
-                                </StackPanel>
-                                <Button x:Name="ApprovalButton" Grid.Column="1" Content="处理审批" Tag="cas:approval" Visibility="Collapsed" />
-                                <Button x:Name="SendButton" Grid.Column="2" Content="发送" Style="{StaticResource HeroButtonStyle}" Tag="cas:send" AutomationProperties.Name="发送对话" IsEnabled="False" />
+                                <Button x:Name="ApprovalButton" Content="处理审批" Tag="cas:approval" Visibility="Collapsed" HorizontalAlignment="Left" />
+                                <Button x:Name="SendButton" Grid.Column="1" Content="发送" Style="{StaticResource HeroButtonStyle}" Tag="cas:send" AutomationProperties.Name="发送对话" IsEnabled="False" />
                             </Grid>
-                        </StackPanel>
+                        </Grid>
                     </Border>
                 </Grid>
             </Border>
@@ -202,18 +189,16 @@
                         <AdaptiveTrigger MinWindowWidth="0" />
                     </VisualState.StateTriggers>
                     <VisualState.Setters>
-                        <Setter Target="WorkerControlsPanel.Orientation" Value="Vertical" />
-                        <Setter Target="WorkerControlsPanel.(Grid.ColumnSpan)" Value="3" />
-                        <Setter Target="ApprovalButton.(Grid.Row)" Value="1" />
-                        <Setter Target="ApprovalButton.(Grid.Column)" Value="1" />
-                        <Setter Target="SendButton.(Grid.Row)" Value="1" />
-                        <Setter Target="SendButton.(Grid.Column)" Value="2" />
+                        <Setter Target="HeaderActionsPanel.Orientation" Value="Vertical" />
                     </VisualState.Setters>
                 </VisualState>
                 <VisualState x:Name="WideConversationLayout">
                     <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="1280" />
+                        <AdaptiveTrigger MinWindowWidth="900" />
                     </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="HeaderActionsPanel.Orientation" Value="Horizontal" />
+                    </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>

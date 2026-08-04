@@ -72,7 +72,7 @@ public sealed class DeepSeekControlledTaskEndToEndTests
             await providerRepository.UpsertAsync(provider);
             await profileRepository.UpsertAsync(profile);
             var projectService = new ProjectService(projectRepository, clock);
-            var project = await projectService.CreateAsync("LIVE DeepSeek E2E", root);
+            var project = await projectService.CreateAsync("LIVE DeepSeek E2E", root, profile.Id);
 
             var discovery = await new CodexCommandLocator().LocateAsync();
             Assert.True(discovery.IsAvailable, discovery.Status + Environment.NewLine + string.Join(Environment.NewLine, discovery.Attempts));
@@ -96,7 +96,8 @@ public sealed class DeepSeekControlledTaskEndToEndTests
                     new ExternalProviderResolver()),
                 usageRepository,
                 usageCollector,
-                clock);
+                clock,
+                projectRepository);
             var states = new ConcurrentBag<ControlledTaskStatus>();
             service.TaskChanged += session =>
             {
@@ -117,6 +118,9 @@ public sealed class DeepSeekControlledTaskEndToEndTests
             Assert.False(string.IsNullOrWhiteSpace(completed.MainThreadId));
             var firstTurn = completed.Turns[0];
             Assert.Equal(DelegationDecisionKind.InvokeWorker, firstTurn.Delegation?.Kind);
+            Assert.False(string.IsNullOrWhiteSpace(firstTurn.Delegation?.DelegatedScope));
+            Assert.False(string.IsNullOrWhiteSpace(firstTurn.Delegation?.Deliverable));
+            Assert.NotEmpty(firstTurn.Delegation?.AcceptanceCriteria ?? []);
             Assert.NotNull(firstTurn.ProfileSnapshot);
             Assert.Equal(provider.Id, firstTurn.ProfileSnapshot!.Provider?.Id);
             Assert.Equal(DeepSeekV4Catalog.FlashModelId, firstTurn.ProfileSnapshot.Provider?.ModelId);

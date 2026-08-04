@@ -16,11 +16,11 @@ public sealed class SqliteProfileRepository(SqliteDatabase database) : IProfileR
         await using var connection = new SqliteConnection(database.ConnectionString);
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT payload_json, is_default FROM profiles ORDER BY is_default DESC, name COLLATE NOCASE";
+        command.CommandText = "SELECT id, payload_json, is_default FROM profiles ORDER BY is_default DESC, name COLLATE NOCASE";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            profiles.Add(Deserialize(reader.GetString(0), reader.GetInt64(1) == 1));
+            profiles.Add(Deserialize(reader.GetString(1), reader.GetString(0), reader.GetInt64(2) == 1));
         }
 
         return profiles;
@@ -31,11 +31,11 @@ public sealed class SqliteProfileRepository(SqliteDatabase database) : IProfileR
         await using var connection = new SqliteConnection(database.ConnectionString);
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT payload_json, is_default FROM profiles WHERE id = $id";
+        command.CommandText = "SELECT id, payload_json, is_default FROM profiles WHERE id = $id";
         command.Parameters.AddWithValue("$id", id.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? Deserialize(reader.GetString(0), reader.GetInt64(1) == 1)
+            ? Deserialize(reader.GetString(1), reader.GetString(0), reader.GetInt64(2) == 1)
             : null;
     }
 
@@ -44,9 +44,11 @@ public sealed class SqliteProfileRepository(SqliteDatabase database) : IProfileR
         await using var connection = new SqliteConnection(database.ConnectionString);
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT payload_json FROM profiles WHERE is_default = 1 LIMIT 1";
-        var value = await command.ExecuteScalarAsync(cancellationToken);
-        return value is string json ? Deserialize(json, isDefault: true) : null;
+        command.CommandText = "SELECT id, payload_json FROM profiles WHERE is_default = 1 LIMIT 1";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? Deserialize(reader.GetString(1), reader.GetString(0), isDefault: true)
+            : null;
     }
 
     public async Task UpsertAsync(Profile profile, CancellationToken cancellationToken = default)
@@ -95,16 +97,69 @@ public sealed class SqliteProfileRepository(SqliteDatabase database) : IProfileR
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static Profile Deserialize(string json, bool isDefault)
+    public async Task<bool> HasBeenInitializedAsync(CancellationToken cancellationToken = default)
     {
-        var profile = JsonSerializer.Deserialize<Profile>(json, JsonOptions)
-            ?? throw new InvalidDataException("Stored profile JSON is invalid.");
+        await using var connection = new SqliteConnection(database.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT has_been_initialized FROM profile_state WHERE id = 1";
+        return (await command.ExecuteScalarAsync(cancellationToken)) is long value && value != 0;
+    }
+
+    public async Task MarkInitializedAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(database.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO profile_state(id, has_been_initialized) VALUES(1, 1) ON CONFLICT(id) DO UPDATE SET has_been_initialized = 1";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static Profile Deserialize(string json, string persistentId, bool isDefault)
+    {
+        Profile? profile;
+        try
+        {
+            profile = JsonSerializer.Deserialize<Profile>(json, JsonOptions);
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        {
+            return CreateRepairProfile(persistentId, isDefault, "配置方案数据无法解析。请删除该方案后重新创建。");
+        }
+
+        if (profile is null)
+        {
+            return CreateRepairProfile(persistentId, isDefault, "配置方案数据为空。请删除该方案后重新创建。");
+        }
+
+        var id = Guid.TryParse(persistentId, out var parsedId) ? parsedId : profile.Id;
         return profile with
         {
+            Id = id,
             IsDefault = isDefault,
-            // 0.1.1 did not persist IsBuiltIn. Keep the original economic preset
-            // visibly classified without changing the stored schema or payload.
+            // Older payloads did not persist IsBuiltIn. The startup migration
+            // writes the current schema once after this read succeeds.
             IsBuiltIn = profile.IsBuiltIn || Profile.IsBuiltInPresetName(profile.Name),
+        };
+    }
+
+    private static Profile CreateRepairProfile(string persistentId, bool isDefault, string message)
+    {
+        var id = Guid.TryParse(persistentId, out var parsedId) ? parsedId : Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        return new Profile(
+            id,
+            "需要修复的方案",
+            new AgentSelection("gpt-5.6-sol", "high"),
+            new WorkerPolicy(false, WorkerSource.Disabled, null, null, 0, RoutingMode.Single, FallbackAction.SingleAgent),
+            new BudgetLimits(null, null, null, null, null, "CNY"),
+            isDefault,
+            now,
+            now,
+            null)
+        {
+            SchemaVersion = Profile.CurrentSchemaVersion,
+            RepairMessage = message,
         };
     }
 }

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.6',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.10',
     [switch]$IncludeRuntimeInstaller
 )
 
@@ -106,9 +106,17 @@ function Save-WindowsAppRuntimeInstaller([string]$destinationPath) {
 & (Join-Path $PSScriptRoot 'build.ps1') -Configuration Release
 
 $portable = Join-Path $resolvedRelease 'portable'
-dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishSingleFile=false -p:EnableMsixTooling=true -p:Version=$Version -o $portable --nologo
+# WinUI self-contained deployment currently fails during XAML initialization on the
+# Windows 10 22H2 primary acceptance host. Ship the stable framework-dependent
+# app instead; the same release includes the offline runtime bootstrapper below.
+dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained false -p:Platform=x64 -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:EnableMsixTooling=true -p:Version=$Version -o $portable --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Portable publish failed.' }
 Assert-MultiFilePublish $portable 'CodexAgentSwitch.App'
+$brokerPublish = Join-Path $resolvedRelease 'credential-broker-publish'
+dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.CredentialBroker\CodexAgentSwitch.CredentialBroker.csproj') -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Version=$Version -o $brokerPublish --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Credential broker publish failed.' }
+Assert-MultiFilePublish $brokerPublish 'CodexAgentSwitch.CredentialBroker'
+Copy-PublishContents $brokerPublish (Join-Path $portable 'NativeCredentialBroker')
 $portableZip = Join-Path $resolvedRelease 'CodexAgentSwitch-win10-x64.zip'
 New-ZipArchive $portable $portableZip
 $portableHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $portableZip).Hash.ToLowerInvariant()
@@ -131,9 +139,10 @@ $compactZip = $null
 if ($IncludeRuntimeInstaller) {
     $compact = Join-Path $resolvedRelease 'compact-runtime'
     $compactApp = Join-Path $compact 'App'
-    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:Version=$Version -o $compactApp --nologo
+    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained false -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:Version=$Version -o $compactApp --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Compact publish failed.' }
     Assert-MultiFilePublish $compactApp 'CodexAgentSwitch.App'
+    Copy-PublishContents $brokerPublish (Join-Path $compactApp 'NativeCredentialBroker')
     $appPri = Join-Path $repo 'src\CodexAgentSwitch.App\bin\Release\net8.0-windows10.0.22621.0\win-x64\CodexAgentSwitch.App.pri'
     if (-not (Test-Path -LiteralPath $appPri)) { throw 'Compact publish did not generate the application PRI resource index.' }
     Copy-Item -LiteralPath $appPri -Destination $compactApp -Force
@@ -159,12 +168,16 @@ New-ZipArchive $setupBundle $setupZip
 $files = Get-ChildItem -LiteralPath $resolvedRelease -File | ForEach-Object {
     [pscustomobject]@{ name = $_.Name; size = $_.Length; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
 }
+$checksumFile = 'SHA256SUMS.txt'
+($files | ForEach-Object { "$($_.sha256)  $($_.name)" }) |
+    Set-Content -LiteralPath (Join-Path $resolvedRelease $checksumFile) -Encoding ASCII
 $manifest = [ordered]@{
     version = $Version
     target = 'Windows 10 22H2 x64 primary; Windows 11 compatible'
     generatedAt = [DateTimeOffset]::Now.ToString('O')
     runtimeInstallerBundled = [bool]$IncludeRuntimeInstaller
     runtimeInstallerSource = if ($IncludeRuntimeInstaller) { 'https://aka.ms/windowsappsdk/1.8/1.8.260710003/windowsappruntimeinstall-x64.exe' } else { $null }
+    checksumFile = $checksumFile
     branding = [ordered]@{
         source = 'Branding/AppIcon.svg'
         ico = 'Branding/AppIcon.ico'

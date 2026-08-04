@@ -73,14 +73,31 @@ public sealed record Profile(
     DateTimeOffset UpdatedAt,
     DateTimeOffset? LastUsedAt)
 {
+    public const int CurrentSchemaVersion = 2;
+
+    /// <summary>
+    /// Persisted profile payload schema. Values before 2 are normalized by the
+    /// one-time profile migration before any page constructs an editor.
+    /// </summary>
+    public int SchemaVersion { get; init; }
+
     public bool IsBuiltIn { get; init; }
 
     public ExecutionApprovalMode ApprovalMode { get; init; } = ExecutionApprovalMode.Automatic;
 
+    /// <summary>
+    /// A localized, non-sensitive reason that prevents a malformed legacy
+    /// payload from being edited or activated. It is intentionally surfaced in
+    /// the UI instead of allowing a binding exception to terminate the app.
+    /// </summary>
+    public string? RepairMessage { get; init; }
+
+    public bool RequiresRepair => !string.IsNullOrWhiteSpace(RepairMessage);
+
     public static bool IsBuiltInPresetName(string? name) =>
         string.Equals(name?.Trim(), "经济模式", StringComparison.OrdinalIgnoreCase);
 
-    public string KindLabel => IsBuiltIn ? "内置预设" : "用户方案";
+    public string KindLabel => RequiresRepair ? "需要修复" : IsBuiltIn ? "内置预设" : "用户方案";
 
     public string DefaultLabel => IsDefault ? "当前" : string.Empty;
 
@@ -96,5 +113,6 @@ public sealed record Profile(
         null)
     {
         IsBuiltIn = true,
+        SchemaVersion = CurrentSchemaVersion,
     };
 }

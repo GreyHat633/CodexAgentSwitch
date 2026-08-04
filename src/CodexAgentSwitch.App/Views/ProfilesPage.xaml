@@ -27,7 +27,7 @@
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
         <ScrollViewer>
-            <StackPanel Padding="{StaticResource PagePadding}" Spacing="16" MaxWidth="1180">
+            <StackPanel Padding="{StaticResource PagePadding}" Spacing="16" MaxWidth="{StaticResource PageContentMaxWidth}" HorizontalAlignment="Center">
                 <Grid RowSpacing="12">
                     <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
                     <local:PageHeader Title="配置方案" Subtitle="创建、编辑并持久化 Sol / Terra / Luna 路由方案。导入和导出不包含凭据。" />
@@ -58,6 +58,7 @@
                                                 <TextBlock Text="{Binding Name}" Style="{StaticResource BodyTextStyle}" />
                                                 <TextBlock Text="{Binding KindLabel}" Style="{StaticResource CaptionTextStyle}" />
                                                 <TextBlock Text="{Binding ApprovalModeLabel}" Style="{StaticResource CaptionTextStyle}" />
+                                                <TextBlock Text="{Binding RepairMessage}" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                                             </StackPanel>
                                             <Border Grid.Column="1" Style="{StaticResource StatusBadgeStyle}">
                                                 <TextBlock Text="{Binding DefaultLabel}" />

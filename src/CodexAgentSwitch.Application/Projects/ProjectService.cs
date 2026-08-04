@@ -14,14 +14,16 @@ public sealed class ProjectService(IProjectRepository repository, IClock clock)
     public async Task<AgentProject> CreateAsync(
         string name,
         string workingDirectory,
+        Guid? defaultProfileId = null,
         CancellationToken cancellationToken = default)
     {
         var normalizedName = ValidateName(name);
         var normalizedDirectory = ValidateWorkingDirectory(workingDirectory);
         await EnsureNameAvailableAsync(normalizedName, null, cancellationToken);
+        await EnsureDirectoryAvailableAsync(normalizedDirectory, null, cancellationToken);
         var now = clock.UtcNow;
         var project = new AgentProject(
-            Guid.NewGuid().ToString("D"), normalizedName, normalizedDirectory, false, now, now);
+            Guid.NewGuid().ToString("D"), normalizedName, normalizedDirectory, false, now, now, defaultProfileId);
         await repository.UpsertAsync(project, cancellationToken);
         return project;
     }
@@ -32,8 +34,39 @@ public sealed class ProjectService(IProjectRepository repository, IClock clock)
     public Task<AgentProject> ChangeWorkingDirectoryAsync(
         string id,
         string workingDirectory,
-        CancellationToken cancellationToken = default) =>
-        UpdateAsync(id, null, ValidateWorkingDirectory(workingDirectory), cancellationToken);
+        CancellationToken cancellationToken = default) => ChangeWorkingDirectoryCoreAsync(id, ValidateWorkingDirectory(workingDirectory), cancellationToken);
+
+    public async Task<AgentProject> SetDefaultProfileAsync(
+        string id,
+        Guid? profileId,
+        CancellationToken cancellationToken = default)
+    {
+        var current = await GetRequiredAsync(id, cancellationToken);
+        var updated = current with { DefaultProfileId = profileId, UpdatedAt = clock.UtcNow };
+        await repository.UpsertAsync(updated, cancellationToken);
+        return updated;
+    }
+
+    public async Task<AgentProject> RecordNativeCodexAdaptationAsync(
+        string id,
+        NativeCodexProjectAdaptation adaptation,
+        CancellationToken cancellationToken = default)
+    {
+        var current = await GetRequiredAsync(id, cancellationToken);
+        var updated = current with { NativeCodexAdaptation = adaptation, UpdatedAt = clock.UtcNow };
+        await repository.UpsertAsync(updated, cancellationToken);
+        return updated;
+    }
+
+    public async Task<AgentProject> ClearNativeCodexAdaptationAsync(
+        string id,
+        CancellationToken cancellationToken = default)
+    {
+        var current = await GetRequiredAsync(id, cancellationToken);
+        var updated = current with { NativeCodexAdaptation = null, UpdatedAt = clock.UtcNow };
+        await repository.UpsertAsync(updated, cancellationToken);
+        return updated;
+    }
 
     public Task<AgentProject> ArchiveAsync(string id, CancellationToken cancellationToken = default) =>
         SetArchivedAsync(id, true, cancellationToken);
@@ -69,6 +102,15 @@ public sealed class ProjectService(IProjectRepository repository, IClock clock)
         return updated;
     }
 
+    private async Task<AgentProject> ChangeWorkingDirectoryCoreAsync(
+        string id,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        await EnsureDirectoryAvailableAsync(workingDirectory, id, cancellationToken);
+        return await UpdateAsync(id, null, workingDirectory, cancellationToken);
+    }
+
     private async Task<AgentProject> SetArchivedAsync(
         string id,
         bool isArchived,
@@ -95,6 +137,20 @@ public sealed class ProjectService(IProjectRepository repository, IClock clock)
         if (duplicate)
         {
             throw new InvalidOperationException($"项目名称“{name}”已经存在。");
+        }
+    }
+
+    private async Task EnsureDirectoryAvailableAsync(
+        string workingDirectory,
+        string? currentId,
+        CancellationToken cancellationToken)
+    {
+        var duplicate = (await repository.ListAsync(cancellationToken))
+            .Any(project => !string.Equals(project.Id, currentId, StringComparison.Ordinal)
+                && string.Equals(project.WorkingDirectory, workingDirectory, StringComparison.OrdinalIgnoreCase));
+        if (duplicate)
+        {
+            throw new InvalidOperationException($"工作目录已作为现有项目添加：{workingDirectory}");
         }
     }
 

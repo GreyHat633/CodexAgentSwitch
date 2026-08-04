@@ -8,6 +8,12 @@ public sealed class ProfileValidator
     public ValidationResult Validate(Profile profile)
     {
         var issues = new List<ValidationIssue>();
+        if (profile.RequiresRepair)
+        {
+            issues.Add(new("profile.repair.required", profile.RepairMessage ?? "该方案需要修复后才能保存。", "Profile"));
+            return new ValidationResult(issues);
+        }
+
         if (string.IsNullOrWhiteSpace(profile.Name))
         {
             issues.Add(new("profile.name.required", "配置方案名称不能为空。", nameof(profile.Name)));

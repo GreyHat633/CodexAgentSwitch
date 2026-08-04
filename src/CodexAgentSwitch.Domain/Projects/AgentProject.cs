@@ -6,4 +6,15 @@ public sealed record AgentProject(
     string WorkingDirectory,
     bool IsArchived,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    Guid? DefaultProfileId = null,
+    NativeCodexProjectAdaptation? NativeCodexAdaptation = null);
+
+public sealed record NativeCodexProjectAdaptation(
+    Guid ProfileId,
+    string ProfileName,
+    string ConfigurationPath,
+    string? BackupPath,
+    DateTimeOffset AppliedAt,
+    string ConfigurationSummary,
+    bool OriginalConfigurationExisted);

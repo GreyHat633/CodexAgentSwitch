@@ -10,6 +10,7 @@ using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Domain.Tasks;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
+using CodexAgentSwitch.Infrastructure.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -52,37 +53,28 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
         }
     }
 
-    public async Task HandleContentActionAsync(string action, Button source)
+    public Task HandleContentActionAsync(string action, Button source)
     {
-        if (action != "dashboard:launch-native")
+        if (action == "dashboard:launch-native")
         {
-            return;
+            Frame.Navigate(typeof(NativeProjectAdapterPage), "desktop");
+            return Task.CompletedTask;
         }
 
-        source.IsEnabled = false;
-        try
+        if (action == "dashboard:launch-cli")
         {
-            var profile = await App.Services.GetRequiredService<IProfileRepository>().GetDefaultAsync()
-                ?? throw new InvalidOperationException("尚未设置当前配置方案。");
-            var project = (await App.Services.GetRequiredService<ProjectService>().ListAsync())
-                .FirstOrDefault(item => !item.IsArchived)
-                ?? throw new InvalidOperationException("请先在 CodexAgentSwitch 模式中新建项目并设置工作目录。");
-            var result = await App.Services.GetRequiredService<INativeCodexLauncher>()
-                .LaunchAsync(profile, project.WorkingDirectory);
-            ShowAction(
-                "原生 Codex 已启动",
-                $"已应用方案“{profile.Name}”，进程 {result.ProcessId}。原生界面中的委派、会话和主线程 Usage 不由 Agent Switch 监控。",
-                InfoBarSeverity.Success);
+            Frame.Navigate(typeof(NativeProjectAdapterPage), "cli");
+            return Task.CompletedTask;
         }
-        catch (Exception exception)
+
+        if (action is not ("dashboard:launch-native" or "dashboard:launch-cli"))
         {
-            ShowAction("原生 Codex 启动失败", exception.Message, InfoBarSeverity.Error);
+            return Task.CompletedTask;
         }
-        finally
-        {
-            source.IsEnabled = true;
-        }
+
+        return Task.CompletedTask;
     }
+
 
     private async Task UpdateProfileAsync(Profile profile)
     {
@@ -229,6 +221,38 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
         DashboardActionBar.Message = message;
         DashboardActionBar.Severity = severity;
         DashboardActionBar.IsOpen = true;
+    }
+
+    private static string NativeLaunchError(Exception exception)
+    {
+        if (exception.Message.Contains("当前 Codex 账户不支持模型", StringComparison.Ordinal))
+        {
+            return "当前方案选择的主模型不在此账户可用目录中。请在“配置方案”中选择可用模型后重试。";
+        }
+
+        if (exception.Message.Contains("工作目录不存在", StringComparison.Ordinal))
+        {
+            return "当前项目的工作目录不存在或不可访问。请检查项目工作目录后重试。";
+        }
+
+        return "无法应用当前方案并启动原生 Codex。详细的脱敏诊断信息已写入“诊断”页。";
+    }
+
+    private static void WriteNativeLaunchDiagnostic(Exception exception)
+    {
+        try
+        {
+            var paths = App.Services.GetRequiredService<AppDataPaths>();
+            paths.EnsureCreated();
+            var path = Path.Combine(paths.LogsDirectory, "native-launch-errors.log");
+            File.AppendAllText(
+                path,
+                $"[{DateTimeOffset.UtcNow:O}] {DiagnosticBundleExporter.Redact(exception.ToString())}{Environment.NewLine}");
+        }
+        catch
+        {
+            // The user-facing error remains safe even if diagnostics cannot be persisted.
+        }
     }
 
     private static string AgentDisplayName(string modelId) => modelId switch

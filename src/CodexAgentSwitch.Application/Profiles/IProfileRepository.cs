@@ -13,4 +13,10 @@ public interface IProfileRepository
     Task UpsertAsync(Profile profile, CancellationToken cancellationToken = default);
 
     Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
+
+    Task<bool> HasBeenInitializedAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+
+    Task MarkInitializedAsync(CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
 }

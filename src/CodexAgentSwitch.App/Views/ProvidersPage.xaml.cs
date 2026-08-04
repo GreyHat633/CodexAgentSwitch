@@ -1,5 +1,7 @@
 using CodexAgentSwitch.Application.Credentials;
+using CodexAgentSwitch.Application.Profiles;
 using CodexAgentSwitch.Application.Providers;
+using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using Microsoft.Extensions.DependencyInjection;
@@ -199,6 +201,56 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             ProviderResultBar.Severity = state.Installed ? InfoBarSeverity.Success : InfoBarSeverity.Warning;
             ProviderResultBar.Title = state.Installed ? "原生 Codex 检测成功" : "原生 Codex 尚不可用";
             ProviderResultBar.Message = state.Message;
+            ProviderResultBar.IsOpen = true;
+            return;
+        }
+
+        if (action == "provider:force-worker")
+        {
+            await ForceTestCurrentWorkerAsync();
+        }
+    }
+
+    private async Task ForceTestCurrentWorkerAsync()
+    {
+        ProviderResultBar.IsOpen = false;
+        try
+        {
+            var profile = await App.Services.GetRequiredService<IProfileRepository>().GetDefaultAsync()
+                ?? throw new InvalidOperationException("尚未设置当前配置方案。");
+            if (!profile.WorkerPolicy.Enabled || profile.WorkerPolicy.Source != WorkerSource.ExternalProvider)
+            {
+                throw new InvalidOperationException("当前方案未启用外部 Worker；请先在配置方案中选择 DeepSeek Provider。");
+            }
+
+            if (!string.Equals(profile.WorkerPolicy.PreferredProviderId, ProviderId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("当前方案选择的不是此 Provider；请在当前方案中确认外部 Provider 后再测试。");
+            }
+
+            var provider = await App.Services.GetRequiredService<IProviderRepository>().GetAsync(ProviderId)
+                ?? throw new InvalidOperationException("当前方案引用的 DeepSeek Provider 不存在。");
+            if (!provider.IsEnabled)
+            {
+                throw new InvalidOperationException("当前 DeepSeek Provider 已停用。");
+            }
+
+            var result = await App.Services.GetRequiredService<IExternalProviderClient>().TestConnectionAsync(provider);
+            if (!result.Succeeded)
+            {
+                throw new InvalidOperationException(result.Message);
+            }
+
+            ProviderResultBar.Severity = InfoBarSeverity.Success;
+            ProviderResultBar.Title = "当前外部 Worker 测试成功";
+            ProviderResultBar.Message = $"已通过 Provider HTTP 调用 {provider.Id} / {provider.ModelId}；响应模型：{result.ResponseModel ?? provider.ModelId}；Usage：{result.Usage?.TotalTokens?.ToString() ?? "不可取得"}。未启动原生 Codex 子代理。";
+            ProviderResultBar.IsOpen = true;
+        }
+        catch (Exception exception)
+        {
+            ProviderResultBar.Severity = InfoBarSeverity.Error;
+            ProviderResultBar.Title = "当前外部 Worker 测试失败";
+            ProviderResultBar.Message = exception.Message;
             ProviderResultBar.IsOpen = true;
         }
     }

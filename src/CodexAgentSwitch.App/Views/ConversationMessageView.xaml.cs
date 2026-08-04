@@ -43,6 +43,7 @@ public sealed partial class ConversationMessageView : UserControl
             return;
         }
 
+        var collapsible = message.IsCollapsible || message.Kind is TaskMessageKind.ToolCall or TaskMessageKind.FileChange or TaskMessageKind.Diff or TaskMessageKind.WorkerProgress or TaskMessageKind.Usage;
         ActorText.Text = message.Actor switch
         {
             TaskMessageActor.User => "你",
@@ -51,6 +52,9 @@ public sealed partial class ConversationMessageView : UserControl
             _ => KindLabel(message.Kind),
         };
         TimeText.Text = message.CreatedAt.ToLocalTime().ToString("HH:mm:ss");
+        ActorText.Visibility = collapsible ? Visibility.Collapsed : Visibility.Visible;
+        TimeText.Visibility = collapsible ? Visibility.Collapsed : Visibility.Visible;
+        MessageBorder.Padding = collapsible ? new Thickness(10, 6, 10, 6) : new Thickness(14, 10, 14, 10);
         MessageBorder.HorizontalAlignment = message.Actor == TaskMessageActor.User
             ? HorizontalAlignment.Right
             : HorizontalAlignment.Left;
@@ -59,13 +63,13 @@ public sealed partial class ConversationMessageView : UserControl
             : "CardBackgroundFillColorDefaultBrush");
 
         var content = BuildMarkdown(message.Content, message.Kind == TaskMessageKind.Diff);
-        if (message.IsCollapsible || message.Kind is TaskMessageKind.ToolCall or TaskMessageKind.FileChange or TaskMessageKind.Diff or TaskMessageKind.WorkerProgress or TaskMessageKind.Usage)
+        if (collapsible)
         {
             MessageContent.Content = new Expander
             {
                 Header = string.IsNullOrWhiteSpace(message.Metadata)
                     ? KindLabel(message.Kind)
-                    : $"{KindLabel(message.Kind)} · {message.Metadata}",
+                    : message.Metadata,
                 IsExpanded = false,
                 Content = content,
                 HorizontalAlignment = HorizontalAlignment.Stretch,

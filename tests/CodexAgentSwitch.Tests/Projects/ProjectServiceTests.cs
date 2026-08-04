@@ -42,6 +42,21 @@ public sealed class ProjectServiceTests
             () => service.CreateAsync(new string('a', 121), workingDirectory));
     }
 
+    [Fact]
+    public async Task Default_profile_is_saved_per_project_without_changing_existing_project_identity()
+    {
+        var service = new ProjectService(new InMemoryProjectRepository(), new FixedClock());
+        var firstProfile = Guid.NewGuid();
+        var secondProfile = Guid.NewGuid();
+
+        var project = await service.CreateAsync("Profile scoped", workingDirectory, firstProfile);
+        var updated = await service.SetDefaultProfileAsync(project.Id, secondProfile);
+
+        Assert.Equal(project.Id, updated.Id);
+        Assert.Equal(secondProfile, updated.DefaultProfileId);
+        Assert.Equal(project.WorkingDirectory, updated.WorkingDirectory);
+    }
+
     private sealed class FixedClock : IClock
     {
         public DateTimeOffset UtcNow { get; } = new(2026, 8, 4, 0, 0, 0, TimeSpan.Zero);

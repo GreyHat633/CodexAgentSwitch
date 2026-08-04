@@ -15,7 +15,9 @@ public sealed class ProfileServiceTests
         var first = await service.EnsureDefaultAsync();
         var second = await service.EnsureDefaultAsync();
 
-        Assert.Equal(first.Id, second.Id);
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal(first!.Id, second!.Id);
         Assert.Single(await repository.ListAsync());
     }
 
@@ -26,9 +28,9 @@ public sealed class ProfileServiceTests
         var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
         var current = await service.EnsureDefaultAsync();
 
-        var created = await service.CreateAsync(current with { Name = "用户方案" });
+        var created = await service.CreateAsync(current! with { Name = "用户方案" });
 
-        Assert.NotEqual(current.Id, created.Id);
+        Assert.NotEqual(current!.Id, created.Id);
         Assert.True(current.IsDefault);
         Assert.False(created.IsDefault);
         Assert.Equal(2, (await repository.ListAsync()).Count);
@@ -41,7 +43,8 @@ public sealed class ProfileServiceTests
         var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
         var current = await service.EnsureDefaultAsync();
 
-        await Assert.ThrowsAsync<ProfileValidationException>(() => service.CreateAsync(current with { Name = current.Name.ToUpperInvariant() }));
+        Assert.NotNull(current);
+        await Assert.ThrowsAsync<ProfileValidationException>(() => service.CreateAsync(current! with { Name = current.Name.ToUpperInvariant() }));
     }
 
     [Fact]
@@ -50,12 +53,12 @@ public sealed class ProfileServiceTests
         var repository = new InMemoryProfileRepository();
         var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
         var current = await service.EnsureDefaultAsync();
-        var created = await service.CreateAsync(current with { Name = "用户方案" });
+        var created = await service.CreateAsync(current! with { Name = "用户方案" });
 
         await service.SetDefaultAsync(created.Id);
 
         Assert.Equal(created.Id, (await repository.GetDefaultAsync())!.Id);
-        Assert.False((await repository.GetAsync(current.Id))!.IsDefault);
+        Assert.False((await repository.GetAsync(current!.Id))!.IsDefault);
     }
 
     [Fact]
@@ -64,7 +67,7 @@ public sealed class ProfileServiceTests
         var repository = new InMemoryProfileRepository();
         var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
         var current = await service.EnsureDefaultAsync();
-        var created = await service.CreateAsync(current with { Name = "可启用方案" });
+        var created = await service.CreateAsync(current! with { Name = "可启用方案" });
 
         var activated = await service.ActivateAsync(created.Id);
 
@@ -80,7 +83,7 @@ public sealed class ProfileServiceTests
         var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
         var current = await service.EnsureDefaultAsync();
 
-        var firstName = await service.SuggestUniqueNameAsync(current.Name);
+        var firstName = await service.SuggestUniqueNameAsync(current!.Name);
         await service.CreateAsync(current with { Name = firstName });
         var secondName = await service.SuggestUniqueNameAsync(current.Name);
 
@@ -123,9 +126,10 @@ public sealed class ProfileServiceTests
 
         var imported = service.Import(legacyJson);
 
-        Assert.Equal("sol", imported.MainAgent.ModelId);
+        Assert.Equal("gpt-5.6-sol", imported.MainAgent.ModelId);
         Assert.Equal("high", imported.MainAgent.ReasoningEffort);
         Assert.False(imported.IsDefault);
+        Assert.Equal(Profile.CurrentSchemaVersion, imported.SchemaVersion);
     }
 
     [Fact]
@@ -155,7 +159,38 @@ public sealed class ProfileServiceTests
         var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
         var profile = await service.EnsureDefaultAsync();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteAsync(profile.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteAsync(profile!.Id));
+    }
+
+    [Fact]
+    public async Task Deleted_legacy_economic_profile_is_not_reinserted_after_restart()
+    {
+        var repository = new InMemoryProfileRepository();
+        var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
+        var economic = (await service.EnsureDefaultAsync())!;
+        var replacement = await service.CreateAsync(economic with { Name = "新的默认方案" });
+        await service.SetDefaultAsync(replacement.Id);
+        await service.DeleteAsync(economic.Id);
+
+        var afterRestart = await service.EnsureDefaultAsync();
+
+        Assert.NotNull(afterRestart);
+        Assert.Equal(replacement.Id, afterRestart!.Id);
+        Assert.DoesNotContain(await repository.ListAsync(), profile => profile.Name == "经济模式");
+    }
+
+    [Fact]
+    public async Task Initialized_empty_profile_store_does_not_resurrect_the_economic_preset()
+    {
+        var repository = new InMemoryProfileRepository();
+        var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());
+        _ = await service.EnsureDefaultAsync();
+        repository.Clear();
+
+        var afterRestart = await service.EnsureDefaultAsync();
+
+        Assert.Null(afterRestart);
+        Assert.Empty(await repository.ListAsync());
     }
 
     private sealed class FixedClock : IClock
@@ -166,6 +201,7 @@ public sealed class ProfileServiceTests
     private sealed class InMemoryProfileRepository : IProfileRepository
     {
         private readonly Dictionary<Guid, Profile> _profiles = [];
+        private bool _initialized;
 
         public Task<IReadOnlyList<Profile>> ListAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<Profile>>(_profiles.Values.ToList());
@@ -195,5 +231,15 @@ public sealed class ProfileServiceTests
             _profiles.Remove(id);
             return Task.CompletedTask;
         }
+
+        public Task<bool> HasBeenInitializedAsync(CancellationToken cancellationToken = default) => Task.FromResult(_initialized);
+
+        public Task MarkInitializedAsync(CancellationToken cancellationToken = default)
+        {
+            _initialized = true;
+            return Task.CompletedTask;
+        }
+
+        public void Clear() => _profiles.Clear();
     }
 }
