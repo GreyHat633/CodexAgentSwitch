@@ -26,7 +26,9 @@ public sealed class TrayIconService : IDisposable
     private const uint ImageIcon = 1;
     private const uint LrLoadFromFile = 0x0010;
     private const uint MbYesNo = 0x00000004;
+    private const uint MbOk = 0x00000000;
     private const uint MbIconWarning = 0x00000030;
+    private const uint MbIconInformation = 0x00000040;
     private const int IdYes = 6;
     private const uint MenuOpen = 1001;
     private const uint MenuPauseResume = 1003;
@@ -42,6 +44,7 @@ public sealed class TrayIconService : IDisposable
     private nint iconHandle;
     private bool allowClose;
     private bool exitWhenIdle;
+    private bool backgroundNoticeShown;
     private bool disposed;
 
     public TrayIconService(Window window, IWorkerScheduler scheduler)
@@ -91,6 +94,15 @@ public sealed class TrayIconService : IDisposable
         {
             args.Cancel = true;
             sender.Hide();
+            if (!backgroundNoticeShown)
+            {
+                backgroundNoticeShown = true;
+                MessageBox(
+                    hwnd,
+                    "Agent Switch 仍将在后台运行。可以从系统托盘重新打开。",
+                    "Agent Switch 已隐藏到托盘",
+                    MbOk | MbIconInformation);
+            }
         }
     }
 
@@ -137,10 +149,10 @@ public sealed class TrayIconService : IDisposable
         try
         {
             AppendMenu(menu, MfString, MenuOpen, "打开 Agent Switch");
-            AppendMenu(menu, MfGrayed, 0, $"Scheduler：{StateLabel(snapshot.State)} · {snapshot.ActiveTaskCount} 个活动任务");
+            AppendMenu(menu, MfGrayed, 0, $"Agent Switch：{StateLabel(snapshot.State)} · {snapshot.ActiveTaskCount} 个活动任务");
             AppendMenu(menu, MfSeparator, 0, null);
-            AppendMenu(menu, MfString, MenuPauseResume, snapshot.State == SchedulerState.Paused ? "恢复调度" : "暂停接受新任务");
-            AppendMenu(menu, MfString, MenuStop, "停止 Scheduler");
+            AppendMenu(menu, MfString, MenuPauseResume, snapshot.State == SchedulerState.Paused ? "恢复接管" : "暂停接管");
+            AppendMenu(menu, MfString, MenuStop, "停止 Agent Switch 后台");
             AppendMenu(menu, MfString, MenuWaitExit, "等待任务完成后退出");
             AppendMenu(menu, MfString, MenuExit, "完全退出");
             GetCursorPos(out var point);
@@ -180,7 +192,7 @@ public sealed class TrayIconService : IDisposable
     private async Task StopAsync()
     {
         var active = scheduler.Snapshot.ActiveTaskCount;
-        if (active > 0 && !Confirm($"Agent Switch 当前正在处理 {active} 个任务。立即停止会中断这些任务，是否继续？", "停止 Scheduler")) return;
+        if (active > 0 && !Confirm($"Agent Switch 当前正在处理 {active} 个任务。立即停止会中断这些任务，是否继续？", "停止 Agent Switch 后台")) return;
         await scheduler.StopAsync(active > 0);
     }
 
