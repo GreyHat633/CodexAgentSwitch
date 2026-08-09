@@ -1,58 +1,36 @@
-<Window
-    x:Class="CodexAgentSwitch.App.MainWindow"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Codex Agent Switch">
-    <NavigationView
-        x:Name="RootNavigation"
-        AutomationProperties.Name="主导航"
-        Background="{ThemeResource WindowBackgroundBrush}"
-        IsBackButtonVisible="Collapsed"
-        IsPaneOpen="True"
-        IsSettingsVisible="False"
-        IsTabStop="False"
-        IsTitleBarAutoPaddingEnabled="True"
-        PaneDisplayMode="Auto"
-        CompactModeThresholdWidth="1120"
-        ExpandedModeThresholdWidth="1480"
-        CompactPaneLength="48"
-        OpenPaneLength="300"
-        PaneTitle="Codex Agent Switch"
-        SelectionChanged="OnSelectionChanged">
-        <NavigationView.Header>
-            <Border Padding="16,10" Margin="0,0,0,12" CornerRadius="8" Background="{ThemeResource ControlFillColorDefaultBrush}">
-                <Grid ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <Ellipse x:Name="SchedulerStateDot" Width="10" Height="10" VerticalAlignment="Center" Fill="{ThemeResource SystemFillColorCautionBrush}" />
-                    <StackPanel Grid.Column="1" Spacing="2">
-                        <TextBlock x:Name="SchedulerStateText" Text="调度器正在启动" FontWeight="SemiBold" />
-                        <TextBlock x:Name="SchedulerDetailText" Text="正在读取后台状态" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Button x:Name="SchedulerPauseButton" Content="暂停" Click="PauseOrResumeSchedulerAsync" />
-                        <Button Content="活动任务" Click="NavigateToActiveTasks" />
-                    </StackPanel>
-                </Grid>
-            </Border>
-        </NavigationView.Header>
-        <NavigationView.MenuItems>
-            <NavigationViewItem Content="首页" Icon="Home" Tag="dashboard" />
-            <NavigationViewItem Content="配置方案" Icon="Library" Tag="profiles" />
-            <NavigationViewItem Content="服务商" Icon="Globe" Tag="providers" />
-            <NavigationViewItem Content="CodexAgentSwitch 模式" Icon="Play" Tag="tasks" />
-            <NavigationViewItem Content="用量与预算" Icon="Document" Tag="usage" />
-            <NavigationViewItem Content="历史记录" Icon="Clock" Tag="history" />
-            <NavigationViewItem Content="设置" Icon="Setting" Tag="settings" />
-            <NavigationViewItem Content="诊断" Icon="Repair" Tag="diagnostics" />
-        </NavigationView.MenuItems>
-        <NavigationView.FooterMenuItems>
-            <NavigationViewItem Content="首次启动向导" Icon="People" Tag="onboarding" />
-            <NavigationViewItem Content="界面预览" Icon="AllApps" Tag="gallery" />
-        </NavigationView.FooterMenuItems>
-        <Frame x:Name="ContentFrame" IsHitTestVisible="True" />
-    </NavigationView>
+<Window x:Class="CodexAgentSwitch.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Codex Agent Switch">
+  <NavigationView x:Name="RootNavigation"
+                  AutomationProperties.Name="Agent Switch 主导航"
+                  Background="{ThemeResource WindowBackgroundBrush}"
+                  IsBackButtonVisible="Collapsed"
+                  IsPaneOpen="True"
+                  IsSettingsVisible="False"
+                  IsTabStop="False"
+                  IsTitleBarAutoPaddingEnabled="True"
+                  PaneDisplayMode="Auto"
+                  CompactModeThresholdWidth="1120"
+                  ExpandedModeThresholdWidth="1480"
+                  CompactPaneLength="48"
+                  OpenPaneLength="300"
+                  PaneTitle="Codex Agent Switch"
+                  SelectionChanged="OnSelectionChanged">
+    <NavigationView.Header>
+      <Border Padding="16,10" Margin="0,0,0,12" CornerRadius="8" Background="{ThemeResource ControlFillColorDefaultBrush}">
+        <Grid ColumnSpacing="12">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <Ellipse x:Name="SchedulerStateDot" Width="10" Height="10" VerticalAlignment="Center" Fill="{ThemeResource SystemFillColorCautionBrush}"/>
+          <StackPanel Grid.Column="1" Spacing="2"><TextBlock x:Name="SchedulerStateText" Text="Agent Switch 正在启动" FontWeight="SemiBold"/><TextBlock x:Name="SchedulerDetailText" Text="正在读取 Agent Switch 状态" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/></StackPanel>
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"><Button x:Name="SchedulerPauseButton" Content="暂停" Click="PauseOrResumeSchedulerAsync"/><Button Content="活动任务" Click="NavigateToActiveTasks"/></StackPanel>
+        </Grid>
+      </Border>
+    </NavigationView.Header>
+    <NavigationView.MenuItems>
+      <NavigationViewItem Content="首页" Icon="Home" Tag="dashboard"/><NavigationViewItem Content="配置方案" Icon="Library" Tag="profiles"/><NavigationViewItem Content="服务商" Icon="Globe" Tag="providers"/><NavigationViewItem Content="Agent Switch 任务" Icon="Play" Tag="tasks"/><NavigationViewItem Content="用量与预算" Icon="Document" Tag="usage"/><NavigationViewItem Content="历史记录" Icon="Clock" Tag="history"/><NavigationViewItem Content="设置" Icon="Setting" Tag="settings"/><NavigationViewItem Content="诊断" Icon="Repair" Tag="diagnostics"/>
+    </NavigationView.MenuItems>
+    <NavigationView.FooterMenuItems><NavigationViewItem Content="首次启动向导" Icon="People" Tag="onboarding"/><NavigationViewItem Content="界面预览" Icon="AllApps" Tag="gallery"/></NavigationView.FooterMenuItems>
+    <Frame x:Name="ContentFrame" IsHitTestVisible="True"/>
+  </NavigationView>
 </Window>

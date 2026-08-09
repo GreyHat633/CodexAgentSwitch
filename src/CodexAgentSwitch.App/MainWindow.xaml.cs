@@ -13,6 +13,7 @@ using Windows.Storage.Streams;
 using CodexAgentSwitch.App.Views;
 using CodexAgentSwitch.Infrastructure.Common;
 using CodexAgentSwitch.Application.Scheduling;
+using CodexAgentSwitch.Application.Presentation;
 using CodexAgentSwitch.Domain.Scheduling;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -22,14 +23,16 @@ public sealed partial class MainWindow : Window
 {
     private readonly HashSet<Button> tracedButtons = [];
     private readonly IWorkerScheduler scheduler;
+    private readonly IAgentSwitchUiStateSource uiState;
 
     public MainWindow()
     {
         InitializeComponent();
         scheduler = App.Services.GetRequiredService<IWorkerScheduler>();
+        uiState = App.Services.GetRequiredService<IAgentSwitchUiStateSource>();
         scheduler.SnapshotChanged += OnSchedulerSnapshotChanged;
         Closed += (_, _) => scheduler.SnapshotChanged -= OnSchedulerSnapshotChanged;
-        UpdateSchedulerStatus(scheduler.Snapshot);
+        _ = RefreshUiStateAsync();
         ApplyWindowIcon();
         RootNavigation.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(TracePointerPressed), true);
         RootNavigation.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(TracePointerReleased), true);
@@ -59,22 +62,21 @@ public sealed partial class MainWindow : Window
         RootNavigation.Loaded += CaptureOnLoadedAsync;
     }
 
-    private void OnSchedulerSnapshotChanged(object? sender, SchedulerSnapshot snapshot) =>
-        DispatcherQueue.TryEnqueue(() => UpdateSchedulerStatus(snapshot));
+    private void OnSchedulerSnapshotChanged(object? sender, SchedulerSnapshot snapshot) => _ = RefreshUiStateAsync();
 
-    private void UpdateSchedulerStatus(SchedulerSnapshot snapshot)
+    private async Task RefreshUiStateAsync()
     {
-        SchedulerStateText.Text = snapshot.State switch
-        {
-            SchedulerState.Ready => "调度器已就绪",
-            SchedulerState.Working => "调度器工作中",
-            SchedulerState.Paused => "调度器已暂停",
-            SchedulerState.Faulted => "调度器异常",
-            _ => "调度器未启动",
-        };
-        SchedulerDetailText.Text = snapshot.State == SchedulerState.Faulted
-            ? $"{snapshot.FaultMessage ?? "必要组件不可用"} · {snapshot.ActiveTaskCount} 个活动任务"
-            : $"后台运行中 · {snapshot.ActiveTaskCount} 个活动任务";
+        try { var state = await uiState.ReadAsync(); DispatcherQueue.TryEnqueue(() => UpdateAgentSwitchStatus(state)); }
+        catch (Exception ex) { DispatcherQueue.TryEnqueue(() => { SchedulerStateText.Text = "Agent Switch 状态不可用"; SchedulerDetailText.Text = ex.Message; }); }
+    }
+
+    private void UpdateAgentSwitchStatus(AgentSwitchUiSnapshot snapshot)
+    {
+        SchedulerStateText.Text = snapshot.StateLabel;
+        var activitySummary = $"{snapshot.ActiveTaskCount} 个活动任务";
+        SchedulerDetailText.Text = snapshot.StateDetail.Contains(activitySummary, StringComparison.Ordinal)
+            ? snapshot.StateDetail
+            : $"{snapshot.StateDetail} · {activitySummary}";
         SchedulerPauseButton.Content = snapshot.State == SchedulerState.Paused ? "恢复" : "暂停";
         SchedulerPauseButton.IsEnabled = snapshot.State is SchedulerState.Ready or SchedulerState.Working or SchedulerState.Paused;
         SchedulerStateDot.Fill = (Brush)Microsoft.UI.Xaml.Application.Current.Resources[snapshot.State switch
@@ -98,7 +100,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void NavigateToActiveTasks(object sender, RoutedEventArgs args) => NavigateTo("dashboard");
+    private void NavigateToActiveTasks(object sender, RoutedEventArgs args) => NavigateTo("tasks");
 
     private void ApplyWindowIcon()
     {
