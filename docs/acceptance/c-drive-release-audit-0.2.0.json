@@ -1,0 +1,28 @@
+﻿{
+    "version":  "0.2.0",
+    "temp":  "E:\\AISPace\\主模型项目区\\state\\worktrees\\cas-020-sol\\.tmp",
+    "bundleExtractOverride":  "E:\\AISPace\\主模型项目区\\state\\worktrees\\cas-020-sol\\.tmp\\bundle-extract",
+    "monitoredPhysicalEntriesBefore":  235,
+    "monitoredPhysicalEntriesAfter":  235,
+    "physicalChanges":  [
+
+                        ],
+    "launches":  [
+                     {
+                         "entryPoint":  "portable-app",
+                         "executable":  "E:\\AISPace\\主模型项目区\\state\\worktrees\\cas-020-sol\\artifacts\\release\\0.2.0\\portable\\CodexAgentSwitch.App.exe",
+                         "started":  true
+                     },
+                     {
+                         "entryPoint":  "installed-app",
+                         "executable":  "E:\\AISPace\\主模型项目区\\state\\worktrees\\cas-020-sol\\.tmp\\c-drive-release-audit-20260809-230520\\installed-app\\CodexAgentSwitch.App.exe",
+                         "started":  true
+                     },
+                     {
+                         "entryPoint":  "runtime-bootstrapper",
+                         "executable":  "E:\\AISPace\\主模型项目区\\state\\worktrees\\cas-020-sol\\artifacts\\release\\0.2.0\\compact-runtime\\CodexAgentSwitch.Bootstrapper.exe",
+                         "started":  true
+                     }
+                 ],
+    "passed":  true
+}
