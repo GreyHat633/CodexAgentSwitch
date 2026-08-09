@@ -100,7 +100,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void NavigateToActiveTasks(object sender, RoutedEventArgs args) => NavigateTo("tasks");
+    private void NavigateToActiveTasks(object sender, RoutedEventArgs args) => NavigateTo("activity");
 
     private void ApplyWindowIcon()
     {
@@ -273,6 +273,7 @@ public sealed partial class MainWindow : Window
     private static Type PageTypeForTag(string tag) => tag switch
         {
             "dashboard" => typeof(DashboardPage),
+            "activity" => typeof(ActivityTasksPage),
             "native-projects" => typeof(NativeProjectAdapterPage),
             "profiles" => typeof(ProfilesPage),
             "providers" => typeof(ProvidersPage),

@@ -28,7 +28,7 @@
       </Border>
     </NavigationView.Header>
     <NavigationView.MenuItems>
-      <NavigationViewItem Content="首页" Icon="Home" Tag="dashboard"/><NavigationViewItem Content="配置方案" Icon="Library" Tag="profiles"/><NavigationViewItem Content="服务商" Icon="Globe" Tag="providers"/><NavigationViewItem Content="Agent Switch 任务" Icon="Play" Tag="tasks"/><NavigationViewItem Content="用量与预算" Icon="Document" Tag="usage"/><NavigationViewItem Content="历史记录" Icon="Clock" Tag="history"/><NavigationViewItem Content="设置" Icon="Setting" Tag="settings"/><NavigationViewItem Content="诊断" Icon="Repair" Tag="diagnostics"/>
+      <NavigationViewItem Content="首页" Icon="Home" Tag="dashboard"/><NavigationViewItem Content="活动任务" Icon="Play" Tag="activity"/><NavigationViewItem Content="工作台" Icon="Edit" Tag="tasks"/><NavigationViewItem Content="配置方案" Icon="Library" Tag="profiles"/><NavigationViewItem Content="服务商" Icon="Globe" Tag="providers"/><NavigationViewItem Content="用量与预算" Icon="Document" Tag="usage"/><NavigationViewItem Content="历史记录" Icon="Clock" Tag="history"/><NavigationViewItem Content="设置" Icon="Setting" Tag="settings"/><NavigationViewItem Content="诊断" Icon="Repair" Tag="diagnostics"/>
     </NavigationView.MenuItems>
     <NavigationView.FooterMenuItems><NavigationViewItem Content="首次启动向导" Icon="People" Tag="onboarding"/><NavigationViewItem Content="界面预览" Icon="AllApps" Tag="gallery"/></NavigationView.FooterMenuItems>
     <Frame x:Name="ContentFrame" IsHitTestVisible="True"/>
