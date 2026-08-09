@@ -3,7 +3,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:local="using:CodexAgentSwitch.App.Views">
     <ScrollViewer HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Padding="{StaticResource PagePadding}" Spacing="20" MaxWidth="1180" HorizontalAlignment="Stretch">
+        <StackPanel Padding="{StaticResource PagePadding}" Spacing="20" MaxWidth="{StaticResource PageContentMaxWidth}" HorizontalAlignment="Center">
             <local:PageHeader Title="用量与预算" Subtitle="只显示状态投影中的真实数据；不可取得时说明原因。" />
             <Grid x:Name="UsageMetricsGrid" ColumnSpacing="12" RowSpacing="12">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
