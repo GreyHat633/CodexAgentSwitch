@@ -60,7 +60,7 @@
                                                 <TextBlock Text="{Binding ApprovalModeLabel}" Style="{StaticResource CaptionTextStyle}" />
                                                 <TextBlock Text="{Binding RepairMessage}" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                                             </StackPanel>
-                                            <Border Grid.Column="1" Style="{StaticResource StatusBadgeStyle}">
+                                            <Border Grid.Column="1" Style="{StaticResource StatusBadgeStyle}" Visibility="{Binding DefaultVisibility}">
                                                 <TextBlock Text="{Binding DefaultLabel}" />
                                             </Border>
                                         </Grid>

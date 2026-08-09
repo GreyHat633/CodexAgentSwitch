@@ -26,6 +26,8 @@ public sealed class ProfileListItemViewModel(Profile profile)
 
     public string DefaultLabel => Value.DefaultLabel;
 
+    public Visibility DefaultVisibility => Value.IsDefault ? Visibility.Visible : Visibility.Collapsed;
+
     public bool IsDefault => Value.IsDefault;
 
     public string ApprovalModeLabel => Value.ApprovalMode switch
