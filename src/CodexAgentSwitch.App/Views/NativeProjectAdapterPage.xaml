@@ -153,7 +153,7 @@
                 <TextBlock x:Name="FooterSelectionText" VerticalAlignment="Center" TextWrapping="Wrap" />
                 <StackPanel x:Name="FooterActions" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
                     <Button Content="取消" Click="BackToDashboard" />
-                    <Button x:Name="ApplyButton" Content="应用配置并启动 Codex" Style="{StaticResource HeroButtonStyle}" Click="ConfirmApplyAsync" IsEnabled="False" AutomationProperties.Name="应用所选项目配置并启动官方 Codex" />
+                    <Button x:Name="ApplyButton" Content="应用到项目" Style="{StaticResource HeroButtonStyle}" Click="ConfirmApplyAsync" IsEnabled="False" AutomationProperties.Name="应用所选项目配置" />
                 </StackPanel>
             </Grid>
         </Border>

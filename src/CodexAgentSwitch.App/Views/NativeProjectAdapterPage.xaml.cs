@@ -23,12 +23,10 @@ public sealed partial class NativeProjectAdapterPage : Page
     private readonly IProfileRepository profiles = App.Services.GetRequiredService<IProfileRepository>();
     private readonly IProviderRepository providerRepository = App.Services.GetRequiredService<IProviderRepository>();
     private readonly ICodexDesktopLauncher desktopLauncher = App.Services.GetRequiredService<ICodexDesktopLauncher>();
-    private readonly INativeCodexLauncher nativeCliLauncher = App.Services.GetRequiredService<INativeCodexLauncher>();
     private readonly List<NativeProjectItem> allItems = [];
     private Profile? activeProfile;
     private string activeWorkerText = "未启用";
     private string? newProjectParent;
-    private string launchMode = "desktop";
 
     public ObservableCollection<NativeProjectItem> ProjectItems { get; } = [];
     public ObservableCollection<string> ResultItems { get; } = [];
@@ -43,12 +41,9 @@ public sealed partial class NativeProjectAdapterPage : Page
 
     protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
     {
-        launchMode = string.Equals(e.Parameter as string, "cli", StringComparison.OrdinalIgnoreCase) ? "cli" : "desktop";
-        Header.Title = launchMode == "desktop" ? "原生 Codex 项目配置" : "Codex CLI 项目配置";
-        Header.Subtitle = launchMode == "desktop"
-            ? "查看项目当前已应用的方案；只有明确勾选并确认后才会写入项目配置，然后启动官方 Codex 桌面应用。"
-            : "查看项目当前已应用的方案；只有明确勾选并确认后才会写入项目配置，然后启动 Codex CLI。";
-        ApplyButton.Content = launchMode == "desktop" ? "应用配置并启动 Codex" : "应用配置并启动 CLI";
+        Header.Title = "项目配置";
+        Header.Subtitle = "查看项目当前已应用的方案；明确勾选并确认后，将只写入项目配置。";
+        ApplyButton.Content = "应用到项目";
         base.OnNavigatedTo(e);
     }
 
@@ -154,7 +149,7 @@ public sealed partial class NativeProjectAdapterPage : Page
         SelectedPathsText.Text = selected.Length == 0
             ? "尚未选择项目。"
             : string.Join(Environment.NewLine, selected.Select(item => item.WorkingDirectory));
-        FooterSelectionText.Text = selected.Length == 0 ? "请选择要适配的项目" : $"已选择 {selected.Length} 个项目";
+        FooterSelectionText.Text = selected.Length == 0 ? "请选择至少一个项目" : $"已选择 {selected.Length} 个项目";
         ApplyButton.IsEnabled = selected.Length > 0 && activeProfile is not null;
     }
 
@@ -273,7 +268,7 @@ public sealed partial class NativeProjectAdapterPage : Page
                 TextWrapping = TextWrapping.Wrap,
                 MaxWidth = 620,
             },
-            PrimaryButtonText = launchMode == "desktop" ? "确认应用并启动" : "确认应用并启动 CLI",
+            PrimaryButtonText = "确认应用到项目",
             CloseButtonText = "返回修改",
             DefaultButton = ContentDialogButton.Close,
         };
@@ -285,37 +280,7 @@ public sealed partial class NativeProjectAdapterPage : Page
         ApplyButton.IsEnabled = false;
         try
         {
-            IReadOnlyList<NativeProjectAdaptationResult> projectResults;
-            var started = false;
-            string? launchError = null;
-            if (launchMode == "desktop")
-            {
-                var result = await desktopLauncher.ApplyToProjectsAndLaunchAsync(profile, selected);
-                projectResults = result.Projects;
-                started = result.DesktopStarted;
-                launchError = result.LaunchError;
-            }
-            else
-            {
-                projectResults = await desktopLauncher.ApplyToProjectsAsync(profile, selected);
-                var firstSuccessful = projectResults.FirstOrDefault(item => item.Succeeded);
-                if (firstSuccessful is not null)
-                {
-                    try
-                    {
-                        await nativeCliLauncher.LaunchAsync(profile, firstSuccessful.Project.WorkingDirectory);
-                        started = true;
-                    }
-                    catch (Exception exception)
-                    {
-                        launchError = exception.Message;
-                    }
-                }
-                else
-                {
-                    launchError = "没有项目成功适配，因此未启动 Codex CLI。";
-                }
-            }
+            var projectResults = await desktopLauncher.ApplyToProjectsAsync(profile, selected);
             var selectedIds = selected.Select(project => project.Id).ToHashSet(StringComparer.Ordinal);
             foreach (var item in projectResults.Where(item => item.Succeeded))
             {
@@ -353,15 +318,15 @@ public sealed partial class NativeProjectAdapterPage : Page
                     : $"{item.Project.Name}：失败 · {item.ErrorMessage}");
             }
 
-            if (!string.IsNullOrWhiteSpace(launchError))
-            {
-                ResultItems.Add($"{(launchMode == "desktop" ? "Codex 桌面应用" : "Codex CLI")}未启动：{launchError}");
-            }
-
-            ResultSummaryText.Text = $"成功应用：{projectResults.Count(item => item.Succeeded)} · 失败：{projectResults.Count(item => !item.Succeeded)} · {(started ? (launchMode == "desktop" ? "已启动 Codex 桌面应用" : "已启动 Codex CLI") : "未启动")}";
+            ResultSummaryText.Text = $"成功应用：{projectResults.Count(item => item.Succeeded)} · 失败：{projectResults.Count(item => !item.Succeeded)}";
             ResultPanel.Visibility = Visibility.Visible;
             await RefreshProjectsAsync(selectedIds);
-            ShowInfo("适配处理完成", ResultSummaryText.Text, projectResults.All(item => item.Succeeded) && started ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
+            var complete = projectResults.Count > 0 && projectResults.All(item => item.Succeeded);
+            ShowInfo(complete ? "项目配置已完成" : "项目配置未完全成功", ResultSummaryText.Text, complete ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
+            if (complete)
+            {
+                Frame.Navigate(typeof(DashboardPage));
+            }
         }
         catch (Exception exception)
         {
