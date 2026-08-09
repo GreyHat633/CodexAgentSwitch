@@ -8,6 +8,8 @@ using CodexAgentSwitch.Application.NativeCodex;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Application.Tasks;
 using CodexAgentSwitch.Application.Scheduling;
+using CodexAgentSwitch.Application.Presentation;
+using CodexAgentSwitch.App.ViewModels;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.Common;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
@@ -88,6 +90,17 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<IDelegationPolicyGuard>(provider => provider.GetRequiredService<AppliedProjectWorkerGuard>());
         services.AddSingleton<ISchedulerResultObserver, SchedulerUsageRecorder>();
         services.AddSingleton<IWorkerScheduler, WorkerScheduler>();
+        #if DEBUG
+        var mockUiScenario = Environment.GetEnvironmentVariable("CAS_UI_MOCK_STATE");
+        if (!string.IsNullOrWhiteSpace(mockUiScenario))
+        {
+            services.AddSingleton<IAgentSwitchUiStateSource>(new MockAgentSwitchUiStateSource(mockUiScenario));
+        }
+        else
+        #endif
+        {
+            services.AddSingleton<IAgentSwitchUiStateSource, AgentSwitchUiStateProjection>();
+        }
         services.AddSingleton<SchedulerIpcServer>();
         services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Information));
         Services = services.BuildServiceProvider(validateScopes: true);
