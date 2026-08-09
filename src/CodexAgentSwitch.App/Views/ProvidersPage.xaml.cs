@@ -1,6 +1,8 @@
 using CodexAgentSwitch.Application.Credentials;
 using CodexAgentSwitch.Application.Profiles;
 using CodexAgentSwitch.Application.Providers;
+using CodexAgentSwitch.Application.Presentation;
+using CodexAgentSwitch.App.ViewModels;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
@@ -211,6 +213,16 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         }
     }
 
+    private async Task DetectNativeAsync()
+    {
+        var state = await App.Services.GetRequiredService<CodexRuntimeManager>().DetectAsync();
+        ProviderEditor.IsExpanded = true;
+        ProviderResultBar.Severity = state.Installed ? InfoBarSeverity.Success : InfoBarSeverity.Warning;
+        ProviderResultBar.Title = state.Installed ? "原生 Codex 检测成功" : "原生 Codex 尚不可用";
+        ProviderResultBar.Message = state.Message;
+        ProviderResultBar.IsOpen = true;
+    }
+
     private async Task ForceTestCurrentWorkerAsync()
     {
         ProviderResultBar.IsOpen = false;
@@ -297,7 +309,46 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         ModelSelectionComboBox.SelectedValue = provider?.ModelId ?? DeepSeekV4Catalog.FlashModelId;
         DeepSeekStatusText.Text = provider?.IsEnabled == true ? "已启用" : hasCredential ? "已停用" : "未配置";
         DeepSeekDetailText.Text = $"凭据：{(hasCredential ? "已安全配置" : "未配置")} · 模型：{provider?.ModelId ?? DeepSeekV4Catalog.FlashModelId} · 今日费用：不可取得";
-        DisableDeepSeekButton.IsEnabled = provider?.IsEnabled == true;
         EnableDeepSeekButton.IsEnabled = provider is not null && provider.IsEnabled == false;
+        await RenderProviderCardsAsync();
+    }
+
+    private async Task RenderProviderCardsAsync()
+    {
+        ProviderCardsPanel.Children.Clear();
+        var snapshot = await App.Services.GetRequiredService<IAgentSwitchUiStateSource>().ReadAsync();
+        foreach (var status in snapshot.Providers)
+        {
+            var details = $"凭据：{status.CredentialLabel} · 当前方案：{(status.IsUsedByCurrentProfile ? "正在使用" : "未使用")} · 模型：{status.Model} · 最近调用：{status.LastCallLabel}";
+            var body = new StackPanel { Spacing = 5 };
+            body.Children.Add(new TextBlock { Text = status.Name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["SectionTitleStyle"] });
+            body.Children.Add(new TextBlock { Text = status.StateLabel, Foreground = UiPresentation.ToneBrush(status.Tone), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+            body.Children.Add(new TextBlock { Text = details, TextWrapping = TextWrapping.Wrap, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CaptionTextStyle"] });
+            var grid = new Grid { ColumnSpacing = 12 };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.Children.Add(body);
+            var actions = new StackPanel { Orientation = Orientation.Vertical, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+            if (status.Kind == Domain.Providers.ProviderKind.NativeCodex)
+            {
+                var native = new Button { Content = "测试", Tag = "provider:test-native" };
+                native.Click += async (_, _) => await DetectNativeAsync();
+                actions.Children.Add(native);
+            }
+            else
+            {
+                var configure = new Button { Content = "配置", Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["AccentButtonStyle"] };
+                configure.Click += OpenDeepSeekConfiguration;
+                actions.Children.Add(configure);
+                var toggle = new Button { Content = status.IsEnabled ? "停用" : "启用" };
+                toggle.Click += async (_, _) => await SetDeepSeekEnabledAsync(!status.IsEnabled);
+                actions.Children.Add(toggle);
+                var force = new Button { Content = "测试当前 Worker", Tag = "provider:force-worker" };
+                force.Click += async (_, _) => await ForceTestCurrentWorkerAsync();
+                actions.Children.Add(force);
+            }
+            Grid.SetColumn(actions, 1); grid.Children.Add(actions);
+            ProviderCardsPanel.Children.Add(new Border { Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CardBorderStyle"], Child = grid });
+        }
     }
 }
