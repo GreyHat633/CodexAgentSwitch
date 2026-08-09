@@ -1,0 +1,218 @@
+using System.IO.Pipes;
+using System.Text;
+using System.Text.Json;
+using CodexAgentSwitch.Domain.Scheduling;
+
+Console.InputEncoding = Encoding.UTF8;
+Console.OutputEncoding = new UTF8Encoding(false);
+
+var pipeName = ReadArgument(args, "--pipe") ?? SchedulerEndpoint.PipeName;
+while (await Console.In.ReadLineAsync() is { } line)
+{
+    line = line.TrimStart('\uFEFF');
+    if (string.IsNullOrWhiteSpace(line))
+    {
+        continue;
+    }
+
+    JsonElement? id = null;
+    try
+    {
+        using var requestDocument = JsonDocument.Parse(line);
+        var request = requestDocument.RootElement;
+        id = request.TryGetProperty("id", out var requestId) ? requestId.Clone() : null;
+        var method = request.GetProperty("method").GetString();
+        if (method == "notifications/initialized")
+        {
+            continue;
+        }
+
+        object result = method switch
+        {
+            "initialize" => new
+            {
+                protocolVersion = request.TryGetProperty("params", out var initializeParams)
+                    && initializeParams.TryGetProperty("protocolVersion", out var requestedProtocol)
+                        ? requestedProtocol.GetString() ?? "2025-06-18"
+                        : "2025-06-18",
+                capabilities = new { tools = new { listChanged = false } },
+                serverInfo = new { name = "codex-agent-switch", version = "0.1.13" },
+            },
+            "ping" => new { },
+            "tools/list" => new { tools = ToolDefinitions() },
+            "tools/call" => await CallToolAsync(request.GetProperty("params"), pipeName),
+            _ => throw new InvalidOperationException($"Unsupported MCP method: {method}"),
+        };
+        await WriteResponseAsync(new { jsonrpc = "2.0", id, result });
+    }
+    catch (Exception exception)
+    {
+        await WriteResponseAsync(new
+        {
+            jsonrpc = "2.0",
+            id,
+            error = new { code = -32603, message = exception.Message },
+        });
+    }
+}
+
+static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
+{
+    var name = parameters.GetProperty("name").GetString();
+    var arguments = parameters.TryGetProperty("arguments", out var value) ? value : default;
+    var (method, payload) = name switch
+    {
+        "delegate_worker" => ("dispatch", (object)ReadTaskPacket(arguments)),
+        "report_worker_result" => ("reportResult", ReadWorkerResult(arguments)),
+        "begin_worker_review" => ("review", new { taskId = Required(arguments, "taskId") }),
+        "adopt_worker_result" => ("adopt", new { taskId = Required(arguments, "taskId"), summary = Optional(arguments, "summary") }),
+        "scheduler_status" => ("status", new { }),
+        _ => throw new InvalidOperationException($"Unknown tool: {name}"),
+    };
+    var schedulerResult = await SendAsync(pipeName, method, payload);
+    return new
+    {
+        content = new[] { new { type = "text", text = schedulerResult.GetRawText() } },
+        structuredContent = schedulerResult,
+        isError = false,
+    };
+}
+
+static TaskPacket ReadTaskPacket(JsonElement arguments) => new(
+    Required(arguments, "taskId"),
+    Optional(arguments, "projectId"),
+    Required(arguments, "workingDirectory"),
+    Optional(arguments, "workerId"),
+    Required(arguments, "goal"),
+    Strings(arguments, "scope"),
+    Strings(arguments, "allowedReadScope"),
+    Strings(arguments, "allowedWriteScope"),
+    Strings(arguments, "acceptanceCriteria"),
+    Strings(arguments, "constraints"),
+    Required(arguments, "outputContract"));
+
+static WorkerResultPacket ReadWorkerResult(JsonElement arguments)
+{
+    var succeeded = !arguments.TryGetProperty("succeeded", out var succeededValue) || succeededValue.GetBoolean();
+    return new WorkerResultPacket(
+        Required(arguments, "taskId"),
+        succeeded ? DelegationState.ResultReceived : DelegationState.Failed,
+        Required(arguments, "summary"),
+        Strings(arguments, "evidence"),
+        Strings(arguments, "changes"),
+        Strings(arguments, "validation"),
+        Strings(arguments, "risks"),
+        FailureReason: succeeded ? null : Optional(arguments, "failureReason"));
+}
+
+static async Task<JsonElement> SendAsync(string pipeName, string method, object payload)
+{
+    await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    try
+    {
+        await pipe.ConnectAsync(timeout.Token);
+    }
+    catch (OperationCanceledException)
+    {
+        throw new InvalidOperationException("Agent Switch Scheduler 未运行；请启动 Agent Switch 后重试。");
+    }
+
+    using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
+    await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
+    await writer.WriteLineAsync(JsonSerializer.Serialize(new { method, payload }, ToolHostJson.Options));
+    var responseLine = await reader.ReadLineAsync() ?? throw new IOException("Scheduler 未返回响应。");
+    using var responseDocument = JsonDocument.Parse(responseLine);
+    var response = responseDocument.RootElement;
+    if (!response.GetProperty("ok").GetBoolean())
+    {
+        throw new InvalidOperationException(response.GetProperty("error").GetString() ?? "Scheduler 请求失败。");
+    }
+
+    return response.GetProperty("result").Clone();
+}
+
+static object[] ToolDefinitions() =>
+[
+    new
+    {
+        name = "delegate_worker",
+        description = "Send one explicit plaintext bounded TaskPacket to the Agent Switch scheduler. Do not duplicate the delegated work while its state is DELEGATED or RUNNING.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new Dictionary<string, object>
+            {
+                ["taskId"] = StringSchema("Unique stable task id."),
+                ["projectId"] = StringSchema("Agent Switch project id when known."),
+                ["workingDirectory"] = StringSchema("Absolute project working directory."),
+                ["workerId"] = StringSchema("Optional. When omitted, Agent Switch resolves the current project's applied Worker."),
+                ["goal"] = StringSchema("Bounded goal in plaintext."),
+                ["scope"] = StringArraySchema("Specific files or modules."),
+                ["allowedReadScope"] = StringArraySchema("Allowed read scope."),
+                ["allowedWriteScope"] = StringArraySchema("Allowed write scope."),
+                ["acceptanceCriteria"] = StringArraySchema("Verifiable acceptance criteria."),
+                ["constraints"] = StringArraySchema("Execution constraints."),
+                ["outputContract"] = StringSchema("Expected result format."),
+            },
+            required = new[] { "taskId", "workingDirectory", "goal", "scope", "acceptanceCriteria", "outputContract" },
+            additionalProperties = false,
+        },
+    },
+    new
+    {
+        name = "report_worker_result",
+        description = "Report a Native Custom Agent result to its existing Scheduler task.",
+        inputSchema = ResultSchema(),
+    },
+    new
+    {
+        name = "begin_worker_review",
+        description = "Move a RESULT_RECEIVED task to REVIEWING before bounded review.",
+        inputSchema = TaskIdSchema(),
+    },
+    new
+    {
+        name = "adopt_worker_result",
+        description = "Mark a reviewed result ADOPTED. Only call after bounded review.",
+        inputSchema = new { type = "object", properties = new { taskId = StringSchema("Task id."), summary = StringSchema("Adoption summary.") }, required = new[] { "taskId" }, additionalProperties = false },
+    },
+    new
+    {
+        name = "scheduler_status",
+        description = "Read Scheduler state and active task count without starting model work.",
+        inputSchema = new { type = "object", properties = new { }, additionalProperties = false },
+    },
+];
+
+static object ResultSchema() => new
+{
+    type = "object",
+    properties = new Dictionary<string, object>
+    {
+        ["taskId"] = StringSchema("Task id."),
+        ["succeeded"] = new { type = "boolean" },
+        ["summary"] = StringSchema("Concise result summary."),
+        ["evidence"] = StringArraySchema("Evidence."),
+        ["changes"] = StringArraySchema("Changed files or actions."),
+        ["validation"] = StringArraySchema("Validation performed."),
+        ["risks"] = StringArraySchema("Remaining risks."),
+        ["failureReason"] = StringSchema("Failure reason when unsuccessful."),
+    },
+    required = new[] { "taskId", "summary" },
+    additionalProperties = false,
+};
+
+static object TaskIdSchema() => new { type = "object", properties = new { taskId = StringSchema("Task id.") }, required = new[] { "taskId" }, additionalProperties = false };
+static object StringSchema(string description) => new { type = "string", description };
+static object StringArraySchema(string description) => new { type = "array", items = new { type = "string" }, description };
+static string Required(JsonElement element, string name) => element.TryGetProperty(name, out var value) && !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString()! : throw new InvalidDataException($"{name} is required.");
+static string Optional(JsonElement element, string name) => element.TryGetProperty(name, out var value) ? value.GetString() ?? string.Empty : string.Empty;
+static IReadOnlyList<string> Strings(JsonElement element, string name) => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array ? value.EnumerateArray().Select(item => item.GetString() ?? string.Empty).Where(item => item.Length > 0).ToArray() : [];
+static string? ReadArgument(string[] arguments, string name) { var index = Array.IndexOf(arguments, name); return index >= 0 && index + 1 < arguments.Length ? arguments[index + 1] : null; }
+static Task WriteResponseAsync(object response) => Console.Out.WriteLineAsync(JsonSerializer.Serialize(response, ToolHostJson.Options));
+
+internal static class ToolHostJson
+{
+    internal static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+}

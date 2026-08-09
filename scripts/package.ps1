@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.10',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.13',
     [switch]$IncludeRuntimeInstaller
 )
 
@@ -112,6 +112,11 @@ $portable = Join-Path $resolvedRelease 'portable'
 dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained false -p:Platform=x64 -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:EnableMsixTooling=true -p:Version=$Version -o $portable --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Portable publish failed.' }
 Assert-MultiFilePublish $portable 'CodexAgentSwitch.App'
+$toolHostPublish = Join-Path $resolvedRelease 'tool-host-publish'
+dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.ToolHost\CodexAgentSwitch.ToolHost.csproj') -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Version=$Version -o $toolHostPublish --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Scheduler Tool Host publish failed.' }
+Assert-MultiFilePublish $toolHostPublish 'CodexAgentSwitch.ToolHost'
+Copy-PublishContents $toolHostPublish (Join-Path $portable 'ToolHost')
 $brokerPublish = Join-Path $resolvedRelease 'credential-broker-publish'
 dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.CredentialBroker\CodexAgentSwitch.CredentialBroker.csproj') -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Version=$Version -o $brokerPublish --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Credential broker publish failed.' }
@@ -142,6 +147,7 @@ if ($IncludeRuntimeInstaller) {
     dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained false -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:Version=$Version -o $compactApp --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Compact publish failed.' }
     Assert-MultiFilePublish $compactApp 'CodexAgentSwitch.App'
+    Copy-PublishContents $toolHostPublish (Join-Path $compactApp 'ToolHost')
     Copy-PublishContents $brokerPublish (Join-Path $compactApp 'NativeCredentialBroker')
     $appPri = Join-Path $repo 'src\CodexAgentSwitch.App\bin\Release\net8.0-windows10.0.22621.0\win-x64\CodexAgentSwitch.App.pri'
     if (-not (Test-Path -LiteralPath $appPri)) { throw 'Compact publish did not generate the application PRI resource index.' }

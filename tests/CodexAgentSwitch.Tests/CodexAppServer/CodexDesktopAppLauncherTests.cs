@@ -1,9 +1,6 @@
 using CodexAgentSwitch.Application.NativeCodex;
-using CodexAgentSwitch.Application.Credentials;
-using CodexAgentSwitch.Application.Providers;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Projects;
-using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Common;
 
@@ -46,7 +43,21 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.DoesNotContain("codex.exe", config, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("model_provider", config, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("model_providers", config, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("agents.default_subagent", config, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("[agents.cas_luna_worker]", config, StringComparison.Ordinal);
+            Assert.DoesNotContain("developer_instructions", config, StringComparison.Ordinal);
+            Assert.Contains("[mcp_servers.codex_agent_switch]", config, StringComparison.Ordinal);
+            Assert.DoesNotContain("agents.default_subagent", config, StringComparison.OrdinalIgnoreCase);
+            var projectInstructions = await File.ReadAllTextAsync(Path.Combine(project, "AGENTS.md"));
+            Assert.Contains("Codex Agent Switch managed native worker routing", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("agent_type=\"cas_luna_worker\"", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("fork_turns=\"none\"", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("fork_turns is mandatory", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("never omit it", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("never use fork_turns=\"all\"", projectInstructions, StringComparison.Ordinal);
+            var workerPath = Path.Combine(project, ".codex", "agents", "cas-luna-worker.toml");
+            var worker = await File.ReadAllTextAsync(workerPath);
+            Assert.Contains("name = \"cas_luna_worker\"", worker, StringComparison.Ordinal);
+            Assert.Contains("model = \"gpt-5.6-luna\"", worker, StringComparison.Ordinal);
             Assert.Single(validator.Candidates);
         }
         finally
@@ -55,6 +66,54 @@ public sealed class CodexDesktopAppLauncherTests
             {
                 Directory.Delete(root, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public async Task Native_worker_routing_is_added_to_the_documented_project_instruction_file_and_is_reversible()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-project-instructions-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        Directory.CreateDirectory(projectDirectory);
+        const string originalInstructions = "# Existing project guidance\n\nKeep user instructions.\n";
+        await File.WriteAllTextAsync(Path.Combine(projectDirectory, "AGENTS.md"), originalInstructions);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                new PassThroughConfigurationValidator());
+            var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
+            var profile = Profile.CreateDefault(now) with
+            {
+                WorkerPolicy = new WorkerPolicy(true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.SingleAgent),
+            };
+
+            var applied = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
+
+            Assert.True(applied.Succeeded, applied.ErrorMessage);
+            var effectiveProjectInstructions = await File.ReadAllTextAsync(Path.Combine(projectDirectory, "AGENTS.md"));
+            Assert.Contains(originalInstructions.Trim(), effectiveProjectInstructions, StringComparison.Ordinal);
+            Assert.Contains("agent_type=\"cas_luna_worker\"", effectiveProjectInstructions, StringComparison.Ordinal);
+            Assert.Contains("fork_turns=\"none\"", effectiveProjectInstructions, StringComparison.Ordinal);
+            Assert.Contains("never use fork_turns=\"all\"", effectiveProjectInstructions, StringComparison.Ordinal);
+
+            var restore = await launcher.RestoreProjectConfigurationAsync(project with
+            {
+                NativeCodexAdaptation = new NativeCodexProjectAdaptation(
+                    profile.Id, profile.Name, applied.ConfigurationPath, applied.BackupPath, now, "test", true),
+            });
+
+            Assert.True(restore.Succeeded, restore.ErrorMessage);
+            Assert.Equal(originalInstructions, await File.ReadAllTextAsync(Path.Combine(projectDirectory, "AGENTS.md")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
 
@@ -79,6 +138,37 @@ public sealed class CodexDesktopAppLauncherTests
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => launcher.SaveManualExecutableAsync(cliPath));
 
             Assert.Contains("CLI", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Desktop_only_launch_does_not_write_or_select_a_project()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-only-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var starter = new RecordingDesktopStarter();
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                starter,
+                new PassThroughConfigurationValidator());
+
+            var target = await launcher.LaunchDesktopAsync();
+
+            Assert.Equal("OpenAI.Codex_testpublisher!App", target);
+            Assert.Equal(target, starter.AppUserModelId);
+            Assert.Empty(Directory.EnumerateFiles(root, "config.toml", SearchOption.AllDirectories));
         }
         finally
         {
@@ -191,36 +281,21 @@ public sealed class CodexDesktopAppLauncherTests
     }
 
     [Fact]
-    public async Task External_worker_profile_registers_user_provider_and_project_role_without_project_provider_table()
+    public async Task Native_external_worker_is_gated_and_never_registered_as_a_runnable_custom_agent()
     {
         var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
             ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
         var root = Path.Combine(testRoot, $"desktop-external-{Guid.NewGuid():N}");
         var projectDirectory = Path.Combine(root, "project");
         Directory.CreateDirectory(projectDirectory);
-        var codexHome = Path.Combine(root, "codex-home");
-        var brokerPath = Path.Combine(root, "broker.exe");
-        await File.WriteAllTextAsync(brokerPath, "test broker");
-        var previousHome = Environment.GetEnvironmentVariable("CAS_CODEX_HOME");
-        var previousBroker = Environment.GetEnvironmentVariable("CAS_NATIVE_CREDENTIAL_BROKER");
-        Environment.SetEnvironmentVariable("CAS_CODEX_HOME", codexHome);
-        Environment.SetEnvironmentVariable("CAS_NATIVE_CREDENTIAL_BROKER", brokerPath);
         try
         {
             var now = DateTimeOffset.UtcNow;
-            var provider = ProviderConfiguration.DeepSeekPreset(now) with
-            {
-                IsEnabled = true,
-                CredentialReference = "provider/deepseek",
-            };
-            var providerRepository = new InMemoryProviderRepository([provider]);
             var launcher = CreateLauncher(
                 new AppDataPaths(Path.Combine(root, "app-data")),
                 new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
                 new RecordingDesktopStarter(),
-                new PassThroughConfigurationValidator(),
-                providerRepository,
-                new AvailableCredentialStore());
+                new PassThroughConfigurationValidator());
             var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
             var profile = Profile.CreateDefault(now) with
             {
@@ -231,20 +306,18 @@ public sealed class CodexDesktopAppLauncherTests
 
             Assert.True(result.Succeeded, result.ErrorMessage);
             var projectConfiguration = await File.ReadAllTextAsync(Path.Combine(projectDirectory, ".codex", "config.toml"));
-            var agentConfiguration = await File.ReadAllTextAsync(Path.Combine(projectDirectory, ".codex", "agents", "cas-external-worker.toml"));
-            var userConfiguration = await File.ReadAllTextAsync(Path.Combine(codexHome, "config.toml"));
-            Assert.Contains("[agents.cas_external_worker]", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("agents.enabled = false", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("Native external collaboration remains gated", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("[mcp_servers.codex_agent_switch]", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("Never spawn cas_external_worker", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("omit workerId", projectConfiguration, StringComparison.Ordinal);
+            Assert.DoesNotContain("workerId='deepseek-default'", projectConfiguration, StringComparison.Ordinal);
             Assert.DoesNotContain("model_provider", projectConfiguration, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("model_providers", projectConfiguration, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("model_provider = \"cas_deepseek_default\"", agentConfiguration, StringComparison.Ordinal);
-            Assert.Contains("[model_providers.cas_deepseek_default]", userConfiguration, StringComparison.Ordinal);
-            Assert.Contains(Path.GetFileName(brokerPath), userConfiguration, StringComparison.Ordinal);
-            Assert.DoesNotContain("test-secret", userConfiguration, StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(projectDirectory, ".codex", "agents", "cas-external-worker.toml")));
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CAS_CODEX_HOME", previousHome);
-            Environment.SetEnvironmentVariable("CAS_NATIVE_CREDENTIAL_BROKER", previousBroker);
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);
@@ -252,21 +325,52 @@ public sealed class CodexDesktopAppLauncherTests
         }
     }
 
+    [Fact]
+    public async Task User_managed_worker_conflict_returns_specific_path_and_preserves_project_config()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-worker-conflict-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var codexDirectory = Path.Combine(projectDirectory, ".codex");
+        var agentPath = Path.Combine(codexDirectory, "agents", "cas-luna-worker.toml");
+        Directory.CreateDirectory(Path.GetDirectoryName(agentPath)!);
+        const string originalConfig = "model = \"gpt-5.6-terra\"\n";
+        await File.WriteAllTextAsync(Path.Combine(codexDirectory, "config.toml"), originalConfig);
+        await File.WriteAllTextAsync(agentPath, "name = \"user_luna\"\nmodel = \"gpt-5.6-luna\"\n");
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                new PassThroughConfigurationValidator());
+            var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
+            var result = Assert.Single(await launcher.ApplyToProjectsAsync(Profile.CreateDefault(now), [project]));
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("cas-luna-worker.toml", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("防止覆盖用户文件", result.ErrorMessage, StringComparison.Ordinal);
+            Assert.Equal(originalConfig, await File.ReadAllTextAsync(Path.Combine(codexDirectory, "config.toml")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static CodexDesktopAppLauncher CreateLauncher(
         AppDataPaths paths,
         ICodexDesktopAppRegistration registration,
         ICodexDesktopProcessStarter starter,
-        ICodexProjectConfigurationValidator validator,
-        IProviderRepository? providers = null,
-        ICredentialStore? credentials = null) =>
+        ICodexProjectConfigurationValidator validator) =>
         new(
             paths,
             registration,
             starter,
             new FixedLocator(),
             new PassThroughModelResolver(),
-            providers ?? new InMemoryProviderRepository([]),
-            credentials ?? new AvailableCredentialStore(),
             validator);
 
     private sealed class RecordingDesktopStarter : ICodexDesktopProcessStarter
@@ -325,37 +429,6 @@ public sealed class CodexDesktopAppLauncherTests
     {
         public Task ValidateAsync(CodexCommand command, string candidateToml, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("invalid type: map, expected a string");
-    }
-
-    private sealed class InMemoryProviderRepository(IReadOnlyList<ProviderConfiguration> providers) : IProviderRepository
-    {
-        private readonly Dictionary<string, ProviderConfiguration> values = providers.ToDictionary(provider => provider.Id, StringComparer.Ordinal);
-
-        public Task<IReadOnlyList<ProviderConfiguration>> ListAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<ProviderConfiguration>>(values.Values.ToArray());
-
-        public Task<ProviderConfiguration?> GetAsync(string id, CancellationToken cancellationToken = default) =>
-            Task.FromResult(values.TryGetValue(id, out var provider) ? provider : null);
-
-        public Task UpsertAsync(ProviderConfiguration provider, CancellationToken cancellationToken = default)
-        {
-            values[provider.Id] = provider;
-            return Task.CompletedTask;
-        }
-
-        public Task DeleteAsync(string id, CancellationToken cancellationToken = default)
-        {
-            values.Remove(id);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class AvailableCredentialStore : ICredentialStore
-    {
-        public Task<bool> ExistsAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult(true);
-        public Task SaveAsync(string referenceId, string secret, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<string?> ReadAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult<string?>("test-secret");
-        public Task DeleteAsync(string referenceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
 }

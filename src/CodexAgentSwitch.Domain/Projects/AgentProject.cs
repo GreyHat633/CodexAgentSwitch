@@ -17,4 +17,25 @@ public sealed record NativeCodexProjectAdaptation(
     string? BackupPath,
     DateTimeOffset AppliedAt,
     string ConfigurationSummary,
-    bool OriginalConfigurationExisted);
+    bool OriginalConfigurationExisted,
+    NativeCodexAppliedSnapshot? AppliedSnapshot = null);
+
+/// <summary>
+/// Immutable deployment-time data.  It intentionally duplicates the fields
+/// required by the project UI so a later edit to its source Profile cannot
+/// rewrite an already-applied native Codex project in memory or on disk.
+/// </summary>
+public sealed record NativeCodexAppliedSnapshot(
+    Guid ProfileId,
+    string ProfileName,
+    string MainModel,
+    string MainReasoningEffort,
+    string WorkerKind,
+    string? WorkerRole,
+    string? WorkerModel,
+    string? ProviderId,
+    string WorkerReasoningEffort,
+    int MaxWorkers,
+    string RoutingMode,
+    string ValidationStatus,
+    string ConfigurationFingerprint);

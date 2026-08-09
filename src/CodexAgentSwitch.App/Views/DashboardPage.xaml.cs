@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using CodexAgentSwitch.Application.Credentials;
 using CodexAgentSwitch.Application.NativeCodex;
@@ -5,10 +6,12 @@ using CodexAgentSwitch.Application.Profiles;
 using CodexAgentSwitch.Application.Projects;
 using CodexAgentSwitch.Application.Providers;
 using CodexAgentSwitch.Application.Tasks;
+using CodexAgentSwitch.Application.Scheduling;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Domain.Tasks;
+using CodexAgentSwitch.Domain.Scheduling;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Common;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,10 +22,17 @@ namespace CodexAgentSwitch.App.Views;
 
 public sealed partial class DashboardPage : Page, IContentActionHandler
 {
+    public ObservableCollection<DashboardNativeProjectItem> NativeProjects { get; } = [];
+    public ObservableCollection<DashboardSchedulerTaskItem> SchedulerTasks { get; } = [];
+    private readonly IWorkerScheduler scheduler;
+
     public DashboardPage()
     {
         InitializeComponent();
+        scheduler = App.Services.GetRequiredService<IWorkerScheduler>();
+        scheduler.SnapshotChanged += OnSchedulerSnapshotChanged;
         Loaded += OnLoaded;
+        Unloaded += (_, _) => scheduler.SnapshotChanged -= OnSchedulerSnapshotChanged;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
@@ -35,6 +45,9 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
                 await UpdateProfileAsync(profile);
                 await UpdateBudgetAsync(profile);
             }
+
+            await UpdateNativeProjectsAsync();
+            UpdateScheduler(scheduler.Snapshot);
 
             UpdateRuntime(await App.Services.GetRequiredService<CodexRuntimeManager>().DetectAsync());
             await UpdateLatestConversationAsync();
@@ -53,6 +66,34 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
         }
     }
 
+    private void OnSchedulerSnapshotChanged(object? sender, SchedulerSnapshot snapshot) =>
+        DispatcherQueue.TryEnqueue(() => UpdateScheduler(snapshot));
+
+    private void UpdateScheduler(SchedulerSnapshot snapshot)
+    {
+        SchedulerBadgeText.Text = snapshot.State switch
+        {
+            SchedulerState.Ready => "已就绪",
+            SchedulerState.Working => "工作中",
+            SchedulerState.Paused => "已暂停",
+            SchedulerState.Faulted => "异常",
+            _ => "未启动",
+        };
+        SchedulerSummaryText.Text = snapshot.State == SchedulerState.Faulted
+            ? snapshot.FaultMessage ?? "Scheduler 必要组件不可用。"
+            : $"{snapshot.ActiveTaskCount} 个活动任务；窗口关闭后仍可在托盘运行。";
+        SchedulerTasks.Clear();
+        foreach (var task in snapshot.ActiveTasks)
+        {
+            SchedulerTasks.Add(new DashboardSchedulerTaskItem(
+                string.IsNullOrWhiteSpace(task.Packet.ProjectId) ? task.Packet.WorkingDirectory : task.Packet.ProjectId,
+                $"{task.Packet.TaskId} · {task.Packet.Goal}",
+                $"{task.Packet.WorkerId} · {task.Transport}",
+                $"{task.State.ToString().ToUpperInvariant()} · {Math.Max(0, (int)(DateTimeOffset.UtcNow - (task.StartedAt ?? task.CreatedAt)).TotalSeconds)}s"));
+        }
+        SchedulerEmptyText.Visibility = SchedulerTasks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     public Task HandleContentActionAsync(string action, Button source)
     {
         if (action == "dashboard:launch-native")
@@ -67,12 +108,55 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
             return Task.CompletedTask;
         }
 
-        if (action is not ("dashboard:launch-native" or "dashboard:launch-cli"))
+        if (action == "dashboard:launch-desktop")
+        {
+            return LaunchDesktopOnlyAsync();
+        }
+
+        if (action is not ("dashboard:launch-native" or "dashboard:launch-cli" or "dashboard:launch-desktop"))
         {
             return Task.CompletedTask;
         }
 
         return Task.CompletedTask;
+    }
+
+    private async Task LaunchDesktopOnlyAsync()
+    {
+        try
+        {
+            await App.Services.GetRequiredService<ICodexDesktopLauncher>().LaunchDesktopAsync();
+            ShowAction("已启动 Codex", "未修改任何项目配置。请在官方 Codex 桌面应用中打开已适配的项目目录。", InfoBarSeverity.Success);
+        }
+        catch (Exception exception)
+        {
+            WriteNativeLaunchDiagnostic(exception);
+            ShowAction("无法启动 Codex 桌面应用", NativeLaunchError(exception), InfoBarSeverity.Error);
+        }
+    }
+
+    private async Task UpdateNativeProjectsAsync()
+    {
+        NativeProjects.Clear();
+        var projects = await App.Services.GetRequiredService<ProjectService>().ListAsync();
+        foreach (var project in projects.Where(item => !item.IsArchived))
+        {
+            var adaptation = project.NativeCodexAdaptation;
+            var snapshot = adaptation?.AppliedSnapshot;
+            NativeProjects.Add(snapshot is null
+                ? new DashboardNativeProjectItem(
+                    project.Name,
+                    project.WorkingDirectory,
+                    adaptation is null ? "尚未配置" : adaptation.ConfigurationSummary,
+                    adaptation is null ? "尚未对该项目应用原生 Codex 方案。" : $"上次应用：{adaptation.AppliedAt.ToLocalTime():yyyy-MM-dd HH:mm}")
+                : new DashboardNativeProjectItem(
+                    project.Name,
+                    project.WorkingDirectory,
+                    $"{snapshot.MainModel} {snapshot.MainReasoningEffort} → {snapshot.WorkerModel ?? snapshot.ProviderId ?? "未启用 Worker"} {snapshot.WorkerReasoningEffort}",
+                    $"方案：{snapshot.ProfileName} · Worker ×{snapshot.MaxWorkers} · {snapshot.RoutingMode} · {snapshot.ValidationStatus} · 上次应用：{adaptation!.AppliedAt.ToLocalTime():yyyy-MM-dd HH:mm}"));
+        }
+
+        NativeProjectsEmptyText.Visibility = NativeProjects.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
 
@@ -123,7 +207,7 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
 
         WorkerSourceBadgeText.Text = "外部 Provider";
         WorkerNameText.Text = ModelDisplay(provider.ModelId);
-        WorkerDescriptionText.Text = $"Provider：{provider.Name} · Model：{provider.ModelId} · 最大数量：{profile.WorkerPolicy.MaxWorkers}";
+        WorkerDescriptionText.Text = $"Provider：{provider.Name} · Model：{provider.ModelId} · 由 Agent Switch Scheduler 明文 TaskPacket 执行；Native collaboration 外部代理通道保持禁用。";
         CredentialStatusText.Text = $"{provider.Name} 凭据可用";
     }
 
@@ -321,4 +405,22 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
         ControlledTaskStatus.UnknownRecoverable => "需要恢复",
         _ => status.ToString(),
     };
+
+    // WinUI's compiled DataTemplate generates setters for binding paths, so a
+    // positional record's init-only properties are not valid here.
+    public sealed class DashboardNativeProjectItem(string name, string workingDirectory, string summary, string state)
+    {
+        public string Name { get; set; } = name;
+        public string WorkingDirectory { get; set; } = workingDirectory;
+        public string Summary { get; set; } = summary;
+        public string State { get; set; } = state;
+    }
+
+    public sealed class DashboardSchedulerTaskItem(string project, string task, string worker, string state)
+    {
+        public string Project { get; set; } = project;
+        public string Task { get; set; } = task;
+        public string Worker { get; set; } = worker;
+        public string State { get; set; } = state;
+    }
 }

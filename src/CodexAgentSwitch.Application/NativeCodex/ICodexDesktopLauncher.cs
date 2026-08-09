@@ -24,7 +24,8 @@ public sealed record NativeProjectAdaptationResult(
     string ConfigurationPath,
     string? BackupPath,
     string Summary,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null,
+    string? ConfigurationFingerprint = null);
 
 public sealed record CodexDesktopBatchLaunchResult(
     IReadOnlyList<NativeProjectAdaptationResult> Projects,
@@ -37,6 +38,8 @@ public interface ICodexDesktopLauncher
     Task<CodexDesktopAppDiscovery> DetectAsync(CancellationToken cancellationToken = default);
 
     Task SaveManualExecutableAsync(string executablePath, CancellationToken cancellationToken = default);
+
+    Task<string> LaunchDesktopAsync(CancellationToken cancellationToken = default);
 
     Task<CodexDesktopLaunchResult> LaunchAsync(
         Profile profile,

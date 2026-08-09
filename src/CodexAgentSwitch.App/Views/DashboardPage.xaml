@@ -10,6 +10,41 @@
                 Subtitle="原生 Codex 使用原版界面；CodexAgentSwitch 模式在本程序内完整管理项目、对话、Worker、预算与 Usage。" />
             <InfoBar x:Name="DashboardActionBar" IsOpen="False" />
 
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="12">
+                    <Grid>
+                        <StackPanel Spacing="3">
+                            <TextBlock Text="Scheduler 状态" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock x:Name="SchedulerSummaryText" Text="正在读取后台状态" Style="{StaticResource CaptionTextStyle}" />
+                        </StackPanel>
+                        <Border HorizontalAlignment="Right" Style="{StaticResource StatusBadgeStyle}">
+                            <TextBlock x:Name="SchedulerBadgeText" Text="启动中" />
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="活动任务" FontWeight="SemiBold" />
+                    <ItemsControl ItemsSource="{x:Bind SchedulerTasks}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Padding="8,6" ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding Project}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Task}" Style="{StaticResource CaptionTextStyle}" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding Worker}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="2" Text="{Binding State}" VerticalAlignment="Center" Style="{StaticResource CaptionTextStyle}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock x:Name="SchedulerEmptyText" Text="当前没有活动任务。" Style="{StaticResource CaptionTextStyle}" />
+                </StackPanel>
+            </Border>
+
             <Grid x:Name="ModeGrid" ColumnSpacing="14" RowSpacing="14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -34,7 +69,8 @@
                             <TextBlock Text="先写入项目级 Codex 配置，再启动官方图形桌面应用。Agent Switch 不监控完整会话，也不声称精确统计主线程 Usage。" TextWrapping="Wrap" Style="{StaticResource BodyTextStyle}" />
                         </StackPanel>
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
-                            <Button Content="配置并启动桌面应用" HorizontalAlignment="Left" Style="{StaticResource HeroButtonStyle}" Tag="dashboard:launch-native" AutomationProperties.Name="配置并启动原生 Codex 桌面应用" />
+                            <Button Content="项目配置" HorizontalAlignment="Left" Style="{StaticResource HeroButtonStyle}" Tag="dashboard:launch-native" AutomationProperties.Name="管理原生 Codex 项目配置" />
+                            <Button Content="启动 Codex" Tag="dashboard:launch-desktop" AutomationProperties.Name="只启动官方 Codex 桌面应用" />
                             <Button Content="Codex CLI 模式（高级）" Tag="dashboard:launch-cli" AutomationProperties.Name="启动 Codex CLI 模式" />
                         </StackPanel>
                     </Grid>
@@ -58,16 +94,48 @@
                 </Border>
             </Grid>
 
-            <Border Style="{StaticResource CardBorderStyle}" Background="{ThemeResource AccentFillColorDefaultBrush}">
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="14">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="原生 Codex 项目" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="每个项目显示最近一次成功应用的独立快照；编辑待应用方案不会改写这里的状态。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="项目配置" VerticalAlignment="Center" Tag="dashboard:launch-native" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{x:Bind NativeProjects}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Padding="12" Margin="0,0,0,8" CornerRadius="8" Background="{ThemeResource ControlFillColorDefaultBrush}">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding WorkingDirectory}" ToolTipService.ToolTip="{Binding WorkingDirectory}" TextTrimming="CharacterEllipsis" Style="{StaticResource CaptionTextStyle}" />
+                                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding State}" TextWrapping="Wrap" Style="{StaticResource CaptionTextStyle}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock x:Name="NativeProjectsEmptyText" Text="尚无已知原生 Codex 项目。通过“项目配置”添加项目；添加不会自动写入配置。" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardBorderStyle}">
                 <Grid ColumnSpacing="24">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Spacing="8">
-                        <TextBlock x:Name="ProfileNameText" Text="正在加载方案" FontSize="14" FontWeight="SemiBold" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                        <TextBlock x:Name="AgentSummaryText" Text="正在读取本地配置" FontSize="28" FontWeight="SemiBold" TextWrapping="Wrap" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                        <TextBlock x:Name="WorkerPolicyText" Text="正在解析 Worker 配置" TextWrapping="Wrap" Foreground="{ThemeResource TextOnAccentFillColorSecondaryBrush}" />
+                        <TextBlock Text="待应用方案" FontSize="14" FontWeight="SemiBold" />
+                        <TextBlock x:Name="ProfileNameText" Text="正在加载方案" FontSize="14" FontWeight="SemiBold" />
+                        <TextBlock x:Name="AgentSummaryText" Text="正在读取本地配置" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock x:Name="WorkerPolicyText" Text="正在解析 Worker 配置" TextWrapping="Wrap" Style="{StaticResource CaptionTextStyle}" />
                     </StackPanel>
                     <Button Grid.Column="1" Content="编辑方案" VerticalAlignment="Center" Tag="navigate:profiles" />
                 </Grid>

@@ -42,10 +42,11 @@ public sealed class NativeCodexLauncher(
         Directory.CreateDirectory(paths.NativeCodexDirectory);
         var auditPath = Path.Combine(paths.NativeCodexDirectory, $"launch-{profile.Id:D}.json");
 
-        var nativeWorkerModel = profile.WorkerPolicy.Source == WorkerSource.NativeCodex
+        var worker = EffectiveWorkerDefinition.Resolve(profile.WorkerPolicy);
+        var nativeWorkerModel = worker.Kind == EffectiveWorkerKind.NativeAgent && worker.CanRunInNativeCodex
             ? await modelResolver.ResolveAsync(
                 command,
-                NativeWorkerModel(profile.WorkerPolicy) ?? throw new InvalidOperationException("原生 Worker ID 无效。"),
+                worker.ModelId ?? throw new InvalidOperationException("原生 Worker 配置无效。"),
                 cancellationToken)
             : null;
         var startInfo = new ProcessStartInfo
@@ -71,18 +72,11 @@ public sealed class NativeCodexLauncher(
         startInfo.ArgumentList.Add("-s");
         startInfo.ArgumentList.Add(SandboxMode(profile.ApprovalMode));
         startInfo.ArgumentList.Add("-c");
-        startInfo.ArgumentList.Add($"agents.enabled={(profile.WorkerPolicy.Enabled ? "true" : "false")}");
-        if (profile.WorkerPolicy.Enabled)
+        startInfo.ArgumentList.Add($"agents.enabled={(worker.Kind == EffectiveWorkerKind.NativeAgent && worker.CanRunInNativeCodex ? "true" : "false")}");
+        if (worker.Kind == EffectiveWorkerKind.NativeAgent && worker.CanRunInNativeCodex)
         {
             startInfo.ArgumentList.Add("-c");
-            startInfo.ArgumentList.Add($"agents.max_concurrent_threads_per_session={Math.Max(1, profile.WorkerPolicy.MaxWorkers)}");
-            if (nativeWorkerModel is not null)
-            {
-                startInfo.ArgumentList.Add("-c");
-                startInfo.ArgumentList.Add($"agents.default_subagent_model={Toml(nativeWorkerModel.ModelId)}");
-                startInfo.ArgumentList.Add("-c");
-                startInfo.ArgumentList.Add("agents.default_subagent_reasoning_effort=\"medium\"");
-            }
+            startInfo.ArgumentList.Add($"agents.max_concurrent_threads_per_session={worker.MaxWorkers}");
         }
 
         var codexHome = ResolveNonSystemDriveCodexHome();
@@ -104,9 +98,12 @@ public sealed class NativeCodexLauncher(
             workerSource = profile.WorkerPolicy.Source.ToString(),
             providerId = profile.WorkerPolicy.Source == WorkerSource.NativeCodex ? "native-codex" : profile.WorkerPolicy.PreferredProviderId,
             workerModel = nativeWorkerModel?.ModelId,
+            workerRole = worker.AgentRole,
+            workerCapability = worker.Capability.ToString(),
+            workerCapabilityMessage = worker.CapabilityMessage,
             workingDirectory = cwd,
             generatedConfigurationPath = (string?)null,
-            externalProviderWorkerSupported = true,
+            externalProviderWorkerSupported = worker.Kind != EffectiveWorkerKind.ExternalAgent || worker.CanRunInNativeCodex,
             generatedAt = DateTimeOffset.UtcNow,
         };
         await File.WriteAllTextAsync(
@@ -124,16 +121,6 @@ public sealed class NativeCodexLauncher(
             "已应用当前方案并启动原生 Codex。后续界面、委派决策和主线程统计由原生 Codex 自行负责。"
             + (mainModel.CompatibilityNotice is null ? string.Empty : $" {mainModel.CompatibilityNotice}"));
     }
-
-    private static string? NativeWorkerModel(WorkerPolicy policy) => policy.Source != WorkerSource.NativeCodex
-        ? null
-        : policy.PreferredProviderId switch
-        {
-            "native-sol" => "gpt-5.6-sol",
-            "native-terra" => "gpt-5.6-terra",
-            "native-luna" => "gpt-5.6-luna",
-            _ => null,
-        };
 
     private static string? ResolveNonSystemDriveCodexHome()
     {

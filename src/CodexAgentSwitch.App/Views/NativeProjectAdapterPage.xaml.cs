@@ -44,10 +44,10 @@ public sealed partial class NativeProjectAdapterPage : Page
     protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
     {
         launchMode = string.Equals(e.Parameter as string, "cli", StringComparison.OrdinalIgnoreCase) ? "cli" : "desktop";
-        Header.Title = launchMode == "desktop" ? "将当前方案应用到原生 Codex 项目" : "将当前方案应用到 Codex CLI 项目";
+        Header.Title = launchMode == "desktop" ? "原生 Codex 项目配置" : "Codex CLI 项目配置";
         Header.Subtitle = launchMode == "desktop"
-            ? "选择真实项目目录。仅勾选的项目会写入受 Agent Switch 管理的配置块；随后启动官方 Codex 桌面应用。"
-            : "选择真实项目目录。仅勾选的项目会写入受 Agent Switch 管理的配置块；随后从第一个成功项目启动 Codex CLI。";
+            ? "查看项目当前已应用的方案；只有明确勾选并确认后才会写入项目配置，然后启动官方 Codex 桌面应用。"
+            : "查看项目当前已应用的方案；只有明确勾选并确认后才会写入项目配置，然后启动 Codex CLI。";
         ApplyButton.Content = launchMode == "desktop" ? "应用配置并启动 Codex" : "应用配置并启动 CLI";
         base.OnNavigatedTo(e);
     }
@@ -63,8 +63,8 @@ public sealed partial class NativeProjectAdapterPage : Page
             if (activeProfile.WorkerPolicy.Enabled && activeProfile.WorkerPolicy.Source == WorkerSource.ExternalProvider)
             {
                 ShowInfo(
-                    "将配置原生 DeepSeek Worker",
-                    "Provider 定义会安全写入用户级 CODEX_HOME；项目只写入 Worker 角色引用。API Key 继续保留在 Windows 凭据管理器，不写入项目。",
+                    "外部 Worker 需要 Agent Switch Scheduler",
+                    "原生 collaboration 的外部代理通道仍保持禁用；项目将注册公开的 codex_agent_switch Tool，由后台 Scheduler 接收明文 TaskPacket。运行任务时请保持 Scheduler 已就绪。",
                     InfoBarSeverity.Informational);
             }
             await RefreshProjectsAsync();
@@ -139,11 +139,12 @@ public sealed partial class NativeProjectAdapterPage : Page
     {
         ProfileNameText.Text = profile.Name;
         ProfileMainAgentText.Text = $"主模型：{profile.MainAgent.ModelId} · 推理强度：{profile.MainAgent.ReasoningEffort}";
+        var definition = EffectiveWorkerDefinition.Resolve(profile.WorkerPolicy);
         ProfileWorkerText.Text = profile.WorkerPolicy.Enabled
-            ? $"Worker：{workerText} · 最大 {profile.WorkerPolicy.MaxWorkers} 个"
+            ? $"Worker：{workerText} · 最大 {profile.WorkerPolicy.MaxWorkers} 个 · {(definition.Kind == EffectiveWorkerKind.ExternalAgent ? "Scheduler 执行" : $"原生状态：{definition.Capability}")}"
             : "Worker：未启用";
         ProfileRoutingText.Text = $"路由：{RoutingText(profile.WorkerPolicy.RoutingMode)} · 回退：{FallbackText(profile.WorkerPolicy.FallbackAction)}";
-        ProfileVersionText.Text = $"应用版本：{typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.1.10"}";
+        ProfileVersionText.Text = $"应用版本：{typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.1.13"}";
     }
 
     private void UpdateSelectionSummary()
@@ -318,6 +319,7 @@ public sealed partial class NativeProjectAdapterPage : Page
             var selectedIds = selected.Select(project => project.Id).ToHashSet(StringComparer.Ordinal);
             foreach (var item in projectResults.Where(item => item.Succeeded))
             {
+                var definition = EffectiveWorkerDefinition.Resolve(profile.WorkerPolicy);
                 var adaptation = new NativeCodexProjectAdaptation(
                     profile.Id,
                     profile.Name,
@@ -325,7 +327,21 @@ public sealed partial class NativeProjectAdapterPage : Page
                     item.BackupPath,
                     DateTimeOffset.UtcNow,
                     ProfileSummary(profile),
-                    item.BackupPath is not null);
+                    item.BackupPath is not null,
+                    new NativeCodexAppliedSnapshot(
+                        profile.Id,
+                        profile.Name,
+                        profile.MainAgent.ModelId,
+                        profile.MainAgent.ReasoningEffort,
+                        definition.Kind.ToString(),
+                        definition.AgentRole,
+                        definition.ModelId,
+                        definition.ProviderId,
+                        definition.ReasoningEffort ?? string.Empty,
+                        definition.MaxWorkers,
+                        definition.RoutingMode.ToString(),
+                        definition.Kind == EffectiveWorkerKind.ExternalAgent ? "SchedulerRequired" : definition.Capability.ToString(),
+                        item.ConfigurationFingerprint ?? string.Empty));
                 await projects.RecordNativeCodexAdaptationAsync(item.Project.Id, adaptation);
             }
 
@@ -540,14 +556,18 @@ public sealed class NativeProjectItem : INotifyPropertyChanged
         IsArchived = project.IsArchived;
         PlannedApplication = $"即将应用：{profile.MainAgent.ModelId} {profile.MainAgent.ReasoningEffort} + {workerText}";
         var adaptation = project.NativeCodexAdaptation;
+        var snapshot = adaptation?.AppliedSnapshot;
         var detectedConfiguration = Path.Combine(project.WorkingDirectory, ".codex", "config.toml");
         var originalConfigurationExists = adaptation?.OriginalConfigurationExisted ?? File.Exists(detectedConfiguration);
         ConfigurationPathText = $"配置：{adaptation?.ConfigurationPath ?? detectedConfiguration}";
-        NativeState = adaptation is null
+        NativeState = snapshot is not null
+            ? $"当前状态：已应用“{snapshot.ProfileName}” · 验证：{snapshot.ValidationStatus} · 原始配置：{(originalConfigurationExists ? "有" : "无")}"
+            : adaptation is null
             ? originalConfigurationExists ? "当前状态：未适配 · 原始配置：有" : "当前状态：未适配 · 原始配置：无"
-            : adaptation.ProfileId == profile.Id
-                ? $"当前状态：已适配当前方案“{adaptation.ProfileName}” · 原始配置：{(originalConfigurationExists ? "有" : "无")}" 
-                : $"当前状态：已适配其他方案“{adaptation.ProfileName}” · 原始配置：{(originalConfigurationExists ? "有" : "无")}";
+            : $"当前状态：已应用历史方案“{adaptation.ProfileName}” · 需重新应用后保存完整快照 · 原始配置：{(originalConfigurationExists ? "有" : "无")}";
+        AppliedApplication = snapshot is null
+            ? adaptation is null ? "已应用：未配置" : $"已应用：{adaptation.ConfigurationSummary}"
+            : $"已应用：{snapshot.MainModel} {snapshot.MainReasoningEffort} → {snapshot.WorkerModel ?? snapshot.ProviderId ?? "未启用 Worker"} {snapshot.WorkerReasoningEffort} · {snapshot.RoutingMode}";
         AppliedAtText = adaptation is null ? "上次应用：无" : $"上次应用：{adaptation.AppliedAt.ToLocalTime():yyyy-MM-dd HH:mm}";
     }
 
@@ -561,6 +581,7 @@ public sealed class NativeProjectItem : INotifyPropertyChanged
     public string NativeState { get; }
     public string ConfigurationPathText { get; }
     public string PlannedApplication { get; }
+    public string AppliedApplication { get; }
     public string AppliedAtText { get; }
     public Brush CardBackground => isSelected ? new SolidColorBrush(Windows.UI.Color.FromArgb(20, 0, 120, 212)) : new SolidColorBrush(Windows.UI.Color.FromArgb(0, 0, 0, 0));
     public Brush CardBorder => isSelected ? new SolidColorBrush(Windows.UI.Color.FromArgb(220, 0, 120, 212)) : new SolidColorBrush(Windows.UI.Color.FromArgb(30, 127, 127, 127));

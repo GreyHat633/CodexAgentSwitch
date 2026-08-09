@@ -55,6 +55,29 @@ public sealed class SqliteProjectRepositoryTests : IDisposable
         Assert.True((await repository.GetAsync(project.Id))!.IsArchived);
     }
 
+    [Fact]
+    public async Task Applied_native_snapshot_survives_repository_recreation()
+    {
+        Directory.CreateDirectory(directory);
+        var database = new SqliteDatabase(Path.Combine(directory, "snapshot.db"));
+        await database.InitializeAsync();
+        var project = NewProject("snapshot", DateTimeOffset.UtcNow);
+        var snapshot = new NativeCodexAppliedSnapshot(
+            Guid.NewGuid(), "Sol + Luna", "gpt-5.6-sol", "high", "NativeAgent",
+            "cas_luna_worker", "gpt-5.6-luna", "openai", "medium", 3,
+            "Economic", "Validated", "ABC123");
+        await new SqliteProjectRepository(database).UpsertAsync(project with
+        {
+            NativeCodexAdaptation = new NativeCodexProjectAdaptation(
+                snapshot.ProfileId, snapshot.ProfileName, ".codex/config.toml", null,
+                DateTimeOffset.UtcNow, "native worker applied", false, snapshot),
+        });
+
+        var reloaded = await new SqliteProjectRepository(database).GetAsync(project.Id);
+
+        Assert.Equal(snapshot, reloaded!.NativeCodexAdaptation!.AppliedSnapshot);
+    }
+
     private static AgentProject NewProject(string name, DateTimeOffset timestamp) =>
         new(Guid.NewGuid().ToString("D"), name, Directory.GetCurrentDirectory(), false, timestamp, timestamp);
 

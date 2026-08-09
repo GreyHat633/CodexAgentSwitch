@@ -74,6 +74,16 @@ public sealed class SqliteDatabase(string databasePath)
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS scheduler_tasks (
+                id TEXT PRIMARY KEY,
+                state INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_scheduler_tasks_state_updated
+                ON scheduler_tasks(state, updated_at DESC);
+
             CREATE TABLE IF NOT EXISTS agent_projects (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,

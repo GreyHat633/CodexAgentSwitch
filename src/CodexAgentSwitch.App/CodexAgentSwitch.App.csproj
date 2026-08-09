@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\CodexAgentSwitch.Application\CodexAgentSwitch.Application.csproj" />
     <ProjectReference Include="..\CodexAgentSwitch.Infrastructure\CodexAgentSwitch.Infrastructure.csproj" />
+    <ProjectReference Include="..\CodexAgentSwitch.ToolHost\CodexAgentSwitch.ToolHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\assets\branding\AppIcon.ico" Link="AppIcon.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" ExcludeFromSingleFile="true" />

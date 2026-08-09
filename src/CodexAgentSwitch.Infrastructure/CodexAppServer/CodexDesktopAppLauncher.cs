@@ -1,12 +1,11 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using CodexAgentSwitch.Application.Credentials;
 using CodexAgentSwitch.Application.NativeCodex;
-using CodexAgentSwitch.Application.Providers;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Projects;
-using CodexAgentSwitch.Domain.Providers;
+using CodexAgentSwitch.Domain.Scheduling;
 using CodexAgentSwitch.Infrastructure.Common;
 using Microsoft.Win32;
 
@@ -77,14 +76,22 @@ public sealed class CodexDesktopAppLauncher(
     ICodexDesktopProcessStarter processStarter,
     CodexCommandLocator locator,
     ICodexModelResolver modelResolver,
-    IProviderRepository providers,
-    ICredentialStore credentials,
     ICodexProjectConfigurationValidator configurationValidator) : ICodexDesktopLauncher
 {
     private const string ManagedStart = "# >>> Codex Agent Switch managed profile >>>";
     private const string ManagedEnd = "# <<< Codex Agent Switch managed profile <<<";
-    private const string ExternalWorkerRole = "cas_external_worker";
-    private const string ExternalWorkerAgentFile = "agents/cas-external-worker.toml";
+    private const string ProjectInstructionsStart = "<!-- >>> Codex Agent Switch managed native worker routing >>> -->";
+    private const string ProjectInstructionsEnd = "<!-- <<< Codex Agent Switch managed native worker routing <<< -->";
+    private const string ProjectInstructionsFile = "AGENTS.md";
+    private const string WorkerMarker = "# >>> Codex Agent Switch worker >>>";
+    private const string ExternalWorkerMarker = "# >>> Codex Agent Switch external worker >>>";
+    private static readonly string[] ManagedWorkerAgentFiles =
+    [
+        "agents/cas-sol-worker.toml",
+        "agents/cas-terra-worker.toml",
+        "agents/cas-luna-worker.toml",
+        "agents/cas-external-worker.toml",
+    ];
     private const string DesktopEntryFile = "desktop-entry.json";
 
     public async Task<CodexDesktopAppDiscovery> DetectAsync(CancellationToken cancellationToken = default)
@@ -138,6 +145,17 @@ public sealed class CodexDesktopAppLauncher(
         await File.WriteAllTextAsync(destination, JsonSerializer.Serialize(new ManualDesktopEntry(normalized)), new UTF8Encoding(false), cancellationToken);
     }
 
+    public async Task<string> LaunchDesktopAsync(CancellationToken cancellationToken = default)
+    {
+        var discovery = await DetectAsync(cancellationToken);
+        if (!discovery.IsAvailable)
+        {
+            throw new InvalidOperationException(discovery.Status);
+        }
+
+        return StartDesktop(discovery);
+    }
+
     public async Task<CodexDesktopLaunchResult> LaunchAsync(
         Profile profile,
         string workingDirectory,
@@ -163,11 +181,12 @@ public sealed class CodexDesktopAppLauncher(
         var command = (await locator.LocateAsync(cancellationToken)).Command
             ?? throw new InvalidOperationException("Codex CLI 未就绪，无法校验当前 Profile 的主代理。请先在设置页修复 Codex CLI。");
         await modelResolver.ResolveAsync(command, profile.MainAgent.ModelId, cancellationToken);
-        if (profile.WorkerPolicy.Enabled && profile.WorkerPolicy.Source == WorkerSource.NativeCodex)
+        var worker = EffectiveWorkerDefinition.Resolve(profile.WorkerPolicy);
+        if (worker.Kind == EffectiveWorkerKind.NativeAgent && worker.Capability == WorkerExecutionCapability.Supported)
         {
             await modelResolver.ResolveAsync(
                 command,
-                NativeWorkerModel(profile.WorkerPolicy) ?? throw new InvalidOperationException("原生 Worker 配置无效。"),
+                worker.ModelId ?? throw new InvalidOperationException("原生 Worker 配置无效。"),
                 cancellationToken);
         }
 
@@ -237,7 +256,8 @@ public sealed class CodexDesktopAppLauncher(
                     write.Changed,
                     write.Path,
                     write.BackupPath,
-                    write.Changed ? "已写入 Agent Switch 管理的项目配置。" : "配置已是当前方案，无需更新。"));
+                    write.Changed ? "已写入 Agent Switch 管理的项目配置。" : "配置已是当前方案，无需更新。",
+                    ConfigurationFingerprint: write.ConfigurationFingerprint));
             }
             catch (Exception exception)
             {
@@ -284,6 +304,33 @@ public sealed class CodexDesktopAppLauncher(
                 }
             }
 
+            var projectInstructionsPath = Path.Combine(project.WorkingDirectory, ProjectInstructionsFile);
+            var backupDirectory = string.IsNullOrWhiteSpace(adaptation.BackupPath)
+                ? null
+                : Path.GetDirectoryName(adaptation.BackupPath);
+            var instructionsBackupPath = backupDirectory is null
+                ? null
+                : Path.Combine(backupDirectory, ProjectInstructionsFile);
+            var instructionsWereMissing = backupDirectory is not null
+                && File.Exists(Path.Combine(backupDirectory, $"{ProjectInstructionsFile}.missing"));
+            if (instructionsBackupPath is not null && File.Exists(instructionsBackupPath))
+            {
+                File.Copy(instructionsBackupPath, projectInstructionsPath, true);
+            }
+            else if (instructionsWereMissing)
+            {
+                if (File.Exists(projectInstructionsPath))
+                {
+                    File.Delete(projectInstructionsPath);
+                }
+            }
+            else if (File.Exists(projectInstructionsPath))
+            {
+                var existingInstructions = await File.ReadAllTextAsync(projectInstructionsPath, cancellationToken);
+                var restoredInstructions = ReplaceManagedProjectInstructions(existingInstructions, null);
+                await WriteOrRemoveManagedProjectInstructionsAsync(projectInstructionsPath, restoredInstructions, cancellationToken);
+            }
+
             return new NativeProjectAdaptationResult(project, true, true, configurationPath, adaptation.BackupPath, "已恢复写入前的项目配置。");
         }
         catch (Exception exception)
@@ -301,29 +348,36 @@ public sealed class CodexDesktopAppLauncher(
     {
         var directory = Path.Combine(workingDirectory, ".codex");
         var configurationPath = Path.Combine(directory, "config.toml");
+        var projectInstructionsPath = Path.Combine(workingDirectory, ProjectInstructionsFile);
         var existing = File.Exists(configurationPath)
             ? await File.ReadAllTextAsync(configurationPath, cancellationToken)
             : null;
-        var externalWorker = await PrepareExternalWorkerAsync(profile, cancellationToken);
-        var block = BuildManagedConfiguration(profile, externalWorker);
+        var existingProjectInstructions = File.Exists(projectInstructionsPath)
+            ? await File.ReadAllTextAsync(projectInstructionsPath, cancellationToken)
+            : null;
+        var worker = EffectiveWorkerDefinition.Resolve(profile.WorkerPolicy);
+        var managedAgent = worker.Kind == EffectiveWorkerKind.NativeAgent && worker.CanRunInNativeCodex
+            ? BuildNativeAgentConfiguration(worker)
+            : null;
+        var block = BuildManagedConfiguration(profile, worker);
         var next = existing is null
             ? block
             : ReplaceManagedBlock(existing, block);
-        var agentPath = Path.Combine(directory, ExternalWorkerAgentFile);
-        var existingAgent = File.Exists(agentPath)
-            ? await File.ReadAllTextAsync(agentPath, cancellationToken)
-            : null;
-        var desiredAgent = externalWorker?.AgentConfiguration;
-        var agentIsManaged = existingAgent?.Contains("# >>> Codex Agent Switch external worker >>>", StringComparison.Ordinal) == true;
-        var projectChanged = !string.Equals(existing, next, StringComparison.Ordinal);
-        var userChanged = externalWorker is not null
-            && !string.Equals(externalWorker.ExistingUserConfiguration, externalWorker.UserConfiguration, StringComparison.Ordinal);
-        var agentChanged = externalWorker is not null
-            ? !string.Equals(existingAgent, desiredAgent, StringComparison.Ordinal)
-            : agentIsManaged;
-        if (!projectChanged && !userChanged && !agentChanged)
+        var nextProjectInstructions = ReplaceManagedProjectInstructions(
+            existingProjectInstructions,
+            BuildManagedProjectInstructions(worker));
+        var existingAgents = new Dictionary<string, byte[]?>(StringComparer.Ordinal);
+        foreach (var relativePath in ManagedWorkerAgentFiles)
         {
-            return new ProjectConfigurationWrite(configurationPath, false, false, null, existing is not null);
+            var path = Path.Combine(directory, relativePath);
+            existingAgents[relativePath] = File.Exists(path) ? await File.ReadAllBytesAsync(path, cancellationToken) : null;
+        }
+        var projectChanged = !string.Equals(existing, next, StringComparison.Ordinal);
+        var projectInstructionsChanged = !string.Equals(existingProjectInstructions, nextProjectInstructions, StringComparison.Ordinal);
+        var agentChanged = HasWorkerAgentChanges(existingAgents, worker.ConfigFile, managedAgent);
+        if (!projectChanged && !projectInstructionsChanged && !agentChanged)
+        {
+            return new ProjectConfigurationWrite(configurationPath, false, false, null, existing is not null, Fingerprint(next));
         }
 
         // The candidate lives only beside its target long enough to ensure the
@@ -338,17 +392,17 @@ public sealed class CodexDesktopAppLauncher(
                 command,
                 new CodexConfigurationLayers(
                     next,
-                    externalWorker?.UserConfiguration,
-                    externalWorker is null
+                    null,
+                    managedAgent is null
                         ? null
                         : new Dictionary<string, string>(StringComparer.Ordinal)
                         {
-                            [ExternalWorkerAgentFile] = externalWorker.AgentConfiguration,
+                            [worker.ConfigFile!] = managedAgent,
                         }),
                 cancellationToken);
 
             string? backupPath = null;
-            if (projectChanged && existing is not null)
+            if (projectChanged || projectInstructionsChanged || agentChanged)
             {
                 var backupDirectory = Path.Combine(
                     paths.NativeCodexDirectory,
@@ -357,23 +411,47 @@ public sealed class CodexDesktopAppLauncher(
                     DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-fff"));
                 Directory.CreateDirectory(backupDirectory);
                 backupPath = Path.Combine(backupDirectory, "config.toml");
-                await File.WriteAllTextAsync(backupPath, existing, new UTF8Encoding(false), cancellationToken);
+                if (existing is not null)
+                {
+                    await File.WriteAllTextAsync(backupPath, existing, new UTF8Encoding(false), cancellationToken);
+                }
+
+                var instructionsBackupPath = Path.Combine(backupDirectory, ProjectInstructionsFile);
+                if (existingProjectInstructions is null)
+                {
+                    await File.WriteAllTextAsync(
+                        Path.Combine(backupDirectory, $"{ProjectInstructionsFile}.missing"),
+                        string.Empty,
+                        new UTF8Encoding(false),
+                        cancellationToken);
+                }
+                else
+                {
+                    await File.WriteAllTextAsync(instructionsBackupPath, existingProjectInstructions, new UTF8Encoding(false), cancellationToken);
+                }
             }
 
-            var originalUserBytes = userChanged && externalWorker?.ExistingUserConfiguration is not null
-                ? await File.ReadAllBytesAsync(externalWorker.UserConfigurationPath, cancellationToken)
-                : null;
-            var originalAgentBytes = existingAgent is null ? null : await File.ReadAllBytesAsync(agentPath, cancellationToken);
             try
             {
-                if (externalWorker is not null)
+                foreach (var relativePath in ManagedWorkerAgentFiles)
                 {
-                    await WriteUserConfigurationAsync(externalWorker, cancellationToken);
-                    await WriteExternalAgentAsync(directory, externalWorker.AgentConfiguration, cancellationToken);
+                    var path = Path.Combine(directory, relativePath);
+                    if (string.Equals(relativePath, worker.ConfigFile, StringComparison.Ordinal) && managedAgent is not null)
+                    {
+                        await WriteManagedWorkerAgentAsync(path, managedAgent, cancellationToken);
+                    }
+                    else
+                    {
+                        await RemoveManagedWorkerAgentAsync(path, cancellationToken);
+                    }
                 }
-                else if (agentChanged)
+
+                if (projectInstructionsChanged)
                 {
-                    await RemoveExternalAgentAsync(directory, cancellationToken);
+                    await WriteOrRemoveManagedProjectInstructionsAsync(
+                        projectInstructionsPath,
+                        nextProjectInstructions,
+                        cancellationToken);
                 }
 
                 if (projectChanged)
@@ -383,12 +461,25 @@ public sealed class CodexDesktopAppLauncher(
             }
             catch
             {
-                await RestoreOriginalFileAsync(externalWorker?.UserConfigurationPath, originalUserBytes, externalWorker?.ExistingUserConfiguration is null, cancellationToken);
-                await RestoreOriginalFileAsync(agentPath, originalAgentBytes, existingAgent is null, cancellationToken);
+                foreach (var relativePath in ManagedWorkerAgentFiles)
+                {
+                    var original = existingAgents[relativePath];
+                    await RestoreOriginalFileAsync(
+                        Path.Combine(directory, relativePath),
+                        original,
+                        original is null,
+                        cancellationToken);
+                }
+
+                await RestoreOriginalFileAsync(
+                    projectInstructionsPath,
+                    existingProjectInstructions is null ? null : Encoding.UTF8.GetBytes(existingProjectInstructions),
+                    existingProjectInstructions is null,
+                    cancellationToken);
                 throw;
             }
 
-            return new ProjectConfigurationWrite(configurationPath, false, projectChanged || userChanged || agentChanged, backupPath, existing is not null);
+            return new ProjectConfigurationWrite(configurationPath, false, projectChanged || projectInstructionsChanged || agentChanged, backupPath, existing is not null, Fingerprint(next));
         }
         finally
         {
@@ -399,7 +490,7 @@ public sealed class CodexDesktopAppLauncher(
         }
     }
 
-    private static string BuildManagedConfiguration(Profile profile, ExternalWorkerPreparation? externalWorker)
+    private static string BuildManagedConfiguration(Profile profile, EffectiveWorkerDefinition worker)
     {
         var approval = ExecutionApprovalPolicy.Resolve(profile.ApprovalMode);
         var builder = new StringBuilder()
@@ -409,187 +500,161 @@ public sealed class CodexDesktopAppLauncher(
             .AppendLine($"model_reasoning_effort = {Toml(profile.MainAgent.ReasoningEffort)}")
             .AppendLine($"approval_policy = {Toml(approval.ApprovalPolicy)}")
             .AppendLine($"sandbox_mode = {Toml(approval.SandboxMode)}")
-            .AppendLine($"agents.enabled = {(profile.WorkerPolicy.Enabled ? "true" : "false")}");
+            .AppendLine($"agents.enabled = {(worker.CanRunInNativeCodex && worker.Kind == EffectiveWorkerKind.NativeAgent ? "true" : "false")}");
 
-        if (profile.WorkerPolicy.Enabled)
+        if (worker.CanRunInNativeCodex && worker.Kind == EffectiveWorkerKind.NativeAgent)
         {
-            builder.AppendLine($"agents.max_concurrent_threads_per_session = {Math.Max(1, profile.WorkerPolicy.MaxWorkers)}");
-            if (profile.WorkerPolicy.Source == WorkerSource.NativeCodex)
-            {
-                builder.AppendLine($"agents.default_subagent_model = {Toml(NativeWorkerModel(profile.WorkerPolicy) ?? throw new InvalidOperationException("原生 Worker 配置无效。"))}")
-                    .AppendLine("agents.default_subagent_reasoning_effort = \"medium\"");
-            }
-            else if (externalWorker is not null)
-            {
-                // This project layer only declares the role and points to its
-                // separate agent file.  The provider itself remains in the
-                // user-level CODEX_HOME/config.toml layer.
-                builder.AppendLine()
-                    .AppendLine($"[agents.{ExternalWorkerRole}]")
-                    .AppendLine($"description = {Toml($"Use {externalWorker.ProviderName} for bounded delegated work and return verifiable results.")}")
-                    .AppendLine($"config_file = {Toml($"./{ExternalWorkerAgentFile.Replace('\\', '/')}")}");
-            }
+            builder.AppendLine($"agents.max_concurrent_threads_per_session = {worker.MaxWorkers}")
+                .AppendLine()
+                .AppendLine($"[agents.{worker.AgentRole}]")
+                .AppendLine($"description = {Toml($"Configured native worker role {worker.AgentRole}; use only for bounded delegated work.")}")
+                .AppendLine($"config_file = {Toml($"./{worker.ConfigFile!.Replace('\\', '/')}")}");
+        }
+        else if (worker.Kind == EffectiveWorkerKind.ExternalAgent)
+        {
+            builder.AppendLine($"developer_instructions = {Toml("For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket and omit workerId. Agent Switch resolves the Worker from this project's applied snapshot; never choose a Provider Worker identity freely. Never spawn cas_external_worker through native collaboration. While the task is DELEGATED or RUNNING, do not duplicate its work; review and adopt only the returned ResultPacket.")}")
+                .AppendLine($"# Native external collaboration remains gated: {worker.CapabilityMessage}");
+        }
+
+        if (profile.WorkerPolicy.Enabled && profile.WorkerPolicy.Source != WorkerSource.Disabled)
+        {
+            var toolHost = Path.Combine(AppContext.BaseDirectory, "ToolHost", "CodexAgentSwitch.ToolHost.exe");
+            builder.AppendLine()
+                .AppendLine("[mcp_servers.codex_agent_switch]")
+                .AppendLine($"command = {Toml(toolHost)}")
+                .AppendLine($"args = [{Toml("--pipe")}, {Toml(SchedulerEndpoint.PipeName)}]")
+                .AppendLine("startup_timeout_sec = 5")
+                .AppendLine("tool_timeout_sec = 7200")
+                .AppendLine("enabled = true");
         }
 
         return builder.AppendLine(ManagedEnd).ToString();
     }
 
-    private async Task<ExternalWorkerPreparation?> PrepareExternalWorkerAsync(
-        Profile profile,
-        CancellationToken cancellationToken)
+    private static string? BuildManagedProjectInstructions(EffectiveWorkerDefinition worker)
     {
-        if (!profile.WorkerPolicy.Enabled || profile.WorkerPolicy.Source != WorkerSource.ExternalProvider)
+        if (!worker.CanRunInNativeCodex || worker.Kind != EffectiveWorkerKind.NativeAgent)
         {
             return null;
         }
 
-        var providerId = profile.WorkerPolicy.PreferredProviderId
-            ?? throw new InvalidOperationException("当前方案没有选择外部 Provider。");
-        var provider = await providers.GetAsync(providerId, cancellationToken)
-            ?? throw new InvalidOperationException($"找不到外部 Provider：{providerId}。");
-        if (!provider.IsEnabled || provider.BaseUri is null || string.IsNullOrWhiteSpace(provider.ModelId))
-        {
-            throw new InvalidOperationException($"Provider“{provider.Name}”尚未完成可用配置。");
-        }
-
-        if (string.IsNullOrWhiteSpace(provider.CredentialReference)
-            || !await credentials.ExistsAsync(provider.CredentialReference, cancellationToken))
-        {
-            throw new InvalidOperationException($"Provider“{provider.Name}”的 API Key 尚未安全保存到 Windows 凭据管理器。");
-        }
-
-        if (provider.Kind == ProviderKind.DeepSeek
-            && (!DeepSeekV4Catalog.TryGet(provider.ModelId, out var model)
-                || !model.Supports(ProviderProtocol.Responses)))
-        {
-            throw new InvalidOperationException("当前 DeepSeek 模型不支持原生 Codex 所需的 Responses 协议。请选择 DeepSeek V4 Flash 0731。");
-        }
-
-        var brokerPath = ResolveCredentialBrokerPath();
-        if (!File.Exists(brokerPath))
-        {
-            throw new InvalidOperationException("安装包缺少原生 Codex 凭据代理。请使用完整安装包或便携版重新安装 Agent Switch。");
-        }
-
-        var codexHome = ResolveCodexHome();
-        if (Path.GetPathRoot(codexHome)?.Equals("C:\\", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            throw new InvalidOperationException("为遵守本机存储策略，原生 DeepSeek Provider 需要一个位于非 C 盘的 CODEX_HOME。请先在设置中配置 E 盘 CODEX_HOME 后重试。");
-        }
-
-        Directory.CreateDirectory(codexHome);
-        var userConfigurationPath = Path.Combine(codexHome, "config.toml");
-        var existingUserConfiguration = File.Exists(userConfigurationPath)
-            ? await File.ReadAllTextAsync(userConfigurationPath, cancellationToken)
-            : null;
-        var providerKey = ToProviderKey(provider.Id);
-        var providerStart = $"# >>> Codex Agent Switch native provider {providerKey} >>>";
-        var providerEnd = $"# <<< Codex Agent Switch native provider {providerKey} <<<";
-        var providerBlock = BuildUserProviderConfiguration(providerKey, provider, brokerPath);
-        var nextUserConfiguration = existingUserConfiguration is null
-            ? providerBlock
-            : ReplaceManagedBlock(existingUserConfiguration, providerBlock, providerStart, providerEnd);
-
-        return new ExternalWorkerPreparation(
-            provider.Name,
-            providerKey,
-            userConfigurationPath,
-            existingUserConfiguration,
-            nextUserConfiguration,
-            BuildExternalAgentConfiguration(providerKey, provider));
+        return new StringBuilder()
+            .AppendLine(ProjectInstructionsStart)
+            .AppendLine("## Codex Agent Switch managed native worker routing")
+            .AppendLine()
+            .AppendLine($"For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket. When invoking the configured Native Custom Worker, you MUST call spawn_agent with both actual tool arguments: agent_type=\"{worker.AgentRole}\" and fork_turns=\"none\". fork_turns is mandatory for this managed custom role: never omit it, never use fork_turns=\"all\", and never create a full-history fork. While the task is DELEGATED or RUNNING, do not duplicate its work. Report the result through report_worker_result, then perform only bounded review.")
+            .AppendLine(ProjectInstructionsEnd)
+            .ToString();
     }
 
-    private string BuildUserProviderConfiguration(string providerKey, ProviderConfiguration provider, string brokerPath)
+    private static string? ReplaceManagedProjectInstructions(string? existing, string? block)
     {
-        var start = $"# >>> Codex Agent Switch native provider {providerKey} >>>";
-        var end = $"# <<< Codex Agent Switch native provider {providerKey} <<<";
-        var builder = new StringBuilder()
-            .AppendLine(start)
-            .AppendLine("# Provider metadata only. The API key remains in Windows Credential Manager.")
-            .AppendLine($"[model_providers.{providerKey}]")
-            .AppendLine($"name = {Toml(provider.Name)}")
-            .AppendLine($"base_url = {Toml(provider.BaseUri!.AbsoluteUri.TrimEnd('/'))}")
-            .AppendLine("wire_api = \"responses\"")
-            .AppendLine("request_max_retries = 2")
-            .AppendLine("stream_max_retries = 2");
-
-        if (provider.Headers.Count > 0)
+        if (block is not null)
         {
-            builder.AppendLine($"http_headers = {TomlInlineTable(provider.Headers)}");
+            return existing is null
+                ? block
+                : ReplaceManagedBlock(existing, block, ProjectInstructionsStart, ProjectInstructionsEnd);
         }
 
-        builder.AppendLine()
-            .AppendLine($"[model_providers.{providerKey}.auth]")
-            .AppendLine($"command = {Toml(brokerPath)}")
-            .AppendLine($"args = [{Toml("--data-root")}, {Toml(paths.Root)}, {Toml("--provider-id")}, {Toml(provider.Id)}]")
-            .AppendLine("timeout_ms = 5000")
-            .AppendLine("refresh_interval_ms = 300000")
-            .AppendLine(end);
-        return builder.ToString();
+        if (existing is null || !existing.Contains(ProjectInstructionsStart, StringComparison.Ordinal))
+        {
+            return existing;
+        }
+
+        var withoutManagedBlock = RemoveManagedBlock(existing, ProjectInstructionsStart, ProjectInstructionsEnd);
+        return string.IsNullOrWhiteSpace(withoutManagedBlock) ? null : withoutManagedBlock;
     }
 
-    private static string BuildExternalAgentConfiguration(string providerKey, ProviderConfiguration provider) =>
+    private static bool HasWorkerAgentChanges(
+        IReadOnlyDictionary<string, byte[]?> existingAgents,
+        string? desiredRelativePath,
+        string? desiredConfiguration)
+    {
+        foreach (var (relativePath, bytes) in existingAgents)
+        {
+            var existing = bytes is null ? null : Encoding.UTF8.GetString(bytes);
+            if (string.Equals(relativePath, desiredRelativePath, StringComparison.Ordinal))
+            {
+                if (!string.Equals(existing, desiredConfiguration, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            else if (IsManagedWorkerAgent(existing))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string BuildNativeAgentConfiguration(EffectiveWorkerDefinition worker) =>
         new StringBuilder()
-            .AppendLine("# >>> Codex Agent Switch external worker >>>")
-            .AppendLine($"name = {Toml(ExternalWorkerRole)}")
-            .AppendLine($"description = {Toml($"Bounded external-worker role backed by {provider.Name}.")}")
-            .AppendLine($"model = {Toml(provider.ModelId!)}")
-            .AppendLine($"model_provider = {Toml(providerKey)}")
-            .AppendLine("model_reasoning_effort = \"medium\"")
+            .AppendLine(WorkerMarker)
+            .AppendLine($"name = {Toml(worker.AgentRole!)}")
+            .AppendLine($"description = {Toml($"Configured native worker {worker.AgentRole}.")}")
+            .AppendLine($"model = {Toml(worker.ModelId!)}")
+            .AppendLine($"model_reasoning_effort = {Toml(worker.ReasoningEffort!)}")
             .AppendLine("developer_instructions = \"\"\"")
-            .AppendLine("Complete only the bounded task delegated by the main Codex agent. Return concise, verifiable findings, changed files, and any remaining risks. Do not expand scope.")
+            .AppendLine("Complete only the bounded task delegated by the main Codex agent. Return concise, verifiable findings, changed files, and any remaining risks. Do not change your assigned role or model.")
             .AppendLine("\"\"\"")
-            .AppendLine("# <<< Codex Agent Switch external worker <<<")
+            .AppendLine("# <<< Codex Agent Switch worker <<<")
             .ToString();
 
-    private static string TomlInlineTable(IReadOnlyDictionary<string, string> values) =>
-        "{ " + string.Join(", ", values.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            .Select(pair => $"{Toml(pair.Key)} = {Toml(pair.Value)}")) + " }";
-
-    private async Task WriteUserConfigurationAsync(ExternalWorkerPreparation preparation, CancellationToken cancellationToken)
+    private static async Task WriteManagedWorkerAgentAsync(string path, string configuration, CancellationToken cancellationToken)
     {
-        if (string.Equals(preparation.ExistingUserConfiguration, preparation.UserConfiguration, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        await WriteTextAtomicallyAsync(preparation.UserConfigurationPath, preparation.UserConfiguration, cancellationToken);
-    }
-
-    private static async Task WriteExternalAgentAsync(string projectCodexDirectory, string agentConfiguration, CancellationToken cancellationToken)
-    {
-        var path = Path.Combine(projectCodexDirectory, ExternalWorkerAgentFile);
         if (File.Exists(path))
         {
             var existing = await File.ReadAllTextAsync(path, cancellationToken);
-            if (!existing.Contains("# >>> Codex Agent Switch external worker >>>", StringComparison.Ordinal)
-                && !string.Equals(existing, agentConfiguration, StringComparison.Ordinal))
+            if (!IsManagedWorkerAgent(existing) && !string.Equals(existing, configuration, StringComparison.Ordinal))
             {
-                throw new InvalidOperationException("项目中已存在同名的自定义 Worker 文件，Agent Switch 不会覆盖它。");
+                throw new InvalidOperationException($"发现非 Agent Switch 管理的 {path}。为防止覆盖用户文件，已取消应用；请改名或移走该文件后重试。");
             }
 
-            if (string.Equals(existing, agentConfiguration, StringComparison.Ordinal))
+            if (string.Equals(existing, configuration, StringComparison.Ordinal))
             {
                 return;
             }
         }
 
-        await WriteTextAtomicallyAsync(path, agentConfiguration, cancellationToken);
+        await WriteTextAtomicallyAsync(path, configuration, cancellationToken);
     }
 
-    private static async Task RemoveExternalAgentAsync(string projectCodexDirectory, CancellationToken cancellationToken)
+    private static async Task RemoveManagedWorkerAgentAsync(string path, CancellationToken cancellationToken)
     {
-        var path = Path.Combine(projectCodexDirectory, ExternalWorkerAgentFile);
         if (!File.Exists(path))
         {
             return;
         }
 
         var existing = await File.ReadAllTextAsync(path, cancellationToken);
-        if (existing.Contains("# >>> Codex Agent Switch external worker >>>", StringComparison.Ordinal))
+        if (IsManagedWorkerAgent(existing))
         {
             File.Delete(path);
         }
+    }
+
+    private static bool IsManagedWorkerAgent(string? configuration) =>
+        configuration?.Contains(WorkerMarker, StringComparison.Ordinal) == true
+        || configuration?.Contains(ExternalWorkerMarker, StringComparison.Ordinal) == true;
+
+    private static async Task WriteOrRemoveManagedProjectInstructionsAsync(
+        string path,
+        string? instructions,
+        CancellationToken cancellationToken)
+    {
+        if (instructions is null)
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            return;
+        }
+
+        await WriteTextAtomicallyAsync(path, instructions, cancellationToken);
     }
 
     private static async Task WriteTextAtomicallyAsync(string path, string content, CancellationToken cancellationToken)
@@ -652,46 +717,6 @@ public sealed class CodexDesktopAppLauncher(
         }
     }
 
-    private static string ResolveCredentialBrokerPath()
-    {
-        var configured = Environment.GetEnvironmentVariable("CAS_NATIVE_CREDENTIAL_BROKER");
-        return string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(AppContext.BaseDirectory, "NativeCredentialBroker", "CodexAgentSwitch.CredentialBroker.exe")
-            : Path.GetFullPath(configured);
-    }
-
-    private static string ResolveCodexHome()
-    {
-        var configured = Environment.GetEnvironmentVariable("CAS_CODEX_HOME")
-            ?? Environment.GetEnvironmentVariable("CODEX_HOME");
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            return Path.GetFullPath(configured);
-        }
-
-        const string establishedEDriveHome = @"E:\\AI\\CODEX\\.codex";
-        if (Directory.Exists(establishedEDriveHome))
-        {
-            return establishedEDriveHome;
-        }
-
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
-    }
-
-    private static string ToProviderKey(string providerId)
-    {
-        var normalized = new string(providerId.Select(character => char.IsLetterOrDigit(character) ? char.ToLowerInvariant(character) : '_').ToArray());
-        return $"cas_{normalized}";
-    }
-
-    private sealed record ExternalWorkerPreparation(
-        string ProviderName,
-        string ProviderKey,
-        string UserConfigurationPath,
-        string? ExistingUserConfiguration,
-        string UserConfiguration,
-        string AgentConfiguration);
-
     private static string ReplaceManagedBlock(string existing, string block)
         => ReplaceManagedBlock(existing, block, ManagedStart, ManagedEnd);
 
@@ -714,20 +739,23 @@ public sealed class CodexDesktopAppLauncher(
     }
 
     private static string RemoveManagedBlock(string existing)
+        => RemoveManagedBlock(existing, ManagedStart, ManagedEnd);
+
+    private static string RemoveManagedBlock(string existing, string startMarker, string endMarker)
     {
-        var start = existing.IndexOf(ManagedStart, StringComparison.Ordinal);
+        var start = existing.IndexOf(startMarker, StringComparison.Ordinal);
         if (start < 0)
         {
             throw new InvalidOperationException("当前配置中没有可恢复的 Agent Switch 管理块。");
         }
 
-        var end = existing.IndexOf(ManagedEnd, start, StringComparison.Ordinal);
+        var end = existing.IndexOf(endMarker, start, StringComparison.Ordinal);
         if (end < start)
         {
             throw new InvalidOperationException("当前 Agent Switch 管理块不完整，未覆盖原文件。");
         }
 
-        end += ManagedEnd.Length;
+        end += endMarker.Length;
         return string.Concat(existing.AsSpan(0, start), existing.AsSpan(end)).Trim();
     }
 
@@ -750,11 +778,12 @@ public sealed class CodexDesktopAppLauncher(
     private async Task ValidateNativeModelsAsync(Profile profile, CodexCommand command, CancellationToken cancellationToken)
     {
         await modelResolver.ResolveAsync(command, profile.MainAgent.ModelId, cancellationToken);
-        if (profile.WorkerPolicy.Enabled && profile.WorkerPolicy.Source == WorkerSource.NativeCodex)
+        var worker = EffectiveWorkerDefinition.Resolve(profile.WorkerPolicy);
+        if (worker.Kind == EffectiveWorkerKind.NativeAgent && worker.Capability == WorkerExecutionCapability.Supported)
         {
             await modelResolver.ResolveAsync(
                 command,
-                NativeWorkerModel(profile.WorkerPolicy) ?? throw new InvalidOperationException("原生 Worker 配置无效。"),
+                worker.ModelId ?? throw new InvalidOperationException("原生 Worker 配置无效。"),
                 cancellationToken);
         }
     }
@@ -799,15 +828,9 @@ public sealed class CodexDesktopAppLauncher(
         string.Equals(Path.GetFileName(executablePath), "codex.exe", StringComparison.OrdinalIgnoreCase)
         || string.Equals(Path.GetFileName(executablePath), "codex", StringComparison.OrdinalIgnoreCase);
 
-    private static string? NativeWorkerModel(WorkerPolicy policy) => policy.PreferredProviderId switch
-    {
-        "native-sol" => "gpt-5.6-sol",
-        "native-terra" => "gpt-5.6-terra",
-        "native-luna" => "gpt-5.6-luna",
-        _ => null,
-    };
-
     private static string Toml(string value) => JsonSerializer.Serialize(value);
+
+    private static string Fingerprint(string configuration) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(configuration)));
 
     private sealed record ManualDesktopEntry(string ExecutablePath);
 
@@ -816,5 +839,6 @@ public sealed class CodexDesktopAppLauncher(
         bool RequiresExternalCredentialSetup,
         bool Changed,
         string? BackupPath,
-        bool OriginalConfigurationExisted);
+        bool OriginalConfigurationExisted,
+        string ConfigurationFingerprint);
 }

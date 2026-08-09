@@ -7,12 +7,14 @@ using CodexAgentSwitch.Application.Orchestration;
 using CodexAgentSwitch.Application.NativeCodex;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Application.Tasks;
+using CodexAgentSwitch.Application.Scheduling;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.Common;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Credentials;
 using CodexAgentSwitch.Infrastructure.ExternalProviders;
 using CodexAgentSwitch.Infrastructure.Persistence;
+using CodexAgentSwitch.Infrastructure.Scheduling;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
@@ -22,6 +24,7 @@ namespace CodexAgentSwitch.App;
 public partial class App : Microsoft.UI.Xaml.Application
 {
     private Window? _window;
+    private TrayIconService? trayIcon;
 
     public static IServiceProvider Services { get; private set; } = null!;
 
@@ -77,6 +80,15 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<ExternalProviderResolver>();
         services.AddSingleton<WorkerOrchestrator>();
         services.AddSingleton<ControlledTaskService>();
+        services.AddSingleton<ISchedulerTaskRepository, SqliteSchedulerTaskRepository>();
+        services.AddSingleton<IWorkerExecutor, NativeWorkerExecutor>();
+        services.AddSingleton<IWorkerExecutor, ExternalWorkerExecutor>();
+        services.AddSingleton<AppliedProjectWorkerGuard>();
+        services.AddSingleton<ITaskPacketResolver>(provider => provider.GetRequiredService<AppliedProjectWorkerGuard>());
+        services.AddSingleton<IDelegationPolicyGuard>(provider => provider.GetRequiredService<AppliedProjectWorkerGuard>());
+        services.AddSingleton<ISchedulerResultObserver, SchedulerUsageRecorder>();
+        services.AddSingleton<IWorkerScheduler, WorkerScheduler>();
+        services.AddSingleton<SchedulerIpcServer>();
         services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Information));
         Services = services.BuildServiceProvider(validateScopes: true);
     }
@@ -93,8 +105,12 @@ public partial class App : Microsoft.UI.Xaml.Application
             await EnsureBuiltInProvidersAsync();
             await EnsureProjectMigrationAsync();
             await EnsureOnboardingStateAsync();
+            var scheduler = Services.GetRequiredService<IWorkerScheduler>();
+            await scheduler.StartAsync();
+            await Services.GetRequiredService<SchedulerIpcServer>().StartAsync();
             _window = new MainWindow();
             MainWindow = _window;
+            trayIcon = new TrayIconService(_window, scheduler);
             _window.Activate();
         }
         catch (Exception exception)

@@ -57,6 +57,26 @@ public sealed class ProjectServiceTests
         Assert.Equal(project.WorkingDirectory, updated.WorkingDirectory);
     }
 
+    [Fact]
+    public async Task Applied_native_snapshot_is_persisted_independently_of_the_project_default_profile()
+    {
+        var service = new ProjectService(new InMemoryProjectRepository(), new FixedClock());
+        var profileA = Guid.NewGuid();
+        var project = await service.CreateAsync("Snapshot scoped", workingDirectory, profileA);
+        var snapshot = new NativeCodexAppliedSnapshot(
+            profileA, "Sol + Luna", "gpt-5.6-sol", "high", "NativeAgent", "cas_luna_worker",
+            "gpt-5.6-luna", "openai", "medium", 3, "Economic", "Supported", "fixture-hash");
+        await service.RecordNativeCodexAdaptationAsync(project.Id, new NativeCodexProjectAdaptation(
+            profileA, "Sol + Luna", Path.Combine(workingDirectory, ".codex", "config.toml"), null,
+            DateTimeOffset.UtcNow, "gpt-5.6-sol / high", false, snapshot));
+
+        var changedDefault = await service.SetDefaultProfileAsync(project.Id, Guid.NewGuid());
+
+        Assert.NotEqual(profileA, changedDefault.DefaultProfileId);
+        Assert.Equal(snapshot, changedDefault.NativeCodexAdaptation!.AppliedSnapshot);
+        Assert.Equal("cas_luna_worker", changedDefault.NativeCodexAdaptation.AppliedSnapshot!.WorkerRole);
+    }
+
     private sealed class FixedClock : IClock
     {
         public DateTimeOffset UtcNow { get; } = new(2026, 8, 4, 0, 0, 0, TimeSpan.Zero);

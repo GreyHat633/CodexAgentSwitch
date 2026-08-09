@@ -19,6 +19,26 @@
         OpenPaneLength="300"
         PaneTitle="Codex Agent Switch"
         SelectionChanged="OnSelectionChanged">
+        <NavigationView.Header>
+            <Border Padding="16,10" Margin="0,0,0,12" CornerRadius="8" Background="{ThemeResource ControlFillColorDefaultBrush}">
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Ellipse x:Name="SchedulerStateDot" Width="10" Height="10" VerticalAlignment="Center" Fill="{ThemeResource SystemFillColorCautionBrush}" />
+                    <StackPanel Grid.Column="1" Spacing="2">
+                        <TextBlock x:Name="SchedulerStateText" Text="调度器正在启动" FontWeight="SemiBold" />
+                        <TextBlock x:Name="SchedulerDetailText" Text="正在读取后台状态" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Button x:Name="SchedulerPauseButton" Content="暂停" Click="PauseOrResumeSchedulerAsync" />
+                        <Button Content="活动任务" Click="NavigateToActiveTasks" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </NavigationView.Header>
         <NavigationView.MenuItems>
             <NavigationViewItem Content="首页" Icon="Home" Tag="dashboard" />
             <NavigationViewItem Content="配置方案" Icon="Library" Tag="profiles" />

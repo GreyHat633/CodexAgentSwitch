@@ -15,8 +15,8 @@
             <Button Content="返回工作模式" HorizontalAlignment="Left" Click="BackToDashboard" />
             <local:PageHeader
                 x:Name="Header"
-                Title="将当前方案应用到原生 Codex 项目"
-                Subtitle="选择真实项目目录。仅勾选的项目会写入受 Agent Switch 管理的配置块；随后启动官方 Codex 桌面应用。" />
+                Title="原生 Codex 项目配置"
+                Subtitle="查看项目当前已应用的方案；只有明确勾选并确认后才会写入项目配置。" />
         </StackPanel>
 
         <InfoBar x:Name="ActionBar" Grid.Row="1" IsOpen="False" IsClosable="True" />
@@ -101,6 +101,7 @@
                                                 <TextBlock Text="{Binding WorkingDirectory}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding WorkingDirectory}" Style="{StaticResource CaptionTextStyle}" />
                                                 <TextBlock Text="{Binding NativeState}" TextWrapping="Wrap" Style="{StaticResource CaptionTextStyle}" />
                                                 <TextBlock Text="{Binding ConfigurationPathText}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding ConfigurationPathText}" Style="{StaticResource CaptionTextStyle}" />
+                                                <TextBlock Text="{Binding AppliedApplication}" TextWrapping="Wrap" Style="{StaticResource CaptionTextStyle}" />
                                                 <TextBlock Text="{Binding PlannedApplication}" TextWrapping="Wrap" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Style="{StaticResource CaptionTextStyle}" />
                                                 <TextBlock Text="{Binding AppliedAtText}" Style="{StaticResource CaptionTextStyle}" />
                                             </StackPanel>
@@ -117,7 +118,7 @@
             <Border x:Name="SummaryCard" Grid.Column="1" Style="{StaticResource CardBorderStyle}" MinWidth="0">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Spacing="16">
-                        <TextBlock Text="当前方案" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="待应用方案" Style="{StaticResource SectionTitleStyle}" />
                         <StackPanel Spacing="6">
                             <TextBlock x:Name="ProfileNameText" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap" />
                             <TextBlock x:Name="ProfileMainAgentText" TextWrapping="Wrap" />

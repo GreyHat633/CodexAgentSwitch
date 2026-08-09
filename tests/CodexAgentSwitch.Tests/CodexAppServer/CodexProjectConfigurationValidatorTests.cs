@@ -48,7 +48,7 @@ public sealed class CodexProjectConfigurationValidatorTests
 
     [Fact]
     [Trait("Category", "LiveCodexConfig")]
-    public async Task Current_codex_loads_a_user_provider_and_project_external_worker_role()
+    public async Task Current_codex_loads_a_project_scoped_native_luna_worker_role()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("CAS_RUN_CODEX_CONFIG_E2E"), "1", StringComparison.Ordinal))
         {
@@ -65,31 +65,28 @@ public sealed class CodexProjectConfigurationValidatorTests
             var command = (await new CodexCommandLocator().LocateAsync()).Command
                 ?? throw new InvalidOperationException("当前测试环境没有可执行的 Codex CLI。");
             var validator = new CodexProjectConfigurationValidator(new AppDataPaths(root));
-            var userConfiguration = """
-                [model_providers.cas_deepseek_default]
-                name = "DeepSeek"
-                base_url = "https://api.deepseek.com"
-                wire_api = "responses"
-
-                [model_providers.cas_deepseek_default.auth]
-                command = "E:/agent-switch/CodexAgentSwitch.CredentialBroker.exe"
-                args = ["--credential-reference", "provider/deepseek"]
-                timeout_ms = 5000
-                refresh_interval_ms = 300000
-                """;
             var projectConfiguration = """
-                model = "gpt-5.6-terra"
+                model = "gpt-5.6-sol"
                 model_reasoning_effort = "high"
+                agents.enabled = true
+                agents.max_concurrent_threads_per_session = 3
+                developer_instructions = "Delegate bounded work only to cas_luna_worker."
 
-                [agents.cas_external_worker]
-                description = "Use DeepSeek for bounded delegated work."
-                config_file = "./agents/cas-external-worker.toml"
+                [agents.cas_luna_worker]
+                description = "Use the configured Luna worker for bounded delegated work."
+                config_file = "./agents/cas-luna-worker.toml"
+
+                [mcp_servers.codex_agent_switch]
+                command = "cmd.exe"
+                args = ["/c", "exit", "0"]
+                startup_timeout_sec = 5
+                tool_timeout_sec = 7200
+                enabled = true
                 """;
             var agentConfiguration = """
-                name = "cas_external_worker"
-                description = "Bounded DeepSeek worker."
-                model = "deepseek-v4-flash"
-                model_provider = "cas_deepseek_default"
+                name = "cas_luna_worker"
+                description = "Bounded Luna worker."
+                model = "gpt-5.6-luna"
                 model_reasoning_effort = "medium"
                 developer_instructions = "Return concise, verifiable results."
                 """;
@@ -98,10 +95,10 @@ public sealed class CodexProjectConfigurationValidatorTests
                 command,
                 new CodexConfigurationLayers(
                     projectConfiguration,
-                    userConfiguration,
+                    null,
                     new Dictionary<string, string>
                     {
-                        ["agents/cas-external-worker.toml"] = agentConfiguration,
+                        ["agents/cas-luna-worker.toml"] = agentConfiguration,
                     }));
         }
         finally

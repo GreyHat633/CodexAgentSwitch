@@ -42,7 +42,7 @@ public sealed class NativeCodexLauncherTests
     }
 
     [Fact]
-    public async Task External_profile_starts_cli_without_generating_a_fake_worker_configuration()
+    public async Task External_profile_starts_cli_with_native_external_capability_marked_unsupported()
     {
         var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
             ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
@@ -79,7 +79,9 @@ public sealed class NativeCodexLauncherTests
             Assert.Empty(Directory.EnumerateFiles(root, "worker-*.toml", SearchOption.AllDirectories));
             var audit = await File.ReadAllTextAsync(Path.Combine(root, "native-codex", $"launch-{profile.Id:D}.json"));
             Assert.Contains("deepseek-default", audit, StringComparison.Ordinal);
-            Assert.Contains("externalProviderWorkerSupported", audit, StringComparison.Ordinal);
+            Assert.Contains("\"externalProviderWorkerSupported\": false", audit, StringComparison.Ordinal);
+            Assert.Contains("\"workerCapability\": \"Unsupported\"", audit, StringComparison.Ordinal);
+            Assert.DoesNotContain(starter.StartInfo!.ArgumentList, argument => argument.Contains("agents.default_subagent_model", StringComparison.Ordinal));
         }
         finally
         {
