@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.13',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.2.2',
     [switch]$IncludeRuntimeInstaller
 )
 

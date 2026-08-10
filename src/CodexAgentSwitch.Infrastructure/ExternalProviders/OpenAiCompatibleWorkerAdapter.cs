@@ -1,23 +1,43 @@
 using System.Collections.Concurrent;
 using CodexAgentSwitch.Application.Abstractions;
+using CodexAgentSwitch.Application.ExternalAgents;
 using CodexAgentSwitch.Application.Workers;
 using CodexAgentSwitch.Domain.Providers;
+using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Workers;
+using CodexAgentSwitch.Infrastructure.ExternalAgents;
 
 namespace CodexAgentSwitch.Infrastructure.ExternalProviders;
 
 public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDisposable
 {
+    private static readonly IReadOnlySet<WorkerToolCapability> TextOnlyCapabilities = new HashSet<WorkerToolCapability>
+    {
+        WorkerToolCapability.Text,
+    };
+    private static readonly IReadOnlySet<WorkerToolCapability> ExternalAgentCapabilities = new HashSet<WorkerToolCapability>
+    {
+        WorkerToolCapability.Text,
+        WorkerToolCapability.ProjectRead,
+        WorkerToolCapability.Search,
+        WorkerToolCapability.Patch,
+        WorkerToolCapability.Shell,
+        WorkerToolCapability.BuildAndTest,
+        WorkerToolCapability.MultiTurn,
+        WorkerToolCapability.SelfRepair,
+    };
     private readonly ProviderConfiguration provider;
     private readonly OpenAiCompatibleClient client;
     private readonly IClock clock;
+    private readonly OpenAiCompatibleExternalAgentRuntime? agentRuntime;
     private readonly SemaphoreSlim concurrency = new(3, 3);
     private readonly ConcurrentDictionary<string, ExternalJobRuntime> jobs = new(StringComparer.Ordinal);
 
     public OpenAiCompatibleWorkerAdapter(
         ProviderConfiguration provider,
         OpenAiCompatibleClient client,
-        IClock clock)
+        IClock clock,
+        OpenAiCompatibleExternalAgentRuntime? agentRuntime = null)
     {
         if (provider.Kind == ProviderKind.NativeCodex)
         {
@@ -27,15 +47,20 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
         this.provider = provider;
         this.client = client;
         this.clock = clock;
+        this.agentRuntime = agentRuntime;
     }
 
     public string AdapterId => $"external:{provider.Id}";
+
+    public IReadOnlySet<WorkerToolCapability> ToolCapabilities => agentRuntime is null
+        ? TextOnlyCapabilities
+        : ExternalAgentCapabilities;
 
     public async Task<WorkerCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default)
     {
         if (!provider.IsEnabled)
         {
-            return new WorkerCapabilities(AdapterId, false, [], 3, ["Provider 已停用。"]);
+            return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, [], 3, ["Provider 已停用。"]));
         }
 
         try
@@ -61,10 +86,10 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                 && DeepSeekV4Catalog.TryGet(provider.ModelId, out var selected)
                 && !selected.Supports(ProviderProtocol.CodexWorker))
             {
-                return new WorkerCapabilities(AdapterId, false, models, 3, [selected.WorkerUnavailableReason ?? DeepSeekV4Catalog.UnsupportedWorkerReason]);
+                return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, models, 3, [selected.WorkerUnavailableReason ?? DeepSeekV4Catalog.UnsupportedWorkerReason]));
             }
 
-            return new WorkerCapabilities(AdapterId, true, models, 3, models.Length == 0 ? ["Provider 未返回模型，请手动配置 Model ID。"] : []);
+            return WithToolCapabilities(new WorkerCapabilities(AdapterId, true, models, 3, models.Length == 0 ? ["Provider 未返回模型，请手动配置 Model ID。"] : []));
         }
         catch (ProviderRequestException exception) when (exception.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.MethodNotAllowed)
         {
@@ -76,15 +101,20 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                 && DeepSeekV4Catalog.TryGet(provider.ModelId, out var selected)
                 && !selected.Supports(ProviderProtocol.CodexWorker))
             {
-                return new WorkerCapabilities(AdapterId, false, models, 3, [selected.WorkerUnavailableReason ?? DeepSeekV4Catalog.UnsupportedWorkerReason]);
+                return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, models, 3, [selected.WorkerUnavailableReason ?? DeepSeekV4Catalog.UnsupportedWorkerReason]));
             }
-            return new WorkerCapabilities(AdapterId, models.Length > 0, models, 3, ["Provider 不支持模型发现，使用手动 Model ID。"]);
+            return WithToolCapabilities(new WorkerCapabilities(AdapterId, models.Length > 0, models, 3, ["Provider 不支持模型发现，使用手动 Model ID。"]));
         }
         catch (ProviderRequestException exception)
         {
-            return new WorkerCapabilities(AdapterId, false, [], 3, [exception.Message]);
+            return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, [], 3, [exception.Message]));
         }
     }
+
+    private WorkerCapabilities WithToolCapabilities(WorkerCapabilities capabilities) => capabilities with
+    {
+        ToolCapabilities = ToolCapabilities,
+    };
 
     public Task<WorkerJob> SpawnAsync(WorkerTask task, CancellationToken cancellationToken = default)
     {
@@ -214,22 +244,37 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
             await concurrency.WaitAsync(runtime.Cancellation.Token);
             entered = true;
             runtime.Job = runtime.Job with { Status = WorkerJobStatus.Running, StatusMessage = "Provider request running." };
-            var completion = await client.CompleteAsync(provider, runtime.ModelId, runtime.Task.Prompt, runtime.Cancellation.Token);
-            runtime.Job = runtime.Job with { Status = WorkerJobStatus.Completed, CompletedAt = clock.UtcNow, StatusMessage = "completed" };
+            var completion = agentRuntime is null
+                ? await ExecuteLegacyTextTurnAsync(runtime)
+                : await ExecuteAgentRuntimeAsync(runtime);
+            runtime.Job = runtime.Job with
+            {
+                Status = completion.Status,
+                CompletedAt = clock.UtcNow,
+                StatusMessage = completion.Status == WorkerJobStatus.Completed ? "completed" : completion.Unresolved.FirstOrDefault() ?? completion.Status.ToString(),
+            };
             Complete(
                 runtime,
                 new WorkerResult(
                     runtime.Task.TaskId,
-                    WorkerJobStatus.Completed,
+                    completion.Status,
                     completion.Content,
                     completion.RawResponse,
-                    completion.Usage is null ? ["Provider 未返回 Usage；费用只能标记为不可用或估算。"] : [],
-                    [],
+                    completion.Risks,
+                    completion.Unresolved,
                     provider.Id,
                     provider.Name,
                     completion.RequestUri,
                     completion.ResponseModel ?? runtime.ModelId,
-                    completion.Usage));
+                    completion.Usage)
+                {
+                    ChangedFiles = completion.ChangedFiles,
+                    ProviderTurns = completion.ProviderTurns,
+                    ToolCalls = completion.ToolCalls,
+                    FailedToolCalls = completion.FailedToolCalls,
+                    DeniedToolCalls = completion.DeniedToolCalls,
+                    Duration = completion.Duration,
+                });
         }
         catch (ProviderRequestException exception)
         {
@@ -292,6 +337,99 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
         }
     }
 
+    private async Task<ExternalExecution> ExecuteLegacyTextTurnAsync(ExternalJobRuntime runtime)
+    {
+        var completion = await client.CompleteAsync(provider, runtime.ModelId, runtime.Task.Prompt, runtime.Cancellation.Token);
+        return new ExternalExecution(
+            WorkerJobStatus.Completed,
+            completion.Content,
+            completion.RawResponse,
+            completion.Usage is null ? ["Provider 未返回 Usage；费用只能标记为不可用或估算。"] : [],
+            [],
+            completion.RequestUri,
+            completion.ResponseModel,
+            completion.Usage);
+    }
+
+    private async Task<ExternalExecution> ExecuteAgentRuntimeAsync(ExternalJobRuntime runtime)
+    {
+        var permissionMode = runtime.Task.ExternalWorkerPermission switch
+        {
+            ExternalWorkerPermissionMode.ReadOnly => ExternalToolPermissionMode.ReadOnly,
+            ExternalWorkerPermissionMode.FullAccess => ExternalToolPermissionMode.FullAccess,
+            _ => ExternalToolPermissionMode.WorkspaceFullAccess,
+        };
+        var session = new ExternalToolSession(
+            runtime.Task.TaskId,
+            runtime.Task.WorkingDirectory,
+            runtime.Task.WorkingDirectory,
+            permissionMode,
+            runtime.Task.AllowedReadScope.Count > 0 ? runtime.Task.AllowedReadScope : runtime.Task.Scope.Files,
+            runtime.Task.AllowedWriteScope,
+            clock.UtcNow);
+        var result = await agentRuntime!.ExecuteAsync(
+            provider,
+            runtime.ModelId,
+            runtime.Task.Prompt,
+            session,
+            runtime.Cancellation.Token);
+        var status = result.State switch
+        {
+            ExternalAgentRuntimeState.Completed => WorkerJobStatus.Completed,
+            ExternalAgentRuntimeState.Cancelled => WorkerJobStatus.Interrupted,
+            _ => WorkerJobStatus.Failed,
+        };
+        return new ExternalExecution(
+            status,
+            result.Content,
+            CompactResult(result, status),
+            result.Usage is null ? ["Provider 未返回 Usage；费用只能标记为不可用或估算。", .. result.Risks] : result.Risks,
+            status == WorkerJobStatus.Completed ? [] : [result.State.ToString()],
+            ProviderEndpoint(),
+            runtime.ModelId,
+            result.Usage)
+        {
+            ChangedFiles = result.ChangedFiles,
+            ProviderTurns = result.ProviderTurns,
+            ToolCalls = result.ToolCalls,
+            FailedToolCalls = result.FailedToolCalls,
+            DeniedToolCalls = result.DeniedToolCalls,
+            Duration = result.Duration,
+        };
+    }
+
+    private static System.Text.Json.JsonElement CompactResult(
+        ExternalAgentRuntimeResult result,
+        WorkerJobStatus status) => System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            Summary = result.Content,
+            ChangedFiles = result.ChangedFiles,
+            Validation = status == WorkerJobStatus.Completed ? "runtime-completed" : result.State.ToString(),
+            Acceptance = status == WorkerJobStatus.Completed,
+            RiskNotes = result.Risks,
+            NeedReview = true,
+            Activity = result.Activity.Select(item => new
+            {
+                item.Sequence,
+                item.ToolCallId,
+                item.ToolName,
+                item.Succeeded,
+                item.Denied,
+                item.TimedOut,
+                item.ExitCode,
+                item.ChangedFiles,
+            }),
+            Runtime = new
+            {
+                State = result.State.ToString(),
+                result.ProviderTurns,
+                result.ToolCalls,
+                result.FailedToolCalls,
+                result.DeniedToolCalls,
+                DurationMilliseconds = result.Duration.TotalMilliseconds,
+            },
+        });
+
     private static WorkerModelCapability ToCapability(string id)
     {
         if (DeepSeekV4Catalog.TryGet(id, out var model))
@@ -337,5 +475,28 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
         public CancellationTokenSource Cancellation { get; } = new();
 
         public TaskCompletionSource<WorkerResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed record ExternalExecution(
+        WorkerJobStatus Status,
+        string? Content,
+        System.Text.Json.JsonElement? RawResponse,
+        IReadOnlyList<string> Risks,
+        IReadOnlyList<string> Unresolved,
+        Uri? RequestUri,
+        string? ResponseModel,
+        ProviderUsage? Usage = null)
+    {
+        public IReadOnlyList<string> ChangedFiles { get; init; } = [];
+
+        public int? ProviderTurns { get; init; }
+
+        public int? ToolCalls { get; init; }
+
+        public int? FailedToolCalls { get; init; }
+
+        public int? DeniedToolCalls { get; init; }
+
+        public TimeSpan? Duration { get; init; }
     }
 }

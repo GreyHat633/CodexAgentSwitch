@@ -73,6 +73,7 @@ public static class ProfileDataMigration
             0,
             RoutingMode.Single,
             FallbackAction.SingleAgent);
+        var workerEffort = NormalizeReasoning(worker.ReasoningEffort);
         var source = NormalizeSource(worker.Source, worker.Enabled, profile.SchemaVersion);
         var enabled = worker.Enabled && source != WorkerSource.Disabled;
         var maxWorkers = Math.Clamp(worker.MaxWorkers, 0, 3);
@@ -117,6 +118,9 @@ public static class ProfileDataMigration
         var approval = Enum.IsDefined(profile.ApprovalMode)
             ? profile.ApprovalMode
             : ExecutionApprovalMode.Automatic;
+        var externalWorkerPermission = Enum.IsDefined(profile.ExternalWorkerPermission)
+            ? profile.ExternalWorkerPermission
+            : ExternalWorkerPermissionMode.WorkspaceFullAccess;
 
         var normalized = profile with
         {
@@ -129,9 +133,11 @@ public static class ProfileDataMigration
                 worker.FallbackProviderId,
                 maxWorkers,
                 routing,
-                fallback),
+                fallback,
+                workerEffort),
             Budget = normalizedBudget,
             ApprovalMode = approval,
+            ExternalWorkerPermission = externalWorkerPermission,
             SchemaVersion = Profile.CurrentSchemaVersion,
             RepairMessage = null,
             UpdatedAt = profile.SchemaVersion == Profile.CurrentSchemaVersion ? profile.UpdatedAt : now,

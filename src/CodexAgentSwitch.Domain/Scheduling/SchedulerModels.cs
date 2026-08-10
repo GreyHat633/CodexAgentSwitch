@@ -93,7 +93,12 @@ public sealed record WorkerResultPacket(
     string? ModelId = null,
     ProviderUsage? Usage = null,
     NativeWorkerInvocation? NativeInvocation = null,
-    string? FailureReason = null);
+    string? FailureReason = null,
+    int? ProviderTurns = null,
+    int? ToolCalls = null,
+    int? FailedToolCalls = null,
+    int? DeniedToolCalls = null,
+    double? DurationMilliseconds = null);
 
 public sealed record ScheduledDelegation(
     TaskPacket Packet,

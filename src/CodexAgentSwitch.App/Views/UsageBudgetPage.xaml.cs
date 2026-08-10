@@ -20,6 +20,10 @@ public sealed partial class UsageBudgetPage : Page
             SetMetric(InputTokensText, InputTokensDetailText, usage.InputTokens, usage.AvailabilityLabel);
             SetMetric(OutputTokensText, OutputTokensDetailText, usage.OutputTokens, usage.AvailabilityLabel);
             SetMetric(TotalTokensText, TotalTokensDetailText, usage.TotalTokens, usage.AvailabilityLabel);
+            SetNative(SolNativeText, SolNativeDetailText, usage.Sol);
+            SetNative(LunaNativeText, LunaNativeDetailText, usage.LunaNativeWorker);
+            SetNative(NativeTotalText, NativeTotalDetailText, usage.NativeTotal);
+            NativeFilterText.Text = usage.NativeFilterMessage + $" 本地 Token 限额：{(usage.NativeTokenLimit is long nativeLimit ? nativeLimit.ToString("N0") : "未设置")}；官方 credits 余额不可取得。";
             ExternalCostText.Text = usage.Cost is null
                 ? usage.AvailabilityLabel == "暂无数据" ? "暂无数据" : "暂不可取得"
                 : $"{usage.Cost:0.######} {usage.Currency}";
@@ -46,11 +50,21 @@ public sealed partial class UsageBudgetPage : Page
         {
             LatestReportBar.Title = "用量暂不可取得"; LatestReportBar.Message = ex.Message; LatestReportBar.IsOpen = true;
         }
+        finally
+        {
+            UsageScrollViewer.ChangeView(null, 0, null, true);
+        }
     }
 
     private static void SetMetric(TextBlock value, TextBlock detail, long? number, string availability)
     {
         value.Text = number is long n ? n.ToString("N0") : availability == "暂无数据" ? "暂无数据" : "暂不可取得";
         detail.Text = number is long ? availability : availability == "暂无数据" ? "暂无数据" : "当前接口不支持";
+    }
+
+    private static void SetNative(TextBlock value, TextBlock detail, NativeUsageBreakdown usage)
+    {
+        value.Text = usage.TotalTokens is long total ? $"{total:N0} tokens" : "暂无数据";
+        detail.Text = usage.TotalTokens is null ? usage.Reason : $"输入 {usage.InputTokens:N0} · 缓存 {usage.CachedTokens:N0} · 未缓存 {usage.UncachedTokens:N0} · 输出 {usage.OutputTokens:N0} · 推理 {usage.ReasoningTokens:N0} · 调用 {usage.Calls:N0}";
     }
 }

@@ -27,6 +27,15 @@ public sealed class EffectiveWorkerDefinitionTests
     }
 
     [Fact]
+    public void Native_worker_preserves_configured_reasoning_effort()
+    {
+        var definition = EffectiveWorkerDefinition.Resolve(new WorkerPolicy(
+            true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.StopDelegation, "xhigh"));
+
+        Assert.Equal("xhigh", definition.ReasoningEffort);
+    }
+
+    [Fact]
     public void External_worker_is_explicitly_unsupported_only_for_native_codex_execution()
     {
         var definition = EffectiveWorkerDefinition.Resolve(new WorkerPolicy(
@@ -35,6 +44,7 @@ public sealed class EffectiveWorkerDefinitionTests
         Assert.Equal(EffectiveWorkerKind.ExternalAgent, definition.Kind);
         Assert.Equal("cas_external_worker", definition.AgentRole);
         Assert.Equal("deepseek-default", definition.ProviderId);
+        Assert.Null(definition.ReasoningEffort);
         Assert.Equal(WorkerExecutionCapability.Unsupported, definition.Capability);
         Assert.False(definition.CanRunInNativeCodex);
     }

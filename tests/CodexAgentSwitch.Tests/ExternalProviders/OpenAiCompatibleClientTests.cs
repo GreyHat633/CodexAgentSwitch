@@ -4,8 +4,11 @@ using System.Text.Json;
 using CodexAgentSwitch.Application.Abstractions;
 using CodexAgentSwitch.Application.Credentials;
 using CodexAgentSwitch.Application.Providers;
+using CodexAgentSwitch.Domain.ExternalAgents;
+using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Domain.Workers;
+using CodexAgentSwitch.Infrastructure.ExternalAgents;
 using CodexAgentSwitch.Infrastructure.ExternalProviders;
 
 namespace CodexAgentSwitch.Tests.ExternalProviders;
@@ -77,6 +80,45 @@ public sealed class OpenAiCompatibleClientTests
         Assert.Contains("\"model\":\"deepseek-v4-pro\"", completionPayload);
     }
 
+    [Fact]
+    public async Task Structured_tool_call_and_tool_result_follow_up_are_serialized_and_parsed()
+    {
+        var payloads = new List<string>();
+        var handler = new StubHandler(async (request, _) =>
+        {
+            payloads.Add(await request.Content!.ReadAsStringAsync());
+            return payloads.Count == 1
+                ? Json(HttpStatusCode.OK, "{\"model\":\"tool-model\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"content\":null,\"tool_calls\":[{\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"key\\\":\\\"value\\\"}\"}}]}}]}")
+                : Json(HttpStatusCode.OK, "{\"model\":\"tool-model\",\"choices\":[{\"message\":{\"content\":\"done\"}}]}");
+        });
+        var client = Client(handler);
+        using var schema = JsonDocument.Parse("{\"type\":\"object\"}");
+        var tools = new[] { new ExternalAgentToolDefinition("lookup", schema.RootElement.Clone()) };
+
+        var first = await client.CompleteAsync(
+            Provider(),
+            "tool-model",
+            [ExternalAgentMessage.User("Find it.")],
+            tools);
+        var second = await client.CompleteAsync(
+            Provider(),
+            "tool-model",
+            [
+                ExternalAgentMessage.User("Find it."),
+                ExternalAgentMessage.Assistant(toolCalls: first.ToolCalls),
+                ExternalAgentMessage.Tool(first.ToolCalls[0].Id, "value", "lookup"),
+            ],
+            tools);
+
+        Assert.Single(first.ToolCalls);
+        Assert.Equal("call-1", first.ToolCalls[0].Id);
+        Assert.Equal("done", second.Content);
+        Assert.Contains("\"tools\"", payloads[0]);
+        Assert.Contains("\"tool_calls\"", payloads[1]);
+        Assert.Contains("\"tool_call_id\":\"call-1\"", payloads[1]);
+        Assert.Equal(2, handler.CallCount);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Unauthorized, ProviderErrorKind.Authentication)]
     [InlineData(HttpStatusCode.TooManyRequests, ProviderErrorKind.RateLimited)]
@@ -144,6 +186,87 @@ public sealed class OpenAiCompatibleClientTests
         Assert.Equal(8, result.Usage?.TotalTokens);
         await adapter.DeleteAsync(job.JobId);
         await Assert.ThrowsAsync<KeyNotFoundException>(() => adapter.ReadStatusAsync(job.JobId));
+    }
+
+    [Fact]
+    public async Task Worker_adapter_reports_runtime_tool_capabilities_only_when_runtime_is_attached()
+    {
+        var handler = new StubHandler((_, _) => Task.FromResult(
+            Json(HttpStatusCode.OK, "{\"data\":[{\"id\":\"deepseek-v4-flash\"}]}")));
+        var provider = Provider() with { IsEnabled = true };
+        var client = Client(handler);
+        await using var textOnly = new OpenAiCompatibleWorkerAdapter(provider, client, new FakeClock());
+        await using var agent = new OpenAiCompatibleWorkerAdapter(
+            provider,
+            client,
+            new FakeClock(),
+            new OpenAiCompatibleExternalAgentRuntime(client, new LocalExternalToolHost()));
+
+        var textCapabilities = await textOnly.GetCapabilitiesAsync();
+        var agentCapabilities = await agent.GetCapabilitiesAsync();
+
+        Assert.Equal([WorkerToolCapability.Text], textCapabilities.ToolCapabilities);
+        Assert.Contains(WorkerToolCapability.ProjectRead, agentCapabilities.ToolCapabilities);
+        Assert.Contains(WorkerToolCapability.Patch, agentCapabilities.ToolCapabilities);
+        Assert.Contains(WorkerToolCapability.Shell, agentCapabilities.ToolCapabilities);
+        Assert.Contains(WorkerToolCapability.BuildAndTest, agentCapabilities.ToolCapabilities);
+        Assert.Contains(WorkerToolCapability.MultiTurn, agentCapabilities.ToolCapabilities);
+        Assert.Contains(WorkerToolCapability.SelfRepair, agentCapabilities.ToolCapabilities);
+    }
+
+    [Fact]
+    public async Task Worker_adapter_returns_compact_runtime_metrics_for_tool_loop()
+    {
+        var callCount = 0;
+        var handler = new StubHandler((_, _) =>
+        {
+            callCount++;
+            return Task.FromResult(callCount == 1
+                ? Json(HttpStatusCode.OK, """{"model":"deepseek-v4-flash","choices":[{"finish_reason":"tool_calls","message":{"content":null,"tool_calls":[{"id":"call-location","type":"function","function":{"name":"shell","arguments":"{\"command\":\"Get-Location\"}"}}]}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}""")
+                : Json(HttpStatusCode.OK, """{"model":"deepseek-v4-flash","choices":[{"finish_reason":"stop","message":{"content":"COMPACT_OK"}}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}"""));
+        });
+        var client = Client(handler);
+        var provider = Provider() with { IsEnabled = true };
+        await using var adapter = new OpenAiCompatibleWorkerAdapter(
+            provider,
+            client,
+            new FakeClock(),
+            new OpenAiCompatibleExternalAgentRuntime(client, new LocalExternalToolHost()));
+        var workingDirectory = Path.GetFullPath(AppContext.BaseDirectory);
+        var task = new WorkerTask(
+            "compact-group",
+            "compact-task",
+            "read cwd",
+            "Read the current location.",
+            workingDirectory,
+            "deepseek-v4-flash",
+            "none",
+            new WorkerScope([workingDirectory], [], [ScopeOperation.Read, ScopeOperation.Execute]),
+            ["compact result"],
+            ["completed"],
+            [])
+        {
+            AllowedReadScope = [workingDirectory],
+            ExternalWorkerPermission = ExternalWorkerPermissionMode.WorkspaceFullAccess,
+        };
+
+        var job = await adapter.SpawnAsync(task);
+        var result = await adapter.WaitAsync(job.JobId, TimeSpan.FromSeconds(10));
+
+        Assert.NotNull(result);
+        Assert.Equal(WorkerJobStatus.Completed, result.Status);
+        Assert.Equal("COMPACT_OK", result.Summary);
+        Assert.Equal(2, result.ProviderTurns);
+        Assert.Equal(1, result.ToolCalls);
+        Assert.Equal(0, result.FailedToolCalls);
+        Assert.Equal(0, result.DeniedToolCalls);
+        Assert.True(result.Duration > TimeSpan.Zero);
+        Assert.Equal(7, result.Usage?.TotalTokens);
+        Assert.Empty(result.ChangedFiles);
+        Assert.NotNull(result.RawResult);
+        Assert.Equal("COMPACT_OK", result.RawResult!.Value.GetProperty("Summary").GetString());
+        Assert.Equal(1, result.RawResult.Value.GetProperty("Runtime").GetProperty("ToolCalls").GetInt32());
+        Assert.True(result.RawResult.Value.GetProperty("NeedReview").GetBoolean());
     }
 
     [Fact]

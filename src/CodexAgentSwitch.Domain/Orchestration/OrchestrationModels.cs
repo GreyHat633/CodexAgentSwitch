@@ -12,6 +12,20 @@ public enum PreferredWorkerType
     UserSelected,
 }
 
+public enum TaskRiskLevel
+{
+    Low,
+    Medium,
+    High,
+}
+
+public enum ReviewBudget
+{
+    Minimal,
+    Focused,
+    Deep,
+}
+
 public sealed record DelegationRequest(
     string TaskGroupId,
     string TaskId,
@@ -22,7 +36,10 @@ public sealed record DelegationRequest(
     IReadOnlyList<string> AcceptanceCriteria,
     IReadOnlyList<string> StopConditions,
     PreferredWorkerType PreferredWorkerType,
-    int RequestedWorkers = 1);
+    int RequestedWorkers = 1)
+{
+    public TaskRiskLevel RiskLevel { get; init; } = TaskRiskLevel.Medium;
+}
 
 public enum DelegationScopeStatus
 {
@@ -57,7 +74,43 @@ public sealed record DelegationGateContext(
     int ActiveWorkers,
     bool ProviderAvailable,
     bool WithinBudget,
-    bool HighDuplicateRisk);
+    bool HighDuplicateRisk,
+    int MaxActiveWorkers = 1);
+
+public sealed record EconomicPolicyDecision(
+    TaskRiskLevel RiskLevel,
+    bool WorkerOwnsClosedLoop,
+    bool SolLeads,
+    ReviewBudget ReviewBudget,
+    ReviewLevel ReviewLevel,
+    int MaxActiveWorkers,
+    bool CompactResultRequired,
+    bool DuplicateImplementationAllowed,
+    string Reason);
+
+public enum WorkerEscalationKind
+{
+    ScopeExpansionRequired,
+    DesignAssumptionInvalid,
+    SharedProtocolChangeRequired,
+    RepeatedValidationFailure,
+}
+
+public sealed record WorkerEscalation(
+    string TaskId,
+    WorkerEscalationKind Kind,
+    string Reason,
+    IReadOnlyList<string> Evidence,
+    DateTimeOffset RaisedAt);
+
+public sealed record SolContextCheckpoint(
+    string Head,
+    IReadOnlyList<string> Completed,
+    IReadOnlyList<string> Pending,
+    IReadOnlyList<string> ArchitectureDecisions,
+    IReadOnlyList<string> KnownRisks,
+    string NextStep,
+    DateTimeOffset CreatedAt);
 
 public enum ScopeAccessIntent
 {

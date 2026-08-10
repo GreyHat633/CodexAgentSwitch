@@ -1,0 +1,14 @@
+{
+  "version": "0.2.2",
+  "temp": "E:\\AISPace\\TestSpace\\cas-022-audit-final-temp",
+  "bundleExtractOverride": "E:\\AISPace\\TestSpace\\cas-022-audit-final-temp\\bundle-extract",
+  "monitoredPhysicalEntriesBefore": 2,
+  "monitoredPhysicalEntriesAfter": 2,
+  "physicalChanges": [],
+  "launches": [
+    { "entryPoint": "portable-app", "started": true },
+    { "entryPoint": "installed-app", "started": true },
+    { "entryPoint": "runtime-bootstrapper", "started": true }
+  ],
+  "passed": true
+}

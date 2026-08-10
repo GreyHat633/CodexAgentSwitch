@@ -33,6 +33,13 @@ public enum ExecutionApprovalMode
     FullAuto,
 }
 
+public enum ExternalWorkerPermissionMode
+{
+    ReadOnly,
+    WorkspaceFullAccess,
+    FullAccess,
+}
+
 public sealed record ExecutionApprovalSettings(string ApprovalPolicy, string SandboxMode);
 
 public static class ExecutionApprovalPolicy
@@ -52,7 +59,8 @@ public sealed record WorkerPolicy(
     string? FallbackProviderId,
     int MaxWorkers,
     RoutingMode RoutingMode,
-    FallbackAction FallbackAction);
+    FallbackAction FallbackAction,
+    string ReasoningEffort = "medium");
 
 public sealed record BudgetLimits(
     decimal? PerTask,
@@ -73,17 +81,20 @@ public sealed record Profile(
     DateTimeOffset UpdatedAt,
     DateTimeOffset? LastUsedAt)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 4;
 
     /// <summary>
-    /// Persisted profile payload schema. Values before 2 are normalized by the
-    /// one-time profile migration before any page constructs an editor.
+    /// Persisted profile payload schema. Values before 3 are normalized by the
+    /// one-time profile migration; schema v4 separates External Worker tool
+    /// permission from approval automation.
     /// </summary>
     public int SchemaVersion { get; init; }
 
     public bool IsBuiltIn { get; init; }
 
     public ExecutionApprovalMode ApprovalMode { get; init; } = ExecutionApprovalMode.Automatic;
+
+    public ExternalWorkerPermissionMode ExternalWorkerPermission { get; init; } = ExternalWorkerPermissionMode.WorkspaceFullAccess;
 
     /// <summary>
     /// A localized, non-sensitive reason that prevents a malformed legacy

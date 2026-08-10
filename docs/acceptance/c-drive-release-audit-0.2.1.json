@@ -1,0 +1,28 @@
+﻿{
+    "version":  "0.2.1",
+    "temp":  "E:\\AISPace\\Codex Agent Switch Project\\.tmp\\release-audit",
+    "bundleExtractOverride":  "E:\\AISPace\\Codex Agent Switch Project\\.tmp\\release-audit\\bundle-extract",
+    "monitoredPhysicalEntriesBefore":  2,
+    "monitoredPhysicalEntriesAfter":  2,
+    "physicalChanges":  [
+
+                        ],
+    "launches":  [
+                     {
+                         "entryPoint":  "portable-app",
+                         "executable":  "E:\\AISPace\\Codex Agent Switch Project\\artifacts\\release\\0.2.1\\portable\\CodexAgentSwitch.App.exe",
+                         "started":  true
+                     },
+                     {
+                         "entryPoint":  "installed-app",
+                         "executable":  "E:\\AISPace\\Codex Agent Switch Project\\.tmp\\c-drive-release-audit-20260810-031116\\installed-app\\CodexAgentSwitch.App.exe",
+                         "started":  true
+                     },
+                     {
+                         "entryPoint":  "runtime-bootstrapper",
+                         "executable":  "E:\\AISPace\\Codex Agent Switch Project\\artifacts\\release\\0.2.1\\compact-runtime\\CodexAgentSwitch.Bootstrapper.exe",
+                         "started":  true
+                     }
+                 ],
+    "passed":  true
+}

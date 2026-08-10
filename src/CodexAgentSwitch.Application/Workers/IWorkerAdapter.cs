@@ -6,6 +6,8 @@ public interface IWorkerAdapter
 {
     string AdapterId { get; }
 
+    IReadOnlySet<WorkerToolCapability> ToolCapabilities => new HashSet<WorkerToolCapability>();
+
     Task<WorkerCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default);
 
     Task<WorkerJob> SpawnAsync(WorkerTask task, CancellationToken cancellationToken = default);

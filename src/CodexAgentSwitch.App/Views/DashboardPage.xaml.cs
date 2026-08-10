@@ -37,7 +37,7 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
             var state = await source.ReadAsync();
             StateText.Text = $"{state.StateLabel} · {state.StateDetail}";
             Projects.Clear();
-            foreach (var p in state.Projects.Where(p => p.IsConfigured)) Projects.Add(new ProjectCard(p.Name, p.WorkingDirectory, p.ProfileName, p.MainAgent, p.Worker, p.StateLabel, p.AppliedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "尚未应用"));
+            foreach (var p in state.Projects.Where(p => p.IsConfigured)) Projects.Add(new ProjectCard(p.Id, p.Name, p.WorkingDirectory, p.ProfileName, p.MainAgent, p.Worker, p.StateLabel, p.AppliedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "尚未应用"));
             Tasks.Clear();
             foreach (var t in state.Tasks.Where(t => t.IsActive).OrderByDescending(t => t.UpdatedAt).Take(3)) Tasks.Add(new TaskCard(t.ProjectName, t.Title, t.WorkerName, t.StateLabel));
             ProjectsEmpty.Visibility = Projects.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -50,17 +50,85 @@ public sealed partial class DashboardPage : Page, IContentActionHandler
     {
         return action switch
         {
-            "dashboard:launch-native" => NavigateNativeAsync("desktop"),
-            "dashboard:launch-desktop" => LaunchDesktopAsync(),
+            "dashboard:launch-desktop" => LaunchDesktopAsync(source),
             _ => Task.CompletedTask,
         };
     }
 
-    private Task NavigateNativeAsync(string mode) { Frame.Navigate(typeof(NativeProjectAdapterPage), mode); return Task.CompletedTask; }
-    private async Task LaunchDesktopAsync() { try { await App.Services.GetRequiredService<ICodexDesktopLauncher>().LaunchDesktopAsync(); } catch (Exception ex) { DashboardActionBar.Title = "无法启动 Codex"; DashboardActionBar.Message = ex.Message; DashboardActionBar.IsOpen = true; DashboardActionBar.Severity = InfoBarSeverity.Error; } }
+    private async Task LaunchDesktopAsync(Button button)
+    {
+        if (Projects.Count == 0)
+        {
+            DashboardActionBar.Severity = InfoBarSeverity.Warning;
+            DashboardActionBar.Title = "请先配置项目";
+            DashboardActionBar.Message = "当前没有已应用方案的项目。请进入“项目配置”，选择项目与方案并完成应用。";
+            DashboardActionBar.IsOpen = true;
+            return;
+        }
 
-    public sealed class ProjectCard(string name, string workingDirectory, string profile, string mainAgent, string worker, string state, string applied)
-    { public string Name { get; set; } = name; public string WorkingDirectory { get; set; } = workingDirectory; public string Profile { get; set; } = profile; public string MainAgent { get; set; } = mainAgent; public string Worker { get; set; } = worker; public string State { get; set; } = state; public string Applied { get; set; } = applied; }
+        button.IsEnabled = false;
+        var originalContent = button.Content;
+        button.Content = "启动中…";
+        try
+        {
+            var selected = Projects.Count == 1 ? Projects[0] : await SelectLaunchProjectAsync();
+            if (selected is null)
+            {
+                DashboardActionBar.Severity = InfoBarSeverity.Informational;
+                DashboardActionBar.Title = "已取消启动";
+                DashboardActionBar.Message = "没有启动或修改 Codex。";
+                DashboardActionBar.IsOpen = true;
+                return;
+            }
+
+            DashboardActionBar.Severity = InfoBarSeverity.Informational;
+            DashboardActionBar.Title = "正在启动 Codex";
+            DashboardActionBar.Message = $"正在使用“{selected.Name}”的已应用配置启动官方 Codex 桌面应用。";
+            DashboardActionBar.IsOpen = true;
+            var target = await App.Services.GetRequiredService<ICodexDesktopLauncher>().LaunchDesktopAsync();
+            DashboardActionBar.Severity = InfoBarSeverity.Success;
+            DashboardActionBar.Title = "Codex 已启动";
+            DashboardActionBar.Message = $"已通过 {target} 启动。请在 Codex 中打开“{selected.Name}”：{selected.WorkingDirectory}";
+        }
+        catch (Exception ex)
+        {
+            DashboardActionBar.Title = "无法启动 Codex";
+            DashboardActionBar.Message = ex.Message;
+            DashboardActionBar.Severity = InfoBarSeverity.Error;
+        }
+        finally
+        {
+            button.Content = originalContent;
+            button.IsEnabled = true;
+        }
+    }
+
+    private async Task<ProjectCard?> SelectLaunchProjectAsync()
+    {
+        var picker = new ComboBox
+        {
+            Header = "选择要在 Codex 中使用的项目",
+            ItemsSource = Projects,
+            DisplayMemberPath = nameof(ProjectCard.Name),
+            SelectedIndex = 0,
+            MinWidth = 420,
+        };
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "启动 Codex",
+            Content = picker,
+            PrimaryButtonText = "启动",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary
+            ? picker.SelectedItem as ProjectCard
+            : null;
+    }
+
+    public sealed class ProjectCard(string id, string name, string workingDirectory, string profile, string mainAgent, string worker, string state, string applied)
+    { public string Id { get; set; } = id; public string Name { get; set; } = name; public string WorkingDirectory { get; set; } = workingDirectory; public string Profile { get; set; } = profile; public string MainAgent { get; set; } = mainAgent; public string Worker { get; set; } = worker; public string State { get; set; } = state; public string Applied { get; set; } = applied; }
     public sealed class TaskCard(string project, string title, string worker, string state)
     { public string Project { get; set; } = project; public string Title { get; set; } = title; public string Worker { get; set; } = worker; public string State { get; set; } = state; }
 }

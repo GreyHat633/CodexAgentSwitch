@@ -44,7 +44,7 @@ public sealed class DelegationGate(ScopeRegistry scopeRegistry)
             RoutingMode.Manual => 3,
             _ => 0,
         };
-        var effectiveLimit = Math.Min(routingLimit, context.ProfileMaxWorkers);
+        var effectiveLimit = Math.Min(Math.Min(routingLimit, context.ProfileMaxWorkers), Math.Max(1, context.MaxActiveWorkers));
         if (request.RequestedWorkers < 1 || request.RequestedWorkers + context.ActiveWorkers > effectiveLimit)
         {
             Error("delegation.workers.limit", $"当前路由最多允许 {effectiveLimit} 个 Worker。", issues);

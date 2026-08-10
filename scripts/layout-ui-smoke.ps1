@@ -46,7 +46,7 @@ public static class CasLayoutNative {
 
 $process = $null
 function Find-Element([string]$name) {
-    $root = [Windows.Automation.AutomationElement]::RootElement
+    $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$process.MainWindowHandle)
     $fallback = $null
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
         try {
@@ -58,7 +58,7 @@ function Find-Element([string]$name) {
         }
         foreach ($element in $all) {
             try {
-                if ($element.Current.ProcessId -eq $process.Id -and $element.Current.Name -eq $name) {
+                if ($element.Current.Name -eq $name) {
                     if (-not $element.Current.IsOffscreen) { return $element }
                     if ($null -eq $fallback) { $fallback = $element }
                 }

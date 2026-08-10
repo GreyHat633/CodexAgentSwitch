@@ -39,7 +39,11 @@ public sealed class WorkerExecutionPipelineTests
             true,
             now,
             now,
-            null);
+            null)
+        {
+            ApprovalMode = ExecutionApprovalMode.FullAuto,
+            ExternalWorkerPermission = ExternalWorkerPermissionMode.ReadOnly,
+        };
         var snapshot = await new TaskProfileSnapshotFactory(providers, new FixedClock(now)).CaptureAsync(profile);
 
         await providers.UpsertAsync(provider with
@@ -66,6 +70,8 @@ public sealed class WorkerExecutionPipelineTests
         Assert.Equal(DeepSeekV4Catalog.FlashModelId, external.LastTask?.ModelId);
         Assert.Equal("deepseek-default", factory.LastProvider?.Id);
         Assert.Equal(new Uri("https://api.deepseek.com"), factory.LastProvider?.BaseUri);
+        Assert.Equal(ExecutionApprovalMode.FullAuto, external.LastTask?.ApprovalMode);
+        Assert.Equal(ExternalWorkerPermissionMode.ReadOnly, external.LastTask?.ExternalWorkerPermission);
     }
 
     [Fact]
@@ -85,6 +91,56 @@ public sealed class WorkerExecutionPipelineTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.ExecuteAsync(snapshot, CreateTask()));
         Assert.Equal(0, native.SpawnCount);
+    }
+
+    [Fact]
+    public async Task External_worker_missing_coding_capabilities_is_rejected_before_spawn()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var provider = new TaskProviderSnapshot(
+            "text-only",
+            "Text Only",
+            ProviderKind.OpenAiCompatible,
+            new Uri("https://provider.test/v1"),
+            "credential-ref",
+            "text-model",
+            TimeSpan.FromSeconds(30),
+            true,
+            null);
+        var snapshot = new TaskProfileSnapshot(
+            Guid.NewGuid(),
+            "external",
+            new AgentSelection("gpt-5.6-sol", "high"),
+            new WorkerPolicy(true, WorkerSource.ExternalProvider, provider.Id, null, 1, RoutingMode.Economic, FallbackAction.StopDelegation),
+            new BudgetLimits(null, null, null, null, null, "CNY"),
+            provider,
+            now);
+        var external = new RecordingAdapter(
+            "external:text-only",
+            provider.Id,
+            provider.Name,
+            new HashSet<WorkerToolCapability> { WorkerToolCapability.Text, WorkerToolCapability.ProjectRead });
+        var orchestrator = new WorkerOrchestrator(
+            new RecordingExternalFactory(external),
+            new FakeRuntime(new RecordingAdapter("native-codex")),
+            new ExternalProviderResolver());
+        var task = CreateTask() with
+        {
+            Scope = new WorkerScope(
+                ["src/Feature.cs"],
+                [],
+                [ScopeOperation.Read, ScopeOperation.Modify, ScopeOperation.Execute, ScopeOperation.Test]),
+            AllowedWriteScope = ["src/Feature.cs"],
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.ExecuteAsync(snapshot, task));
+
+        Assert.Contains(nameof(WorkerToolCapability.Patch), exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(WorkerToolCapability.Shell), exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(WorkerToolCapability.BuildAndTest), exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(WorkerToolCapability.MultiTurn), exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(WorkerToolCapability.SelfRepair), exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, external.SpawnCount);
     }
 
     private static WorkerTask CreateTask() => new(
@@ -149,7 +205,11 @@ public sealed class WorkerExecutionPipelineTests
         public IWorkerAdapter Create(ProviderConfiguration provider) => throw new InvalidOperationException("External factory must not be called.");
     }
 
-    private sealed class RecordingAdapter(string adapterId, string? providerId = null, string? providerName = null) : IWorkerAdapter
+    private sealed class RecordingAdapter(
+        string adapterId,
+        string? providerId = null,
+        string? providerName = null,
+        IReadOnlySet<WorkerToolCapability>? toolCapabilities = null) : IWorkerAdapter
     {
         public int SpawnCount { get; private set; }
 
@@ -157,8 +217,10 @@ public sealed class WorkerExecutionPipelineTests
 
         public string AdapterId => adapterId;
 
+        public IReadOnlySet<WorkerToolCapability> ToolCapabilities { get; } = toolCapabilities ?? new HashSet<WorkerToolCapability>();
+
         public Task<WorkerCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new WorkerCapabilities(adapterId, true, [], 1, []));
+            Task.FromResult(new WorkerCapabilities(adapterId, true, [], 1, []) { ToolCapabilities = ToolCapabilities });
 
         public Task<WorkerJob> SpawnAsync(WorkerTask task, CancellationToken cancellationToken = default)
         {

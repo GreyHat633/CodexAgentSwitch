@@ -2,9 +2,10 @@
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:local="using:CodexAgentSwitch.App.Views">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+    <ScrollViewer x:Name="UsageScrollViewer" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Padding="{StaticResource PagePadding}" Spacing="20" MaxWidth="{StaticResource PageContentMaxWidth}" HorizontalAlignment="Center">
             <local:PageHeader Title="用量与预算" Subtitle="只显示状态投影中的真实数据；不可取得时说明原因。" />
+            <TextBlock Text="External 输入 / 输出 / 总 Token" Style="{StaticResource SectionTitleStyle}"/>
             <Grid x:Name="UsageMetricsGrid" ColumnSpacing="12" RowSpacing="12">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <Border x:Name="InputMetricCard" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="6"><TextBlock Text="输入 Token" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="InputTokensText" Text="暂不可取得" FontSize="24" FontWeight="SemiBold"/><TextBlock x:Name="InputTokensDetailText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/></StackPanel></Border>
@@ -12,12 +13,40 @@
                 <Border x:Name="TotalMetricCard" Grid.Column="2" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="6"><TextBlock Text="总 Token" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="TotalTokensText" Text="暂不可取得" FontSize="24" FontWeight="SemiBold"/><TextBlock x:Name="TotalTokensDetailText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/></StackPanel></Border>
                 <VisualStateManager.VisualStateGroups><VisualStateGroup><VisualState x:Name="Wide"><VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="1100"/></VisualState.StateTriggers></VisualState><VisualState x:Name="Medium"><VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="700"/></VisualState.StateTriggers><VisualState.Setters><Setter Target="TotalMetricCard.(Grid.Column)" Value="0"/><Setter Target="TotalMetricCard.(Grid.Row)" Value="1"/></VisualState.Setters></VisualState><VisualState x:Name="Narrow"><VisualState.Setters><Setter Target="UsageMetricsGrid.ColumnDefinitions[0].Width" Value="*"/><Setter Target="UsageMetricsGrid.ColumnDefinitions[1].Width" Value="0"/><Setter Target="UsageMetricsGrid.ColumnDefinitions[2].Width" Value="0"/><Setter Target="OutputMetricCard.(Grid.Column)" Value="0"/><Setter Target="OutputMetricCard.(Grid.Row)" Value="1"/><Setter Target="TotalMetricCard.(Grid.Column)" Value="0"/><Setter Target="TotalMetricCard.(Grid.Row)" Value="2"/></VisualState.Setters></VisualState></VisualStateGroup></VisualStateManager.VisualStateGroups>
             </Grid>
+            <Border Style="{StaticResource CardBorderStyle}">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Codex Native Token" Style="{StaticResource SectionTitleStyle}"/>
+                    <Grid x:Name="NativeUsageGrid" ColumnSpacing="12" RowSpacing="12">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <StackPanel x:Name="SolNativePanel"><TextBlock Text="Sol" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="SolNativeText" Text="暂无数据" TextWrapping="Wrap"/><TextBlock x:Name="SolNativeDetailText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/></StackPanel>
+                        <StackPanel x:Name="LunaNativePanel" Grid.Column="1"><TextBlock Text="Luna / Native Worker" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="LunaNativeText" Text="暂无数据" TextWrapping="Wrap"/><TextBlock x:Name="LunaNativeDetailText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/></StackPanel>
+                        <StackPanel x:Name="NativeTotalPanel" Grid.Column="2"><TextBlock Text="Native Total" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="NativeTotalText" Text="暂无数据" TextWrapping="Wrap"/><TextBlock x:Name="NativeTotalDetailText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/></StackPanel>
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup>
+                                <VisualState x:Name="NativeWide"><VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="900"/></VisualState.StateTriggers></VisualState>
+                                <VisualState x:Name="NativeNarrow">
+                                    <VisualState.Setters>
+                                        <Setter Target="NativeUsageGrid.ColumnDefinitions[1].Width" Value="0"/>
+                                        <Setter Target="NativeUsageGrid.ColumnDefinitions[2].Width" Value="0"/>
+                                        <Setter Target="LunaNativePanel.(Grid.Column)" Value="0"/>
+                                        <Setter Target="LunaNativePanel.(Grid.Row)" Value="1"/>
+                                        <Setter Target="NativeTotalPanel.(Grid.Column)" Value="0"/>
+                                        <Setter Target="NativeTotalPanel.(Grid.Row)" Value="2"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                    </Grid>
+                    <TextBlock x:Name="NativeFilterText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                 <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="外部费用" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="ExternalCostText" Text="暂不可取得" FontSize="24" FontWeight="SemiBold"/><TextBlock x:Name="ExternalCostEvidenceText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/></StackPanel></Border>
                 <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="今日外部调用" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="TodayCallsText" Text="暂不可取得" FontSize="24" FontWeight="SemiBold"/><TextBlock x:Name="TodayCallsDetailText" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/></StackPanel></Border>
             </Grid>
-            <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="预算状态" Style="{StaticResource SectionTitleStyle}"/><TextBlock x:Name="BudgetRatioText" Text="—" HorizontalAlignment="Right" FontWeight="SemiBold"/></Grid><ProgressBar x:Name="BudgetProgress" Value="0" Maximum="1"/><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="单任务" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="TaskBudgetText" Text="暂无数据" TextWrapping="Wrap"/></StackPanel><StackPanel Grid.Column="1"><TextBlock Text="今日" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="DailyBudgetText" Text="暂无数据" TextWrapping="Wrap"/></StackPanel><StackPanel Grid.Column="2"><TextBlock Text="本月" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="MonthlyBudgetText" Text="暂无数据" TextWrapping="Wrap"/></StackPanel></Grid></StackPanel></Border>
+            <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="12"><Grid><TextBlock Text="External Provider 预算" Style="{StaticResource SectionTitleStyle}"/><TextBlock x:Name="BudgetRatioText" Text="—" HorizontalAlignment="Right" FontWeight="SemiBold"/></Grid><ProgressBar x:Name="BudgetProgress" Value="0" Maximum="1"/><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="单任务" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="TaskBudgetText" Text="暂无数据" TextWrapping="Wrap"/></StackPanel><StackPanel Grid.Column="1"><TextBlock Text="今日" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="DailyBudgetText" Text="暂无数据" TextWrapping="Wrap"/></StackPanel><StackPanel Grid.Column="2"><TextBlock Text="本月" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="MonthlyBudgetText" Text="暂无数据" TextWrapping="Wrap"/></StackPanel></Grid></StackPanel></Border>
             <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="最近调用" Style="{StaticResource SectionTitleStyle}"/><TextBlock x:Name="LatestWorkerText" Text="暂无数据"/><TextBlock x:Name="LatestStatusText" Text="状态：暂无数据"/><TextBlock x:Name="LatestCallAtText" Text="时间：暂无数据" Style="{StaticResource CaptionTextStyle}"/><TextBlock x:Name="NativeUsageText" Text="" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/><TextBlock x:Name="EvidenceText" Text="" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"/><InfoBar x:Name="LatestReportBar" IsOpen="False" Severity="Informational"/></StackPanel></Border>
         </StackPanel>
     </ScrollViewer>

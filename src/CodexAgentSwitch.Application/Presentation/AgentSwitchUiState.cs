@@ -81,7 +81,22 @@ public sealed record UsageUiSummary(
     string LatestCallStatus,
     DateTimeOffset? LatestCallAt,
     string NativeUsageMessage,
-    string EvidenceMessage);
+    string EvidenceMessage)
+{
+    public NativeUsageBreakdown Sol { get; init; } = NativeUsageBreakdown.Empty("暂无 Sol 原生会话数据");
+    public NativeUsageBreakdown LunaNativeWorker { get; init; } = NativeUsageBreakdown.Empty("暂无 Luna/Native Worker 原生会话数据");
+    public NativeUsageBreakdown NativeTotal { get; init; } = NativeUsageBreakdown.Empty("暂无原生会话数据");
+    public int NativeExcludedCount { get; init; }
+    public string NativeFilterMessage { get; init; } = "仅统计当前未归档项目目录下的原生会话。";
+    public bool NativeReadFailed { get; init; }
+    public decimal? ExternalBudget { get; init; }
+    public long? NativeTokenLimit { get; init; }
+}
+
+public sealed record NativeUsageBreakdown(long? InputTokens, long? CachedTokens, long? UncachedTokens, long? OutputTokens, long? ReasoningTokens, long? TotalTokens, long? Calls, string Reason)
+{
+    public static NativeUsageBreakdown Empty(string reason) => new(null, null, null, null, null, null, null, reason);
+}
 
 public sealed record ProviderUiStatus(
     string Id,
@@ -113,6 +128,7 @@ public sealed class AgentSwitchUiStateProjection(
     IProviderRepository providers,
     ICredentialStore credentials,
     IUsageLedgerRepository usage,
+    IUsageSource nativeUsage,
     IClock clock) : IAgentSwitchUiStateSource
 {
     public async Task<AgentSwitchUiSnapshot> ReadAsync(CancellationToken cancellationToken = default)
@@ -165,7 +181,7 @@ public sealed class AgentSwitchUiStateProjection(
             activeProjectCount,
             projectItems,
             taskItems,
-            BuildUsage(usageSnapshots, taskList, clock.UtcNow),
+            await BuildUsageAsync(usageSnapshots, taskList, projectList, defaultProfile, nativeUsage, clock.UtcNow, cancellationToken),
             await BuildProvidersAsync(providerList, defaultProfile, taskList, usageSnapshots, cancellationToken),
             schedulerSnapshot.FaultMessage);
     }
@@ -286,11 +302,16 @@ public sealed class AgentSwitchUiStateProjection(
             active);
     }
 
-    private static UsageUiSummary BuildUsage(
+    private static async Task<UsageUiSummary> BuildUsageAsync(
         IReadOnlyList<UsageSnapshot> snapshots,
         IReadOnlyList<ScheduledDelegation> tasks,
-        DateTimeOffset now)
+        IReadOnlyList<AgentProject> projects,
+        Profile? profile,
+        IUsageSource nativeUsage,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
+        snapshots = snapshots.Where(item => !string.Equals(item.ProviderId, "native-codex", StringComparison.OrdinalIgnoreCase)).ToArray();
         var actual = snapshots.Where(item => item.TotalTokens.Evidence == EvidenceKind.Actual).ToArray();
         var latest = snapshots.OrderByDescending(item => item.CapturedAt).FirstOrDefault();
         var latestTask = tasks.OrderByDescending(item => item.UpdatedAt).FirstOrDefault();
@@ -303,7 +324,7 @@ public sealed class AgentSwitchUiStateProjection(
         var latestStatus = latestTask is null
             ? "暂无数据"
             : latestTask.State == DelegationState.Failed ? "失败" : "成功";
-        return new UsageUiSummary(
+        var summary = new UsageUiSummary(
             snapshots.Count == 0 ? "暂无数据" : actual.Length > 0 ? "可取得" : "暂不可取得",
             snapshots.Count == 0 ? UiStatusTone.Neutral : actual.Length > 0 ? UiStatusTone.Success : UiStatusTone.Warning,
             Sum(actual, item => item.InputTokens.Value),
@@ -320,6 +341,33 @@ public sealed class AgentSwitchUiStateProjection(
                 ? "尚无 External Worker 调用记录。"
                 : actual.Length > 0 ? "仅汇总 Provider 返回的实际 Token Usage。" : "当前记录没有可靠的 Token 字段，未生成估算值。"
         );
+        IReadOnlyList<NativeUsageRecord> nativeRecords;
+        try { nativeRecords = await Task.Run(() => nativeUsage.Read(cancellationToken), cancellationToken); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return summary with { NativeReadFailed = true, NativeFilterMessage = $"原生 Usage 读取失败：{ex.Message}" }; }
+        var dirs = projects.Where(p => !p.IsArchived && p.NativeCodexAdaptation?.AppliedSnapshot is not null).Select(p => Path.GetFullPath(p.WorkingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)).ToArray();
+        var included = nativeRecords.Where(r => IsInProject(r, dirs)).ToArray();
+        var excluded = nativeRecords.Count - included.Length;
+        var sol = Aggregate(included.Where(r => string.Equals(r.AgentRole, "Sol", StringComparison.OrdinalIgnoreCase)));
+        var luna = Aggregate(included.Where(r => r.AgentRole.Contains("luna", StringComparison.OrdinalIgnoreCase) || r.AgentRole.Contains("native", StringComparison.OrdinalIgnoreCase)));
+        var total = Aggregate(included);
+        return summary with { Sol = sol, LunaNativeWorker = luna, NativeTotal = total, NativeExcludedCount = excluded,
+            NativeFilterMessage = excluded > 0 ? $"已排除 {excluded} 条无法匹配当前项目目录的原生会话。" : "仅统计当前未归档项目目录下的原生会话。",
+            ExternalBudget = profile?.Budget.Daily, NativeTokenLimit = profile?.Budget.TokenLimit };
+    }
+
+    private static bool IsInProject(NativeUsageRecord record, IReadOnlyList<string> dirs)
+    {
+        var path = record.Project ?? record.Cwd;
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try { var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); return dirs.Any(d => string.Equals(full, d, StringComparison.OrdinalIgnoreCase) || full.StartsWith(d + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)); }
+        catch { return false; }
+    }
+
+    private static NativeUsageBreakdown Aggregate(IEnumerable<NativeUsageRecord> records)
+    {
+        var a = records.ToArray();
+        return a.Length == 0 ? NativeUsageBreakdown.Empty("当前项目目录下暂无匹配会话") : new(a.Sum(x => x.InputTokens), a.Sum(x => x.CachedInputTokens), a.Sum(x => x.UncachedInputTokens), a.Sum(x => x.OutputTokens), a.Sum(x => x.ReasoningTokens), a.Sum(x => x.TotalTokens), a.Sum(x => x.Calls), "来自原生 Codex 会话记录");
     }
 
     private static long? Sum(IEnumerable<UsageSnapshot> snapshots, Func<UsageSnapshot, long?> selector)

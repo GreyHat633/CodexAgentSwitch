@@ -56,8 +56,9 @@
                                             </Grid.ColumnDefinitions>
                                             <StackPanel>
                                                 <TextBlock Text="{Binding Name}" Style="{StaticResource BodyTextStyle}" />
-                                                <TextBlock Text="{Binding KindLabel}" Style="{StaticResource CaptionTextStyle}" />
-                                                <TextBlock Text="{Binding ApprovalModeLabel}" Style="{StaticResource CaptionTextStyle}" />
+                                                 <TextBlock Text="{Binding KindLabel}" Style="{StaticResource CaptionTextStyle}" />
+                                                 <TextBlock Text="{Binding ApprovalModeLabel}" Style="{StaticResource CaptionTextStyle}" />
+                                                 <TextBlock Text="{Binding ExternalWorkerPermissionLabel}" Visibility="{Binding ExternalWorkerPermissionVisibility}" Style="{StaticResource CaptionTextStyle}" />
                                                 <TextBlock Text="{Binding RepairMessage}" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                                             </StackPanel>
                                             <Border Grid.Column="1" Style="{StaticResource StatusBadgeStyle}" Visibility="{Binding DefaultVisibility}">
@@ -160,7 +161,7 @@
                     <InfoBar IsOpen="True"
                              Severity="Error"
                              Title="完全自动模式具有高风险"
-                             Message="主代理与原生 Worker 将使用 never 批准策略和 danger-full-access 沙箱；外部 Worker 仍仅通过 Provider API 返回文本。"
+                             Message="主代理与原生 Worker 将使用 never 批准策略和 danger-full-access 沙箱；外部 Worker 的本地工具权限由下方独立设置控制。"
                              Visibility="{Binding FullAutoWarningVisibility}" />
                     <StackPanel Spacing="12">
                         <TextBlock Text="工作代理与路由" Style="{StaticResource SectionTitleStyle}" />
@@ -183,7 +184,7 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                                <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
                                 <ComboBox Grid.Row="0" Grid.Column="0"
                                           Header="工作代理来源"
                                           ItemsSource="{Binding WorkerSourceOptions}"
@@ -209,6 +210,27 @@
                                           IsEnabled="{Binding HasExternalProviders}"
                                           Visibility="{Binding ExternalProviderVisibility}"
                                           AutomationProperties.Name="外部服务商选择" />
+                                 <ComboBox Grid.Row="2" Grid.Column="0"
+                                           Header="Worker 推理强度"
+                                          ItemsSource="{Binding WorkerReasoningStrengthOptions}"
+                                          DisplayMemberPath="DisplayName"
+                                          SelectedItem="{Binding SelectedWorkerReasoningStrengthOption, Mode=TwoWay}"
+                                           Visibility="{Binding NativeWorkerVisibility}"
+                                           AutomationProperties.Name="Worker 推理强度" />
+                                 <ComboBox Grid.Row="2" Grid.Column="0"
+                                           Header="外部 Worker 权限"
+                                           ItemsSource="{Binding ExternalWorkerPermissionOptions}"
+                                           DisplayMemberPath="DisplayName"
+                                           SelectedItem="{Binding SelectedExternalWorkerPermissionOption, Mode=TwoWay}"
+                                           Visibility="{Binding ExternalProviderVisibility}"
+                                           AutomationProperties.Name="外部 Worker 权限" />
+                                 <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
+                                            Text="{Binding ExternalWorkerPermissionDescription}"
+                                            Visibility="{Binding ExternalProviderVisibility}"
+                                            Style="{StaticResource CaptionTextStyle}"
+                                            TextWrapping="Wrap"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="外部 Worker 权限说明" />
                                 <ComboBox Grid.Row="1" Grid.Column="0"
                                           Header="路由模式"
                                           ItemsSource="{Binding RoutingModeOptions}"

@@ -114,6 +114,8 @@ public sealed class SchedulerIpcServerTests
         Assert.NotNull(adapter.LastTask);
         Assert.Contains("CAS-DS-013-WORKER-RESOLVE-381527", adapter.LastTask!.Prompt, StringComparison.Ordinal);
         Assert.Equal(DeepSeekV4Catalog.FlashModelId, adapter.LastTask.ModelId);
+        Assert.Equal([ScopeOperation.Read, ScopeOperation.Search], adapter.LastTask.Scope.Operations);
+        Assert.Empty(adapter.LastTask.AllowedWriteScope);
     }
 
     private sealed class EchoExecutor : IWorkerExecutor

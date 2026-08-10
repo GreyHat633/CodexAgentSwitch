@@ -1,0 +1,80 @@
+﻿{
+    "app":  "E:\\AISPace\\Codex Agent Switch Project\\src\\CodexAgentSwitch.App\\bin\\x64\\Release\\net8.0-windows10.0.22621.0\\CodexAgentSwitch.App.exe",
+    "dataRoot":  "E:\\AISPace\\Codex Agent Switch Project\\artifacts\\acceptance\\0.2.1\\profile-click-through-final",
+    "os":  "Microsoft Windows NT 10.0.19045.0",
+    "profileName":  "UI验收-3563597e",
+    "editedName":  "UI验收-3563597e-已编辑",
+    "generatedAt":  "2026-08-10T02:42:48.2688062+08:00",
+    "results":  [
+                    {
+                        "action":  "外部服务商条件显示",
+                        "evidence":  "native controls collapsed; provider selector shown disabled with a clear empty-state warning",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    },
+                    {
+                        "action":  "新建",
+                        "evidence":  "new persisted profile visible; editor=E:\\AISPace\\Codex Agent Switch Project\\artifacts\\acceptance\\0.2.1\\profile-click-through-final\\profile-editor.png; list=E:\\AISPace\\Codex Agent Switch Project\\artifacts\\acceptance\\0.2.1\\profile-click-through-final\\profile-created.png",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    },
+                    {
+                        "action":  "立即启用",
+                        "evidence":  "active/default state changed and LastUsedAt was displayed",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    },
+                    {
+                        "action":  "Worker 推理强度",
+                        "evidence":  "xhigh selection persisted in workerPolicy.reasoningEffort independently from the main agent",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    },
+                    {
+                        "action":  "导出",
+                        "evidence":  "credential-free export=E:\\AISPace\\Codex Agent Switch Project\\artifacts\\acceptance\\0.2.1\\profile-click-through-final\\exports\\profile-fe3b778b-c706-4d27-9ef7-c5519479c38d.json",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    },
+                    {
+                        "action":  "编辑",
+                        "evidence":  "name and main-agent selection were saved through the real editor",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    },
+                    {
+                        "action":  "复制",
+                        "evidence":  "unique copy visible as UI验收-3563597e-已编辑 - 副本",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    },
+                    {
+                        "action":  "删除副本",
+                        "evidence":  "copied profile removed from the persisted list",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    },
+                    {
+                        "action":  "重启恢复",
+                        "evidence":  "edited profile remained visible after process restart",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    },
+                    {
+                        "action":  "删除",
+                        "evidence":  "after switching default, the created profile was deleted",
+                        "dpi":  119,
+                        "theme":  "light",
+                        "status":  "passed"
+                    }
+                ]
+}

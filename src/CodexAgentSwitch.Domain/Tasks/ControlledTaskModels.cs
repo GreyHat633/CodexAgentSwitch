@@ -59,7 +59,8 @@ public sealed record TaskProfileSnapshot(
     BudgetLimits Budget,
     TaskProviderSnapshot? Provider,
     DateTimeOffset CapturedAt,
-    ExecutionApprovalMode ApprovalMode = ExecutionApprovalMode.Automatic);
+    ExecutionApprovalMode ApprovalMode = ExecutionApprovalMode.Automatic,
+    ExternalWorkerPermissionMode ExternalWorkerPermission = ExternalWorkerPermissionMode.WorkspaceFullAccess);
 
 public sealed record DelegationDecision(
     DelegationDecisionKind Kind,

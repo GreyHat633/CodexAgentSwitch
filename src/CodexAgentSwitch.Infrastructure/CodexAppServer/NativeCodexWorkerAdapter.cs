@@ -9,6 +9,9 @@ namespace CodexAgentSwitch.Infrastructure.CodexAppServer;
 
 public sealed class NativeCodexWorkerAdapter : IWorkerAdapter
 {
+    private static readonly IReadOnlySet<WorkerToolCapability> NativeToolCapabilities = Enum
+        .GetValues<WorkerToolCapability>()
+        .ToHashSet();
     private readonly CodexAppServerClient _client;
     private readonly IClock _clock;
     private readonly ICodexModelResolver _modelResolver;
@@ -24,6 +27,8 @@ public sealed class NativeCodexWorkerAdapter : IWorkerAdapter
     }
 
     public string AdapterId => "native-codex";
+
+    public IReadOnlySet<WorkerToolCapability> ToolCapabilities => NativeToolCapabilities;
 
     public async Task<WorkerCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default)
     {
@@ -50,7 +55,10 @@ public sealed class NativeCodexWorkerAdapter : IWorkerAdapter
             }
         }
 
-        return new WorkerCapabilities(AdapterId, true, models, 3, []);
+        return new WorkerCapabilities(AdapterId, true, models, 3, [])
+        {
+            ToolCapabilities = ToolCapabilities,
+        };
     }
 
     public async Task<WorkerJob> SpawnAsync(WorkerTask task, CancellationToken cancellationToken = default)

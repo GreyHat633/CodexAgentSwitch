@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using CodexAgentSwitch.Application.Credentials;
 using CodexAgentSwitch.Application.Providers;
+using CodexAgentSwitch.Domain.ExternalAgents;
 using CodexAgentSwitch.Domain.Providers;
 
 namespace CodexAgentSwitch.Infrastructure.ExternalProviders;
@@ -153,6 +154,52 @@ public sealed class OpenAiCompatibleClient(HttpClient httpClient, ICredentialSto
         var responseModel = root.TryGetProperty("model", out var model) ? model.GetString() : null;
         var usage = ParseUsage(root);
         return new ExternalCompletion(content, responseModel, usage, requestUri, root.Clone());
+    }
+
+    /// <summary>Executes one structured chat-completion turn, optionally exposing function tools.</summary>
+    public Task<ExternalAgentCompletion> CompleteAsync(
+        ProviderConfiguration provider,
+        string modelId,
+        IReadOnlyList<ExternalAgentMessage> messages,
+        IReadOnlyList<ExternalAgentToolDefinition>? tools = null,
+        CancellationToken cancellationToken = default) =>
+        CompleteAsync(provider, new ExternalAgentChatRequest(modelId, messages, tools), cancellationToken);
+
+    public Task<ExternalAgentCompletion> CompleteAsync(
+        ProviderConfiguration provider,
+        string modelId,
+        IReadOnlyList<ExternalAgentMessage> messages,
+        CancellationToken cancellationToken) =>
+        CompleteAsync(provider, modelId, messages, null, cancellationToken);
+
+    public Task<ExternalAgentCompletion> CompleteWithToolsAsync(
+        ProviderConfiguration provider,
+        string modelId,
+        IReadOnlyList<ExternalAgentMessage> messages,
+        IReadOnlyList<ExternalAgentToolDefinition>? tools = null,
+        CancellationToken cancellationToken = default) =>
+        CompleteAsync(provider, modelId, messages, tools, cancellationToken);
+
+    public async Task<ExternalAgentCompletion> CompleteAsync(
+        ProviderConfiguration provider,
+        ExternalAgentChatRequest requestModel,
+        CancellationToken cancellationToken = default)
+    {
+        var payload = OpenAiCompatibleToolCallCodec.SerializeRequest(requestModel);
+        using var request = await CreateRequestAsync(provider, HttpMethod.Post, "chat/completions", cancellationToken);
+        request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+        var requestUri = request.RequestUri
+            ?? throw new ProviderRequestException(ProviderErrorKind.InvalidConfiguration, "Provider request URI is invalid.");
+        using var response = await SendAsync(provider, request, cancellationToken);
+        using var document = await ReadJsonAsync(response, cancellationToken);
+        try
+        {
+            return OpenAiCompatibleToolCallCodec.ParseResponse(document.RootElement, requestUri);
+        }
+        catch (OpenAiCompatibleProtocolException exception)
+        {
+            throw new ProviderRequestException(ProviderErrorKind.Protocol, exception.Message, response.StatusCode, innerException: exception);
+        }
     }
 
     private async Task<HttpRequestMessage> CreateRequestAsync(

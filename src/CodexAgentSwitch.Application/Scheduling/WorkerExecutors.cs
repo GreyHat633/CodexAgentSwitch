@@ -110,7 +110,12 @@ public sealed class ExternalWorkerExecutor(
         {
             throw new InvalidOperationException($"预算已阻止新的 External Worker 请求：{string.Join("；", assessment.Reasons)}");
         }
-        var scope = new WorkerScope(packet.Scope, [], [ScopeOperation.Read, ScopeOperation.Search, ScopeOperation.Modify, ScopeOperation.Execute, ScopeOperation.Test]);
+        var operations = new List<ScopeOperation> { ScopeOperation.Read, ScopeOperation.Search };
+        if (packet.AllowedWriteScope.Count > 0)
+        {
+            operations.AddRange([ScopeOperation.Modify, ScopeOperation.Execute, ScopeOperation.Test]);
+        }
+        var scope = new WorkerScope(packet.Scope, [], operations);
         var workerTask = new WorkerTask(
             packet.TaskId,
             packet.TaskId,
@@ -122,18 +127,31 @@ public sealed class ExternalWorkerExecutor(
             scope,
             [packet.OutputContract],
             packet.AcceptanceCriteria,
-            packet.Constraints);
+            packet.Constraints,
+            ApprovalMode: effectiveProfile.ApprovalMode)
+        {
+            AllowedReadScope = packet.AllowedReadScope,
+            AllowedWriteScope = packet.AllowedWriteScope,
+            ExternalWorkerPermission = snapshot.ExternalWorkerPermission,
+        };
         var execution = await orchestrator.ExecuteAsync(snapshot, workerTask, cancellationToken: cancellationToken);
         return new WorkerResultPacket(
             packet.TaskId,
             execution.Result.Status == WorkerJobStatus.Completed ? DelegationState.ResultReceived : DelegationState.Failed,
             execution.Result.Summary ?? execution.FinalJob.StatusMessage ?? "External Worker 未返回摘要。",
             execution.Result.RawResult is null ? [] : [execution.Result.RawResult.Value.GetRawText()],
-            [], [], execution.Result.Risks,
+            execution.Result.ChangedFiles,
+            execution.Result.Status == WorkerJobStatus.Completed ? ["External Agent Runtime completed."] : [],
+            execution.Result.Risks,
             execution.ProviderId,
             execution.Result.ResponseModelId ?? execution.ModelId,
             execution.Result.Usage,
-            FailureReason: execution.Result.FailureKind);
+            FailureReason: execution.Result.FailureKind,
+            ProviderTurns: execution.Result.ProviderTurns,
+            ToolCalls: execution.Result.ToolCalls,
+            FailedToolCalls: execution.Result.FailedToolCalls,
+            DeniedToolCalls: execution.Result.DeniedToolCalls,
+            DurationMilliseconds: execution.Result.Duration?.TotalMilliseconds);
     }
 
     private async Task<BudgetConsumption> ConsumptionAsync(CancellationToken cancellationToken)

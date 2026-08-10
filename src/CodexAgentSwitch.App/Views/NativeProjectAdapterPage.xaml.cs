@@ -349,7 +349,9 @@ public sealed partial class NativeProjectAdapterPage : Page
         flyout.Items.Add(MenuItem("打开目录", () => OpenDirectoryAsync(item)));
         flyout.Items.Add(MenuItem("查看配置", () => ViewConfigurationAsync(item)));
         flyout.Items.Add(MenuItem("恢复原配置", () => RestoreConfigurationAsync(item)));
-        flyout.Items.Add(MenuItem("从列表移除", () => ArchiveProjectAsync(item), destructive: true));
+        flyout.Items.Add(item.IsArchived
+            ? MenuItem("取消归档", () => UnarchiveProjectAsync(item))
+            : MenuItem("归档项目", () => ArchiveProjectAsync(item)));
         flyout.ShowAt(anchor);
     }
 
@@ -415,6 +417,12 @@ public sealed partial class NativeProjectAdapterPage : Page
         }
 
         await projects.ArchiveAsync(item.Project.Id);
+        await RefreshProjectsAsync();
+    }
+
+    private async Task UnarchiveProjectAsync(NativeProjectItem item)
+    {
+        await projects.UnarchiveAsync(item.Project.Id);
         await RefreshProjectsAsync();
     }
 

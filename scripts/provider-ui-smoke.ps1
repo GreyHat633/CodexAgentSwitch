@@ -56,10 +56,10 @@ function Start-App {
 }
 
 function Find-Element([string]$name,[switch]$Contains) {
-    $all=[Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)
+    $root=[Windows.Automation.AutomationElement]::FromHandle([IntPtr]$script:process.MainWindowHandle)
+    $all=$root.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)
     $fallback=$null
     foreach($element in $all){try{
-        if($element.Current.ProcessId -ne $script:process.Id){continue}
         $matched=if($Contains){$element.Current.Name -like "*$name*"}else{$element.Current.Name -eq $name}
         if(-not $matched){continue}
         if(-not $element.Current.IsOffscreen){return $element}
@@ -69,7 +69,7 @@ function Find-Element([string]$name,[switch]$Contains) {
     throw "Element not found: $name"
 }
 
-function Press([string]$name){$element=Find-Element $name;$element.SetFocus();[Windows.Forms.SendKeys]::SendWait('{ENTER}');Start-Sleep -Milliseconds 650}
+function Press([string]$name){$element=Find-Element $name;$invoke=$null;if($element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$invoke)){([Windows.Automation.InvokePattern]$invoke).Invoke();Start-Sleep -Milliseconds 650;return};$element.SetFocus();[Windows.Forms.SendKeys]::SendWait('{ENTER}');Start-Sleep -Milliseconds 650}
 function Type-In([string]$name,[string]$value){$element=Find-Element $name;$element.SetFocus();[Windows.Forms.SendKeys]::SendWait($value);Start-Sleep -Milliseconds 150}
 function Assert-Text([string]$text){$null=Find-Element $text -Contains}
 function Pass([string]$operation,[string]$evidence){$results.Add([pscustomobject]@{operation=$operation;evidence=$evidence;status='passed'})}

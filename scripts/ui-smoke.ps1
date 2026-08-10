@@ -94,12 +94,12 @@ function Start-CasApp([string]$page, [string]$caseName) {
 }
 
 function Find-AppElement([string]$name, [switch]$AllowOffscreen) {
-    $root = [Windows.Automation.AutomationElement]::RootElement
+    $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$script:process.MainWindowHandle)
     $all = $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
     $fallback = $null
     foreach ($element in $all) {
         try {
-            if ($element.Current.ProcessId -ne $script:process.Id -or $element.Current.Name -ne $name) { continue }
+            if ($element.Current.Name -ne $name) { continue }
             if (-not $element.Current.IsOffscreen) { return $element }
             if ($AllowOffscreen -and $null -eq $fallback) { $fallback = $element }
         } catch { }
@@ -142,6 +142,12 @@ function Click-AppElement([string]$name, [string]$expectedAction = '') {
 
 function Press-AppElement([string]$name, [ValidateSet('ENTER','SPACE')][string]$key) {
     $element = Find-AppElement $name -AllowOffscreen
+    $invoke = $null
+    if ($element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) {
+        ([Windows.Automation.InvokePattern]$invoke).Invoke()
+        Start-Sleep -Milliseconds 650
+        return
+    }
     $element.SetFocus()
     Start-Sleep -Milliseconds 100
     [Windows.Forms.SendKeys]::SendWait($(if ($key -eq 'ENTER') { '{ENTER}' } else { ' ' }))

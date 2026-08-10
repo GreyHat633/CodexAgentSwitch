@@ -819,7 +819,12 @@ public sealed class ControlledTaskService
             ["结果与用户任务直接相关", "不冒充主代理最终回答"],
             ["需要扩大权限或修改范围时停止"],
             null,
-            snapshot.ApprovalMode);
+            snapshot.ApprovalMode)
+        {
+            AllowedReadScope = [session.WorkingDirectory],
+            AllowedWriteScope = [],
+            ExternalWorkerPermission = snapshot.ExternalWorkerPermission,
+        };
 
         var execution = await workerOrchestrator.ExecuteAsync(
             snapshot,

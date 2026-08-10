@@ -45,7 +45,8 @@ public sealed class TaskProfileSnapshotFactory(
             profile.Budget,
             providerSnapshot,
             clock.UtcNow,
-            profile.ApprovalMode);
+            profile.ApprovalMode,
+            profile.ExternalWorkerPermission);
     }
 }
 
@@ -184,11 +185,15 @@ public sealed class WorkerOrchestrator(
         var resolved = Resolve(snapshot, forceNativeLuna);
         try
         {
-            var startedJob = await resolved.Adapter.SpawnAsync(task with
+            var resolvedTask = task with
             {
                 ModelId = resolved.ModelId,
                 ReasoningEffort = resolved.ReasoningEffort,
-            }, cancellationToken);
+                ApprovalMode = snapshot.ApprovalMode,
+                ExternalWorkerPermission = snapshot.ExternalWorkerPermission,
+            };
+            EnsureToolCapabilities(resolved.Adapter, resolvedTask);
+            var startedJob = await resolved.Adapter.SpawnAsync(resolvedTask, cancellationToken);
             if (onStarted is not null)
             {
                 await onStarted(new WorkerExecutionStarted(
@@ -222,6 +227,61 @@ public sealed class WorkerOrchestrator(
         }
     }
 
+    private static void EnsureToolCapabilities(IWorkerAdapter adapter, WorkerTask task)
+    {
+        var isExternalWorker = adapter.AdapterId.StartsWith("external:", StringComparison.OrdinalIgnoreCase);
+        if (isExternalWorker
+            && task.ExternalWorkerPermission == ExternalWorkerPermissionMode.ReadOnly
+            && task.Scope.Operations.Any(operation => operation is ScopeOperation.Modify or ScopeOperation.Test))
+        {
+            throw new InvalidOperationException(
+                $"Worker {adapter.AdapterId} cannot receive modify or test operations while External Worker permission is ReadOnly.");
+        }
+        if (isExternalWorker
+            && task.Scope.Operations.Contains(ScopeOperation.Modify)
+            && task.AllowedWriteScope.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Worker {adapter.AdapterId} cannot receive modify operations without an AllowedWriteScope.");
+        }
+
+        if (adapter.ToolCapabilities.Count == 0)
+        {
+            return;
+        }
+
+        var required = new HashSet<WorkerToolCapability> { WorkerToolCapability.Text };
+        foreach (var operation in task.Scope.Operations)
+        {
+            required.Add(operation switch
+            {
+                ScopeOperation.Read => WorkerToolCapability.ProjectRead,
+                ScopeOperation.Search => WorkerToolCapability.Search,
+                ScopeOperation.Modify => WorkerToolCapability.Patch,
+                ScopeOperation.Execute => WorkerToolCapability.Shell,
+                ScopeOperation.Test => WorkerToolCapability.BuildAndTest,
+                _ => WorkerToolCapability.Text,
+            });
+        }
+
+        if (required.Count > 1)
+        {
+            required.Add(WorkerToolCapability.MultiTurn);
+        }
+        if (task.Scope.Operations.Contains(ScopeOperation.Modify)
+            && task.Scope.Operations.Contains(ScopeOperation.Test))
+        {
+            required.Add(WorkerToolCapability.SelfRepair);
+        }
+
+        var missing = required.Where(capability => !adapter.ToolCapabilities.Contains(capability)).ToArray();
+        if (missing.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Worker {adapter.AdapterId} lacks required task capabilities: {string.Join(", ", missing)}.");
+        }
+    }
+
     private ResolvedWorker Resolve(TaskProfileSnapshot snapshot, bool forceNativeLuna)
     {
         if (forceNativeLuna)
@@ -238,7 +298,8 @@ public sealed class WorkerOrchestrator(
                 "native-luna" => "gpt-5.6-luna",
                 _ => throw new InvalidOperationException("当前方案的原生 Worker ID 无效。"),
             };
-            return new ResolvedWorker(runtime.NativeWorker, modelId, "medium", "native-codex", "原生 Codex", null, null);
+            var effort = snapshot.WorkerPolicy.ReasoningEffort is "low" or "medium" or "high" or "xhigh" ? snapshot.WorkerPolicy.ReasoningEffort : "medium";
+            return new ResolvedWorker(runtime.NativeWorker, modelId, effort, "native-codex", "原生 Codex", null, null);
         }
 
         if (snapshot.WorkerPolicy.Source == WorkerSource.ExternalProvider)
@@ -248,7 +309,7 @@ public sealed class WorkerOrchestrator(
             return new ResolvedWorker(
                 adapter,
                 provider.ModelId!,
-                "medium",
+                "provider-default",
                 provider.Id,
                 provider.Name,
                 provider.Pricing,

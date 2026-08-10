@@ -48,7 +48,7 @@ public sealed class SqliteProfileRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task Round_trip_preserves_full_automatic_approval_mode()
+    public async Task Round_trip_preserves_independent_approval_and_external_worker_permission()
     {
         Directory.CreateDirectory(_directory);
         var database = new SqliteDatabase(Path.Combine(_directory, "approval.db"));
@@ -57,6 +57,7 @@ public sealed class SqliteProfileRepositoryTests : IDisposable
         var profile = Profile.CreateDefault(DateTimeOffset.UtcNow) with
         {
             ApprovalMode = ExecutionApprovalMode.FullAuto,
+            ExternalWorkerPermission = ExternalWorkerPermissionMode.ReadOnly,
         };
 
         await repository.UpsertAsync(profile);
@@ -64,6 +65,7 @@ public sealed class SqliteProfileRepositoryTests : IDisposable
         var reloaded = await new SqliteProfileRepository(database).GetAsync(profile.Id);
 
         Assert.Equal(ExecutionApprovalMode.FullAuto, reloaded!.ApprovalMode);
+        Assert.Equal(ExternalWorkerPermissionMode.ReadOnly, reloaded.ExternalWorkerPermission);
     }
 
     [Fact]
@@ -105,6 +107,7 @@ public sealed class SqliteProfileRepositoryTests : IDisposable
         Assert.True(reloaded!.IsBuiltIn);
         Assert.Equal("内置预设", reloaded.KindLabel);
         Assert.Equal(ExecutionApprovalMode.Automatic, reloaded.ApprovalMode);
+        Assert.Equal(ExternalWorkerPermissionMode.WorkspaceFullAccess, reloaded.ExternalWorkerPermission);
         Assert.Equal(0, reloaded.SchemaVersion);
 
         var migration = new ProfileMigrationService(repository, new FixedClock());

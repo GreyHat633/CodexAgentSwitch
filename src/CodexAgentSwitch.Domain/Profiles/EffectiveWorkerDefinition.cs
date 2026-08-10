@@ -56,7 +56,7 @@ public sealed record EffectiveWorkerDefinition(
                 EffectiveWorkerKind.ExternalAgent,
                 "cas_external_worker",
                 null,
-                "medium",
+                null,
                 policy.PreferredProviderId,
                 Math.Max(1, policy.MaxWorkers),
                 policy.RoutingMode,
@@ -82,7 +82,7 @@ public sealed record EffectiveWorkerDefinition(
                 EffectiveWorkerKind.NativeAgent,
                 native.Value.Role,
                 native.Value.Model,
-                "medium",
+                NormalizeReasoning(policy.ReasoningEffort),
                 "openai",
                 Math.Max(1, policy.MaxWorkers),
                 policy.RoutingMode,
@@ -90,4 +90,10 @@ public sealed record EffectiveWorkerDefinition(
                 WorkerExecutionCapability.Supported,
                 "通过项目级自定义 Agent 角色执行。");
     }
+
+    private static string NormalizeReasoning(string? effort) => effort?.Trim() switch
+    {
+        "low" or "medium" or "high" or "xhigh" => effort.Trim(),
+        _ => "medium",
+    };
 }

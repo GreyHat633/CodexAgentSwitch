@@ -72,14 +72,14 @@ function Start-App {
 }
 
 function Find-Element([string]$name, [int]$attempts = 35) {
-    $root = [Windows.Automation.AutomationElement]::RootElement
+    $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$process.MainWindowHandle)
     for ($attempt = 0; $attempt -lt $attempts; $attempt++) {
         try { $all = $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) }
         catch { Start-Sleep -Milliseconds 150; continue }
         $fallback = $null
         foreach ($element in $all) {
             try {
-                if ($element.Current.ProcessId -ne $process.Id -or $element.Current.Name -ne $name) { continue }
+                if ($element.Current.Name -ne $name) { continue }
                 if (-not $element.Current.IsOffscreen) { return $element }
                 if ($null -eq $fallback) { $fallback = $element }
             } catch { }
@@ -114,6 +114,12 @@ function Assert-Enabled([string]$name) {
 
 function Press-Element([string]$name) {
     $element = Find-Element $name
+    $invoke = $null
+    if ($element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) {
+        ([Windows.Automation.InvokePattern]$invoke).Invoke()
+        Start-Sleep -Milliseconds 600
+        return
+    }
     $element.SetFocus()
     Start-Sleep -Milliseconds 100
     [Windows.Forms.SendKeys]::SendWait('{ENTER}')
@@ -185,21 +191,24 @@ try {
     Assert-Absent '外部服务商选择'
     Select-Combo '工作代理来源' 1
     Assert-Absent '原生工作代理选择'
+    Select-Combo '外部 Worker 权限' 2
+    $permissionCapture = Save-Capture 'profile-external-permission.png'
     if ($ExpectConfiguredProvider) {
         Assert-Enabled '外部服务商选择'
         Select-Combo '外部服务商选择' 0
         Assert-Absent '没有可用的外部服务商'
-        Add-Pass '外部服务商条件显示' 'native controls collapsed; configured-provider selector shown enabled and accepted a real selection' $dpi
+        Add-Pass '外部服务商条件显示' "native controls collapsed; configured-provider selector and independent Full Access permission shown; capture=$permissionCapture" $dpi
     }
     else {
         Assert-Disabled '外部服务商选择'
         $null = Find-Element '没有可用的外部服务商'
-        Add-Pass '外部服务商条件显示' 'native controls collapsed; provider selector shown disabled with a clear empty-state warning' $dpi
+        Add-Pass '外部服务商条件显示' "native controls collapsed; provider selector disabled with clear empty state; independent Full Access permission shown; capture=$permissionCapture" $dpi
     }
     Select-Combo '工作代理来源' 0
     $null = Find-Element '原生工作代理选择'
     Assert-Absent '外部服务商选择'
     Select-Combo '原生工作代理选择' 1
+    Select-Combo 'Worker 推理强度' 3
     Set-Text '最大工作代理数量' '2'
     Select-Combo '路由模式' 1
     $null = Find-Element '路由模式说明'
@@ -223,6 +232,9 @@ try {
     if (-not $export) { throw 'Profile export was not created' }
     $exportText = Get-Content -Raw -Encoding UTF8 -LiteralPath $export.FullName
     if ($exportText -match '(?i)apiKey|credentialReference|secretValue') { throw 'Export contains a credential field' }
+    $exportProfile = $exportText | ConvertFrom-Json
+    if ($exportProfile.profile.workerPolicy.reasoningEffort -ne 'xhigh') { throw 'Worker reasoning effort was not persisted independently' }
+    Add-Pass 'Worker 推理强度' 'xhigh selection persisted in workerPolicy.reasoningEffort independently from the main agent' $dpi
     Add-Pass '导出' "credential-free export=$($export.FullName)" $dpi
 
     Press-Element '编辑'

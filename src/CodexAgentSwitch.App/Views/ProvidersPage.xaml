@@ -8,8 +8,8 @@
         <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Spacing="6"><TextBlock Text="API 密钥"/><PasswordBox x:Name="ApiKeyBox" PasswordRevealMode="Peek"/></StackPanel><StackPanel Grid.Column="1" Spacing="6"><TextBlock Text="模型"/><ComboBox x:Name="ModelSelectionComboBox" DisplayMemberPath="DisplayName" SelectedValuePath="Id" SelectionChanged="ModelSelectionChanged"/></StackPanel></Grid>
         <InfoBar IsOpen="True" Severity="Warning" Title="HTTPS 安全要求" Message="非本机地址使用 HTTP 时会要求额外确认；API 密钥不会写入配置或日志。"/>
         <StackPanel Orientation="Vertical" Spacing="8" HorizontalAlignment="Left"><StackPanel Orientation="Horizontal" Spacing="8"><Button x:Name="SaveProviderButton" Content="保存" Click="SaveProvider"/><Button x:Name="TestConnectionButton" Content="测试并启用" Style="{StaticResource AccentButtonStyle}" Click="TestAndSaveProvider"/><Button x:Name="EnableDeepSeekButton" Content="启用" Click="EnableDeepSeek"/></StackPanel><StackPanel Orientation="Horizontal" Spacing="8"><Button Content="删除服务商" Click="DeleteDeepSeek"/><Button Content="重载" Click="ReloadProviders"/><Button Content="清空密钥" Click="ClearProviderKey"/></StackPanel></StackPanel>
-        <InfoBar x:Name="ProviderResultBar" IsOpen="False"/>
       </StackPanel></Border>
     </Expander>
+    <InfoBar x:Name="ProviderResultBar" IsOpen="False"/>
   </StackPanel></ScrollViewer>
 </Page>

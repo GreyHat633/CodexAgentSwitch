@@ -611,11 +611,14 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
             return;
         }
 
-        if (anchor.DataContext is ProjectListItem project)
+        var project = anchor.DataContext as ProjectListItem ?? ProjectListView.SelectedItem as ProjectListItem;
+        if (project is null)
         {
-            selectedProjectId = project.Id;
-            ProjectListView.SelectedItem = project;
+            return;
         }
+
+        selectedProjectId = project.Id;
+        ProjectListView.SelectedItem = project;
 
         var flyout = new MenuFlyout();
         flyout.Items.Add(MenuItem("使用当前方案作为项目默认", SetProjectDefaultToCurrentProfileAsync));
@@ -623,7 +626,7 @@ public sealed partial class RunningTasksPage : Page, IContentActionHandler
         flyout.Items.Add(new MenuFlyoutSeparator());
         flyout.Items.Add(MenuItem("重命名", RenameProjectAsync));
         flyout.Items.Add(MenuItem("更改工作目录", ChangeProjectDirectoryAsync));
-        flyout.Items.Add(MenuItem("归档", ToggleProjectArchiveAsync));
+        flyout.Items.Add(MenuItem(project.IsArchived ? "取消归档" : "归档", ToggleProjectArchiveAsync));
         flyout.Items.Add(MenuItem("删除", DeleteProjectAsync, isDestructive: true));
         flyout.ShowAt(anchor);
     }

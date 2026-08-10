@@ -16,6 +16,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
 {
     private const string ProviderId = "deepseek-default";
     private const string CredentialReference = "provider/deepseek-default";
+    private bool workerTestInProgress;
 
     public ProvidersPage()
     {
@@ -207,10 +208,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             return;
         }
 
-        if (action == "provider:force-worker")
-        {
-            await ForceTestCurrentWorkerAsync();
-        }
+        if (action == "provider:force-worker") await ForceTestCurrentWorkerAsync(source);
     }
 
     private async Task DetectNativeAsync()
@@ -223,9 +221,25 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         ProviderResultBar.IsOpen = true;
     }
 
-    private async Task ForceTestCurrentWorkerAsync()
+    private async Task ForceTestCurrentWorkerAsync(Button? source = null)
     {
-        ProviderResultBar.IsOpen = false;
+        if (workerTestInProgress)
+        {
+            return;
+        }
+
+        workerTestInProgress = true;
+        var originalContent = source?.Content;
+        if (source is not null)
+        {
+            source.IsEnabled = false;
+            source.Content = "测试中…";
+        }
+
+        ProviderResultBar.Severity = InfoBarSeverity.Informational;
+        ProviderResultBar.Title = "正在测试当前 Worker";
+        ProviderResultBar.Message = "正在通过当前方案选择的 Provider 发起一次显式连接测试。";
+        ProviderResultBar.IsOpen = true;
         try
         {
             var profile = await App.Services.GetRequiredService<IProfileRepository>().GetDefaultAsync()
@@ -255,7 +269,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
 
             ProviderResultBar.Severity = InfoBarSeverity.Success;
             ProviderResultBar.Title = "当前外部 Worker 测试成功";
-            ProviderResultBar.Message = $"已通过 Provider HTTP 调用 {provider.Id} / {provider.ModelId}；响应模型：{result.ResponseModel ?? provider.ModelId}；Usage：{result.Usage?.TotalTokens?.ToString() ?? "不可取得"}。未启动原生 Codex 子代理。";
+            ProviderResultBar.Message = $"Provider：{provider.Name}；Worker 模型：{provider.ModelId}；响应模型：{result.ResponseModel ?? provider.ModelId}；耗时：{result.Latency.TotalMilliseconds:0} 毫秒；Usage：{result.Usage?.TotalTokens?.ToString() ?? "不可取得"}。未启动原生 Codex 子代理。";
             ProviderResultBar.IsOpen = true;
         }
         catch (Exception exception)
@@ -264,6 +278,15 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             ProviderResultBar.Title = "当前外部 Worker 测试失败";
             ProviderResultBar.Message = exception.Message;
             ProviderResultBar.IsOpen = true;
+        }
+        finally
+        {
+            workerTestInProgress = false;
+            if (source is not null)
+            {
+                source.Content = originalContent;
+                source.IsEnabled = true;
+            }
         }
     }
 
@@ -344,7 +367,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
                 toggle.Click += async (_, _) => await SetDeepSeekEnabledAsync(!status.IsEnabled);
                 actions.Children.Add(toggle);
                 var force = new Button { Content = "测试当前 Worker", Tag = "provider:force-worker" };
-                force.Click += async (_, _) => await ForceTestCurrentWorkerAsync();
+                force.Click += async (_, _) => await ForceTestCurrentWorkerAsync(force);
                 actions.Children.Add(force);
             }
             Grid.SetColumn(actions, 1); grid.Children.Add(actions);

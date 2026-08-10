@@ -1,0 +1,18 @@
+{
+  "provider": "DeepSeek",
+  "modelId": "deepseek-v4-flash",
+  "generatedAt": "2026-08-10T05:29:26.9467871+00:00",
+  "stages": {
+    "text": { "passed": true, "totalTokens": 121 },
+    "readOnlyShell": { "state": "Completed", "providerTurns": 2, "toolCalls": 1, "failedToolCalls": 0, "deniedToolCalls": 0, "totalTokens": 1193 },
+    "fileCreate": { "state": "Completed", "providerTurns": 2, "toolCalls": 1, "failedToolCalls": 0, "deniedToolCalls": 0, "totalTokens": 1552, "changedFiles": ["sol-ds-022.txt"] },
+    "selfRepair": { "state": "Completed", "providerTurns": 5, "toolCalls": 4, "failedToolCalls": 1, "deniedToolCalls": 0, "totalTokens": 7266, "changedFiles": ["Program.cs"] },
+    "workspaceDenied": { "state": "Completed", "providerTurns": 2, "toolCalls": 1, "failedToolCalls": 1, "deniedToolCalls": 1, "totalTokens": 1535 },
+    "fullAccess": { "state": "Completed", "providerTurns": 2, "toolCalls": 1, "failedToolCalls": 0, "deniedToolCalls": 0, "totalTokens": 1463 }
+  },
+  "totalProviderTurns": 14,
+  "totalToolCalls": 8,
+  "totalTokens": 13130,
+  "cost": null,
+  "costNote": "Provider pricing was not configured."
+}

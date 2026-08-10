@@ -37,6 +37,18 @@ public sealed class ProfileListItemViewModel(Profile profile)
         _ => "自动批准",
     };
 
+    public string ExternalWorkerPermissionLabel => Value.ExternalWorkerPermission switch
+    {
+        ExternalWorkerPermissionMode.ReadOnly => "外部只读",
+        ExternalWorkerPermissionMode.FullAccess => "外部完全访问",
+        _ => "外部工作区访问",
+    };
+
+    public Visibility ExternalWorkerPermissionVisibility =>
+        Value.WorkerPolicy.Enabled && Value.WorkerPolicy.Source == WorkerSource.ExternalProvider
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
     public bool RequiresRepair => Value.RequiresRepair;
 
     public string RepairMessage => Value.RepairMessage ?? string.Empty;
@@ -50,11 +62,13 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     private string _mainAgentSlot;
     private string _reasoningStrength;
     private ExecutionApprovalMode _approvalMode;
+    private ExternalWorkerPermissionMode _externalWorkerPermission;
     private bool _workerEnabled;
     private WorkerSource _workerSource;
     private string _nativeWorkerSlot;
     private string _externalProviderId;
     private string _workerCount;
+    private string _workerReasoningStrength;
     private RoutingMode _routingMode;
     private FallbackAction _fallbackAction;
     private string _perTaskBudget;
@@ -83,6 +97,9 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         _approvalMode = Enum.IsDefined(profile.ApprovalMode)
             ? profile.ApprovalMode
             : ExecutionApprovalMode.Automatic;
+        _externalWorkerPermission = Enum.IsDefined(profile.ExternalWorkerPermission)
+            ? profile.ExternalWorkerPermission
+            : ExternalWorkerPermissionMode.WorkspaceFullAccess;
         _workerEnabled = profile.WorkerPolicy.Enabled;
         _workerSource = Enum.IsDefined(profile.WorkerPolicy.Source)
             ? profile.WorkerPolicy.Source
@@ -93,6 +110,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             : string.Empty;
         ExternalProviders = EnsureSelectedProvider(externalProviders, _externalProviderId);
         _workerCount = profile.WorkerPolicy.MaxWorkers.ToString(CultureInfo.InvariantCulture);
+        _workerReasoningStrength = profile.WorkerPolicy.ReasoningEffort is "low" or "medium" or "high" or "xhigh" ? profile.WorkerPolicy.ReasoningEffort : "medium";
         _routingMode = Enum.IsDefined(profile.WorkerPolicy.RoutingMode)
             ? profile.WorkerPolicy.RoutingMode
             : RoutingMode.Single;
@@ -130,11 +148,26 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         new("xhigh", "极高", "用于最复杂且允许更高耗时的任务"),
     ];
 
+    public IReadOnlyList<SelectionOption<string>> WorkerReasoningStrengthOptions => ReasoningStrengthOptions;
+
+    public SelectionOption<string> SelectedWorkerReasoningStrengthOption
+    {
+        get => WorkerReasoningStrengthOptions.FirstOrDefault(option => option.Value == WorkerReasoningStrength) ?? WorkerReasoningStrengthOptions[1];
+        set { if (value is not null) WorkerReasoningStrength = value.Value; }
+    }
+
     public IReadOnlyList<SelectionOption<ExecutionApprovalMode>> ApprovalModeOptions { get; } =
     [
         new(ExecutionApprovalMode.Safe, "安全模式", "只读沙箱；非可信命令与任何越界写入都必须经过批准。"),
         new(ExecutionApprovalMode.Automatic, "自动模式", "允许在项目工作区内正常读写；风险操作由代理请求批准。"),
         new(ExecutionApprovalMode.FullAuto, "完全自动", "不请求批准并使用不受限访问。仅应在完全可信的项目和任务中使用。"),
+    ];
+
+    public IReadOnlyList<SelectionOption<ExternalWorkerPermissionMode>> ExternalWorkerPermissionOptions { get; } =
+    [
+        new(ExternalWorkerPermissionMode.ReadOnly, "只读", "可读取、搜索和查看 Git；禁止修改文件和变更型命令。"),
+        new(ExternalWorkerPermissionMode.WorkspaceFullAccess, "工作区完全访问", "允许在当前项目范围内修改文件并运行受控开发命令。"),
+        new(ExternalWorkerPermissionMode.FullAccess, "完全访问", "允许外部 Worker 访问项目外路径和执行完整 Shell；仅用于可信任务。"),
     ];
 
     public IReadOnlyList<SelectionOption<WorkerSource>> WorkerSourceOptions { get; } =
@@ -251,6 +284,19 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         }
     }
 
+    public SelectionOption<ExternalWorkerPermissionMode> SelectedExternalWorkerPermissionOption
+    {
+        get => ExternalWorkerPermissionOptions.FirstOrDefault(option => option.Value == ExternalWorkerPermission)
+               ?? ExternalWorkerPermissionOptions.First(option => option.Value == ExternalWorkerPermissionMode.WorkspaceFullAccess);
+        set
+        {
+            if (value is not null)
+            {
+                ExternalWorkerPermission = value.Value;
+            }
+        }
+    }
+
     public SelectionOption<FallbackAction> SelectedFallbackActionOption
     {
         get => FallbackActionOptions.FirstOrDefault(option => option.Value == FallbackAction)
@@ -297,6 +343,22 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public Visibility FullAutoWarningVisibility =>
         ApprovalMode == ExecutionApprovalMode.FullAuto ? Visibility.Visible : Visibility.Collapsed;
+    public ExternalWorkerPermissionMode ExternalWorkerPermission
+    {
+        get => _externalWorkerPermission;
+        set
+        {
+            if (Set(ref _externalWorkerPermission, value))
+            {
+                OnPropertyChanged(nameof(SelectedExternalWorkerPermissionOption));
+                OnPropertyChanged(nameof(ExternalWorkerPermissionDescription));
+            }
+        }
+    }
+
+    public string ExternalWorkerPermissionDescription =>
+        ExternalWorkerPermissionOptions.FirstOrDefault(option => option.Value == ExternalWorkerPermission)?.Description
+        ?? "该外部 Worker 权限需要修复后才能使用。";
     public string ReasoningStrength
     {
         get => _reasoningStrength;
@@ -386,6 +448,11 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     }
     public string ExternalProviderId { get => _externalProviderId; set => Set(ref _externalProviderId, value); }
     public string WorkerCount { get => _workerCount; set => Set(ref _workerCount, value); }
+    public string WorkerReasoningStrength
+    {
+        get => _workerReasoningStrength;
+        set { if (Set(ref _workerReasoningStrength, value)) OnPropertyChanged(nameof(SelectedWorkerReasoningStrengthOption)); }
+    }
     public RoutingMode RoutingMode
     {
         get => _routingMode;
@@ -453,7 +520,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
                 _source?.WorkerPolicy.FallbackProviderId,
                 ParseInt(WorkerCount, "工作代理数量"),
                 RoutingMode,
-                FallbackAction),
+                FallbackAction,
+                WorkerReasoningStrength.Trim()),
             new BudgetLimits(
                 ParseDecimal(PerTaskBudget, "单任务预算"),
                 ParseDecimal(DailyBudget, "每日预算"),
@@ -468,6 +536,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         {
             IsBuiltIn = _isNew ? false : _source!.IsBuiltIn,
             ApprovalMode = this.ApprovalMode,
+            ExternalWorkerPermission = this.ExternalWorkerPermission,
             SchemaVersion = Profile.CurrentSchemaVersion,
             RepairMessage = null,
         };

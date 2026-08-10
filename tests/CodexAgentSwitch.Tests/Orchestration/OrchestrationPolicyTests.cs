@@ -47,6 +47,70 @@ public sealed class OrchestrationPolicyTests
     }
 
     [Fact]
+    public void Default_active_worker_limit_is_one_even_when_routing_mode_allows_more()
+    {
+        var gate = new DelegationGate(new ScopeRegistry());
+        var context = Context() with { RoutingMode = RoutingMode.Balanced, ProfileMaxWorkers = 2 };
+
+        var denied = gate.Validate(Request() with { RequestedWorkers = 2 }, context);
+        var explicitlyRaised = gate.Validate(
+            Request() with { RequestedWorkers = 2 },
+            context with { MaxActiveWorkers = 2 });
+
+        Assert.False(denied.CanDelegate);
+        Assert.True(explicitlyRaised.CanDelegate);
+    }
+
+    [Theory]
+    [InlineData(TaskRiskLevel.Low, true, false, ReviewBudget.Minimal, ReviewLevel.R0)]
+    [InlineData(TaskRiskLevel.Medium, true, false, ReviewBudget.Focused, ReviewLevel.R1)]
+    [InlineData(TaskRiskLevel.High, false, true, ReviewBudget.Deep, ReviewLevel.R2)]
+    public void Economic_v2_maps_risk_to_worker_ownership_and_review_budget(
+        TaskRiskLevel risk,
+        bool workerOwns,
+        bool solLeads,
+        ReviewBudget budget,
+        ReviewLevel review)
+    {
+        var decision = new EconomicPolicyV2().Evaluate(risk);
+
+        Assert.Equal(workerOwns, decision.WorkerOwnsClosedLoop);
+        Assert.Equal(solLeads, decision.SolLeads);
+        Assert.Equal(budget, decision.ReviewBudget);
+        Assert.Equal(review, decision.ReviewLevel);
+        Assert.Equal(1, decision.MaxActiveWorkers);
+        Assert.True(decision.CompactResultRequired);
+        Assert.False(decision.DuplicateImplementationAllowed);
+    }
+
+    [Fact]
+    public void Escalation_and_context_checkpoint_require_explicit_reason_and_next_step()
+    {
+        var policy = new EconomicPolicyV2();
+        var now = DateTimeOffset.UtcNow;
+
+        var escalation = policy.Escalate(
+            "task-1",
+            WorkerEscalationKind.SharedProtocolChangeRequired,
+            "需要越过冻结边界",
+            ["repro"],
+            now);
+        var checkpoint = policy.CreateCheckpoint(
+            "abc123",
+            ["Phase 1"],
+            ["Phase 9"],
+            ["transport frozen"],
+            [],
+            "run focused tests",
+            now);
+
+        Assert.Equal("task-1", escalation.TaskId);
+        Assert.Equal("abc123", checkpoint.Head);
+        Assert.Equal("run focused tests", checkpoint.NextStep);
+        Assert.Throws<ArgumentException>(() => policy.Escalate("task-1", WorkerEscalationKind.ScopeExpansionRequired, "", [], now));
+    }
+
+    [Fact]
     public void Overlapping_write_scopes_are_blocked_case_insensitively()
     {
         var registry = new ScopeRegistry();

@@ -11,12 +11,27 @@ public sealed record WorkerModelCapability(
     string DefaultReasoningEffort,
     bool IsDefault);
 
+public enum WorkerToolCapability
+{
+    Text,
+    ProjectRead,
+    Search,
+    Patch,
+    Shell,
+    BuildAndTest,
+    MultiTurn,
+    SelfRepair,
+}
+
 public sealed record WorkerCapabilities(
     string AdapterId,
     bool IsAvailable,
     IReadOnlyList<WorkerModelCapability> Models,
     int MaxConcurrency,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    public IReadOnlySet<WorkerToolCapability> ToolCapabilities { get; init; } = new HashSet<WorkerToolCapability>();
+}
 
 public enum ScopeOperation
 {
@@ -45,7 +60,14 @@ public sealed record WorkerTask(
     IReadOnlyList<string> AcceptanceCriteria,
     IReadOnlyList<string> StopConditions,
     JsonElement? OutputSchema = null,
-    ExecutionApprovalMode ApprovalMode = ExecutionApprovalMode.Automatic);
+    ExecutionApprovalMode ApprovalMode = ExecutionApprovalMode.Automatic)
+{
+    public IReadOnlyList<string> AllowedReadScope { get; init; } = [];
+
+    public IReadOnlyList<string> AllowedWriteScope { get; init; } = [];
+
+    public ExternalWorkerPermissionMode ExternalWorkerPermission { get; init; } = ExternalWorkerPermissionMode.WorkspaceFullAccess;
+}
 
 public enum WorkerJobStatus
 {
@@ -82,7 +104,20 @@ public sealed record WorkerResult(
     Uri? RequestUri = null,
     string? ResponseModelId = null,
     ProviderUsage? Usage = null,
-    string? FailureKind = null);
+    string? FailureKind = null)
+{
+    public IReadOnlyList<string> ChangedFiles { get; init; } = [];
+
+    public int? ProviderTurns { get; init; }
+
+    public int? ToolCalls { get; init; }
+
+    public int? FailedToolCalls { get; init; }
+
+    public int? DeniedToolCalls { get; init; }
+
+    public TimeSpan? Duration { get; init; }
+}
 
 public enum WorkerSteerKind
 {
