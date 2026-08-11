@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using CodexAgentSwitch.Application.Abstractions;
+using CodexAgentSwitch.Domain.Orchestration;
 using CodexAgentSwitch.Domain.Scheduling;
 
 namespace CodexAgentSwitch.Application.Scheduling;
@@ -25,6 +26,7 @@ public sealed class WorkerScheduler(
     });
     private readonly ConcurrentDictionary<string, ScheduledDelegation> tasks = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim lifecycle = new(1, 1);
+    private readonly SemaphoreSlim repartitionTelemetryLock = new(1, 1);
     private CancellationTokenSource? workerCancellation;
     private Task? workerLoop;
     private SchedulerState state = SchedulerState.Stopped;
@@ -208,6 +210,65 @@ public sealed class WorkerScheduler(
     public Task<IReadOnlyList<ScheduledDelegation>> ListAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<ScheduledDelegation>>(tasks.Values.OrderByDescending(item => item.UpdatedAt).ToArray());
 
+    public async Task<RepartitionTelemetry> RecordRepartitionAsync(
+        string taskGroupId,
+        RepartitionTrigger trigger,
+        WorkOwner decision,
+        RepartitionReasonCode reason,
+        string workSummary,
+        string? workerIdentity = null,
+        string? result = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskGroupId))
+        {
+            throw new ArgumentException("Task group id is required.", nameof(taskGroupId));
+        }
+
+        if (string.IsNullOrWhiteSpace(workSummary))
+        {
+            throw new ArgumentException("Work summary is required.", nameof(workSummary));
+        }
+
+        var record = new RepartitionRecord(0, trigger, decision, reason, workSummary, workerIdentity, result);
+        record.Validate();
+
+        await repartitionTelemetryLock.WaitAsync(cancellationToken);
+        try
+        {
+            var history = await repository.ListRepartitionsAsync(taskGroupId, cancellationToken);
+            var sequence = history.Count == 0 ? 1 : history.Max(item => item.Sequence) + 1;
+            var telemetry = new RepartitionTelemetry(
+                taskGroupId,
+                sequence,
+                clock.UtcNow.ToUniversalTime(),
+                record.Trigger,
+                record.Decision,
+                record.Reason,
+                record.WorkSummary,
+                record.WorkerIdentity,
+                record.Result);
+            await repository.AppendRepartitionAsync(telemetry, cancellationToken);
+            return telemetry;
+        }
+        finally
+        {
+            repartitionTelemetryLock.Release();
+        }
+    }
+
+    public Task<IReadOnlyList<RepartitionTelemetry>> ListRepartitionsAsync(
+        string taskGroupId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskGroupId))
+        {
+            throw new ArgumentException("Task group id is required.", nameof(taskGroupId));
+        }
+
+        return repository.ListRepartitionsAsync(taskGroupId, cancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (state != SchedulerState.Stopped)
@@ -216,6 +277,7 @@ public sealed class WorkerScheduler(
         }
         workerCancellation?.Dispose();
         lifecycle.Dispose();
+        repartitionTelemetryLock.Dispose();
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)

@@ -1,6 +1,8 @@
 using CodexAgentSwitch.Application.Abstractions;
 using CodexAgentSwitch.Application.Scheduling;
+using CodexAgentSwitch.Domain.Orchestration;
 using CodexAgentSwitch.Domain.Scheduling;
+using CodexAgentSwitch.Infrastructure.Persistence;
 
 namespace CodexAgentSwitch.Tests.Scheduling;
 
@@ -115,6 +117,112 @@ public sealed class WorkerSchedulerTests
         Assert.Equal(DelegationState.Adopted, (await scheduler.MarkAdoptedAsync(packet.TaskId, "adopted")).State);
     }
 
+    [Fact]
+    public async Task Repartition_telemetry_is_sequenced_timestamped_and_read_in_order()
+    {
+        var clock = new AdvancingClock();
+        var repository = new MemoryRepository();
+        await using var scheduler = new WorkerScheduler([new FakeExecutor(WorkerTransport.ExternalProvider)], repository, clock);
+
+        var first = await scheduler.RecordRepartitionAsync(
+            "group-1",
+            RepartitionTrigger.INITIAL_LOCALIZATION_COMPLETE,
+            WorkOwner.Main,
+            RepartitionReasonCode.REVIEW_REQUIRED,
+            "Review the worker result.");
+        var second = await scheduler.RecordRepartitionAsync(
+            "group-1",
+            RepartitionTrigger.WORKER_REVIEW_COMPLETE,
+            WorkOwner.Worker,
+            RepartitionReasonCode.BOUNDED_TESTING,
+            "Run the bounded scheduler tests.",
+            "worker-2",
+            "ready");
+
+        var history = await scheduler.ListRepartitionsAsync("group-1");
+        Assert.Equal([1L, 2L], history.Select(item => item.Sequence));
+        Assert.Equal(first.Record, history[0].Record);
+        Assert.Equal(second.Record, history[1].Record);
+        Assert.All(history, item => Assert.Equal(TimeSpan.Zero, item.RecordedAt.Offset));
+    }
+
+    [Fact]
+    public async Task Repartition_telemetry_rejects_invalid_owner_reason_and_required_fields_before_persistence()
+    {
+        var repository = new MemoryRepository();
+        await using var scheduler = new WorkerScheduler([new FakeExecutor(WorkerTransport.ExternalProvider)], repository, new AdvancingClock());
+
+        await Assert.ThrowsAsync<ArgumentException>(() => scheduler.RecordRepartitionAsync(
+            "group-1", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Main,
+            RepartitionReasonCode.BOUNDED_FIX, "invalid"));
+        await Assert.ThrowsAsync<ArgumentException>(() => scheduler.RecordRepartitionAsync(
+            "", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Main,
+            RepartitionReasonCode.REVIEW_REQUIRED, "missing group"));
+        await Assert.ThrowsAsync<ArgumentException>(() => scheduler.RecordRepartitionAsync(
+            "group-1", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Main,
+            RepartitionReasonCode.REVIEW_REQUIRED, ""));
+        Assert.Empty(await scheduler.ListRepartitionsAsync("group-1"));
+    }
+
+    [Fact]
+    public async Task Sqlite_repartition_events_round_trip_append_only_in_sequence_order_with_utc_fields()
+    {
+        var root = Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? Path.Combine(Path.GetTempPath(), "cas-tests");
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, $"repartition-{Guid.NewGuid():N}.db");
+        try
+        {
+            var database = new SqliteDatabase(databasePath);
+            await database.InitializeAsync();
+            var repository = new SqliteSchedulerTaskRepository(database);
+            await repository.AppendRepartitionAsync(new RepartitionTelemetry(
+                "group-sqlite", 2, new DateTimeOffset(2026, 8, 9, 1, 0, 0, TimeSpan.Zero),
+                RepartitionTrigger.WORKER_REVIEW_COMPLETE, WorkOwner.Worker,
+                RepartitionReasonCode.BOUNDED_TESTING, "Run tests", "worker-2", "passed"));
+            await repository.AppendRepartitionAsync(new RepartitionTelemetry(
+                "group-sqlite", 1, new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero),
+                RepartitionTrigger.INITIAL_LOCALIZATION_COMPLETE, WorkOwner.Main,
+                RepartitionReasonCode.REVIEW_REQUIRED, "Review scope", null, null));
+
+            var history = await repository.ListRepartitionsAsync("group-sqlite");
+            Assert.Equal([1L, 2L], history.Select(item => item.Sequence));
+            Assert.Equal(WorkOwner.Main, history[0].Decision);
+            Assert.Equal(RepartitionReasonCode.BOUNDED_TESTING, history[1].Reason);
+            Assert.Equal("worker-2", history[1].WorkerIdentity);
+            Assert.Equal("passed", history[1].Result);
+            Assert.All(history, item => Assert.Equal(TimeSpan.Zero, item.RecordedAt.Offset));
+        }
+        finally
+        {
+            foreach (var path in new[] { databasePath, databasePath + "-wal", databasePath + "-shm" })
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Default_active_worker_limit_is_concurrency_only_after_first_task_reaches_terminal_result()
+    {
+        await using var scheduler = new WorkerScheduler(
+            [new FakeExecutor(WorkerTransport.ExternalProvider)],
+            new MemoryRepository(),
+            new AdvancingClock());
+        await scheduler.StartAsync();
+
+        var first = await scheduler.DispatchAsync(Packet("CAS-SERIAL-A", "deepseek-default"));
+        Assert.Equal(DelegationState.ResultReceived, first.State);
+        Assert.Equal(0, scheduler.Snapshot.ActiveTaskCount);
+
+        var second = await scheduler.DispatchAsync(Packet("CAS-SERIAL-B", "deepseek-default"));
+        Assert.Equal(DelegationState.ResultReceived, second.State);
+        Assert.Equal(0, scheduler.Snapshot.ActiveTaskCount);
+        Assert.Equal(2, (await scheduler.ListAsync()).Count);
+    }
+
     private static TaskPacket Packet(string nonce, string worker) => new(
         nonce,
         "project-1",
@@ -175,9 +283,12 @@ public sealed class WorkerSchedulerTests
     private class MemoryRepository : ISchedulerTaskRepository
     {
         protected readonly Dictionary<string, ScheduledDelegation> Items = new(StringComparer.Ordinal);
+        protected readonly List<RepartitionTelemetry> Repartitions = [];
         public Task<ScheduledDelegation?> GetAsync(string taskId, CancellationToken cancellationToken = default) => Task.FromResult(Items.GetValueOrDefault(taskId));
         public Task<IReadOnlyList<ScheduledDelegation>> ListAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ScheduledDelegation>>(Items.Values.ToArray());
         public virtual Task UpsertAsync(ScheduledDelegation task, CancellationToken cancellationToken = default) { Items[task.Packet.TaskId] = task; return Task.CompletedTask; }
+        public Task<IReadOnlyList<RepartitionTelemetry>> ListRepartitionsAsync(string taskGroupId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<RepartitionTelemetry>>(Repartitions.Where(item => item.TaskGroupId == taskGroupId).OrderBy(item => item.Sequence).ToArray());
+        public Task AppendRepartitionAsync(RepartitionTelemetry telemetry, CancellationToken cancellationToken = default) { Repartitions.Add(telemetry); return Task.CompletedTask; }
     }
 
     private sealed class FailingRepository(int failOnWrite) : MemoryRepository

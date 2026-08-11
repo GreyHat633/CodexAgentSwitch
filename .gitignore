@@ -6,6 +6,7 @@ TestResults/
 
 # Local SDK and package state (kept on E: but never committed)
 .dotnet/
+.dotnet-home/
 .appdata/
 .localappdata/
 .nuget/

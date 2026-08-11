@@ -10,6 +10,7 @@ using CodexAgentSwitch.Application.Tasks;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Application.Workers;
 using CodexAgentSwitch.Domain.Projects;
+using CodexAgentSwitch.Domain.Orchestration;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Domain.Scheduling;
@@ -75,6 +76,47 @@ public sealed class SchedulerIpcServerTests
 
         Assert.Contains("项目已应用 Worker 为 deepseek-default", exception.Message, StringComparison.Ordinal);
         Assert.Contains("TaskPacket 请求的是 deepseek", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Repartition_telemetry_round_trips_over_ipc_and_rejects_undefined_enum()
+    {
+        var pipeName = $"CAS-test-{Guid.NewGuid():N}";
+        var repository = new MemoryRepository();
+        await using var scheduler = new WorkerScheduler([new EchoExecutor()], repository, new FixedClock());
+        await scheduler.StartAsync();
+        await using var server = new SchedulerIpcServer(scheduler, pipeName);
+        await server.StartAsync();
+
+        var recordResponse = await SendRequestAsync(pipeName, """
+            {"method":"recordRepartition","payload":{"taskGroupId":"group-ipc","trigger":"PHASE_CHANGE","decision":"Main","reason":"REVIEW_REQUIRED","workSummary":"Review worker result","workerIdentity":"worker-a","result":"pending"}}
+            """);
+        Assert.Contains("\"ok\":true", recordResponse, StringComparison.Ordinal);
+        Assert.Contains("\"sequence\":1", recordResponse, StringComparison.Ordinal);
+        Assert.Contains("\"recordedAt\":\"2026-08-09T00:00:00+00:00\"", recordResponse, StringComparison.Ordinal);
+
+        var listResponse = await SendRequestAsync(pipeName, """
+            {"method":"listRepartitions","payload":{"taskGroupId":"group-ipc"}}
+            """);
+        Assert.Contains("group-ipc", listResponse, StringComparison.Ordinal);
+        Assert.Contains("\"reason\":5", listResponse, StringComparison.Ordinal);
+        Assert.Single(await scheduler.ListRepartitionsAsync("group-ipc"));
+
+        var invalidResponse = await SendRequestAsync(pipeName, """
+            {"method":"recordRepartition","payload":{"taskGroupId":"group-ipc","trigger":"999","decision":"Main","reason":"REVIEW_REQUIRED","workSummary":"must reject"}}
+            """);
+        Assert.Contains("\"ok\":false", invalidResponse, StringComparison.Ordinal);
+        Assert.Single(await scheduler.ListRepartitionsAsync("group-ipc"));
+    }
+
+    private static async Task<string> SendRequestAsync(string pipeName, string request)
+    {
+        using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await pipe.ConnectAsync(2000);
+        using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, true);
+        await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
+        await writer.WriteLineAsync(request);
+        return await reader.ReadLineAsync() ?? throw new InvalidOperationException("Scheduler IPC returned no response.");
     }
 
     [Fact]
@@ -217,9 +259,12 @@ public sealed class SchedulerIpcServerTests
     private sealed class MemoryRepository : ISchedulerTaskRepository
     {
         private readonly Dictionary<string, ScheduledDelegation> items = [];
+        private readonly List<RepartitionTelemetry> repartitions = [];
         public Task<ScheduledDelegation?> GetAsync(string taskId, CancellationToken cancellationToken = default) => Task.FromResult(items.GetValueOrDefault(taskId));
         public Task<IReadOnlyList<ScheduledDelegation>> ListAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ScheduledDelegation>>(items.Values.ToArray());
         public Task UpsertAsync(ScheduledDelegation task, CancellationToken cancellationToken = default) { items[task.Packet.TaskId] = task; return Task.CompletedTask; }
+        public Task<IReadOnlyList<RepartitionTelemetry>> ListRepartitionsAsync(string taskGroupId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<RepartitionTelemetry>>(repartitions.Where(item => item.TaskGroupId == taskGroupId).OrderBy(item => item.Sequence).ToArray());
+        public Task AppendRepartitionAsync(RepartitionTelemetry telemetry, CancellationToken cancellationToken = default) { repartitions.Add(telemetry); return Task.CompletedTask; }
     }
 
 }

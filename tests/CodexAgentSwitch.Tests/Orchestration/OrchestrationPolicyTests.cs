@@ -84,6 +84,190 @@ public sealed class OrchestrationPolicyTests
     }
 
     [Fact]
+    public void Repartition_triggers_are_a_closed_set_of_eight()
+    {
+        var names = Enum.GetNames<RepartitionTrigger>();
+
+        Assert.Equal(8, names.Length);
+        Assert.Equal(
+            [
+                "INITIAL_LOCALIZATION_COMPLETE",
+                "ARCHITECTURE_RESOLVED",
+                "WORKER_RESULT_RECEIVED",
+                "WORKER_REVIEW_COMPLETE",
+                "PHASE_CHANGE",
+                "BUILD_TEST_BOUNDED_FIXES",
+                "MODULE_COMPLETE",
+                "WORK_CONVERGED",
+            ],
+            names);
+    }
+
+    [Fact]
+    public void Repartition_prefers_worker_for_a_majority_of_positive_conditions()
+    {
+        var package = new RepartitionWorkPackage(
+            TaskRiskLevel.Medium,
+            Clear: true,
+            Bounded: true,
+            Stable: true,
+            Capable: true,
+            Verifiable: false,
+            NonOverlapping: false,
+            Worthwhile: false);
+
+        var decision = new EconomicPolicyV2().EvaluateRepartition(package);
+
+        Assert.Equal(4, package.PositiveConditionCount);
+        Assert.Equal(WorkOwner.Worker, decision.Owner);
+        Assert.True(decision.DelegationPreferred);
+        Assert.Equal(RepartitionReasonCode.BOUNDED_IMPLEMENTATION, decision.Reason);
+        Assert.True(decision.ReasonMatchesOwner);
+    }
+
+    [Fact]
+    public void Repartition_rejects_trivial_overhead_and_re_evaluates_risk_per_package()
+    {
+        var policy = new EconomicPolicyV2();
+        var basePackage = new RepartitionWorkPackage(
+            TaskRiskLevel.Low, true, true, true, true, true, true, true);
+
+        Assert.Equal(WorkOwner.Worker, policy.EvaluateRepartition(basePackage).Owner);
+        Assert.Equal(
+            WorkOwner.Main,
+            policy.EvaluateRepartition(basePackage with { TrivialOverhead = true }).Owner);
+        Assert.Equal(
+            WorkOwner.Main,
+            policy.EvaluateRepartition(basePackage with { RiskLevel = TaskRiskLevel.High }).Owner);
+        Assert.Equal(
+            WorkOwner.Worker,
+            policy.EvaluateRepartition(basePackage with { RiskLevel = TaskRiskLevel.Medium }).Owner);
+    }
+
+    [Fact]
+    public void Current_work_state_is_lightweight_and_preserves_trigger_and_risk()
+    {
+        var state = new CurrentWorkState(
+            "bounded review",
+            ["run focused tests"],
+            WorkOwner.Worker,
+            RepartitionTrigger.WORKER_REVIEW_COMPLETE,
+            RepartitionReasonCode.BOUNDED_TESTING,
+            "RUNNING");
+        var package = new RepartitionWorkPackage(TaskRiskLevel.Medium, true, true, true, true, true, true, true);
+
+        var decision = new EconomicPolicyV2().EvaluateRepartition(state, package);
+
+        Assert.Equal("bounded review", state.CurrentWork);
+        Assert.Equal(["run focused tests"], state.KnownRemainingWork);
+        Assert.Equal(RepartitionTrigger.WORKER_REVIEW_COMPLETE, state.LastTrigger);
+        Assert.Equal(RepartitionReasonCode.BOUNDED_TESTING, state.OwnershipReason);
+        Assert.Equal("RUNNING", state.WorkerState);
+        state.Validate();
+        Assert.Equal(TaskRiskLevel.Medium, decision.RiskLevel);
+    }
+
+    [Fact]
+    public void All_closed_reason_codes_are_owner_specific_and_telemetry_is_compact()
+    {
+        Assert.Equal(7, RepartitionReasons.AllowedMain.Count);
+        Assert.Equal(5, RepartitionReasons.AllowedWorker.Count);
+        Assert.All(RepartitionReasons.AllowedMain, reason => Assert.True(RepartitionReasons.IsAllowed(WorkOwner.Main, reason)));
+        Assert.All(RepartitionReasons.AllowedWorker, reason => Assert.True(RepartitionReasons.IsAllowed(WorkOwner.Worker, reason)));
+        Assert.Contains(RepartitionReasonCode.ARCHITECTURE_UNRESOLVED, RepartitionReasons.AllowedMain);
+        Assert.Contains(RepartitionReasonCode.BOUNDED_IMPLEMENTATION, RepartitionReasons.AllowedWorker);
+
+        var record = new RepartitionRecord(
+            2,
+            RepartitionTrigger.PHASE_CHANGE,
+            WorkOwner.Worker,
+            RepartitionReasonCode.BOUNDED_FIX,
+            "fix bounded test failures",
+            "worker-1",
+            "result-1");
+
+        Assert.Equal(2, record.Sequence);
+        Assert.Equal(WorkOwner.Worker, record.Owner);
+        Assert.Equal(RepartitionReasonCode.BOUNDED_FIX, record.Reason);
+        Assert.Equal("worker-1", record.WorkerIdentity);
+        Assert.Equal("result-1", record.Result);
+        record.Validate();
+
+        Assert.Throws<ArgumentException>(() => new CurrentWorkState(
+            "invalid",
+            [],
+            WorkOwner.Main,
+            RepartitionTrigger.PHASE_CHANGE,
+            RepartitionReasonCode.BOUNDED_FIX,
+            "IDLE").Validate());
+        Assert.Throws<ArgumentException>(() => new RepartitionRecord(
+            3,
+            RepartitionTrigger.PHASE_CHANGE,
+            WorkOwner.Main,
+            RepartitionReasonCode.BOUNDED_FIX,
+            "invalid",
+            null,
+            null).Validate());
+    }
+
+    [Theory]
+    [InlineData(RepartitionReasonCode.TOO_SMALL_TO_DELEGATE)]
+    [InlineData(RepartitionReasonCode.WORKER_CAPABILITY_MISSING)]
+    [InlineData(RepartitionReasonCode.REVIEW_REQUIRED)]
+    [InlineData(RepartitionReasonCode.ARCHITECTURE_UNRESOLVED)]
+    [InlineData(RepartitionReasonCode.INVESTIGATION_UNRESOLVED)]
+    [InlineData(RepartitionReasonCode.CROSS_MODULE_DECISION)]
+    public void Main_reason_selection_is_specific_and_owner_consistent(RepartitionReasonCode expected)
+    {
+        var package = new RepartitionWorkPackage(
+            expected switch
+            {
+                RepartitionReasonCode.REVIEW_REQUIRED => TaskRiskLevel.High,
+                _ => TaskRiskLevel.Medium,
+            },
+            Clear: false,
+            Bounded: true,
+            Stable: true,
+            Capable: true,
+            Verifiable: false,
+            NonOverlapping: true,
+            Worthwhile: false,
+            TrivialOverhead: expected == RepartitionReasonCode.TOO_SMALL_TO_DELEGATE);
+
+        package = expected switch
+        {
+            RepartitionReasonCode.WORKER_CAPABILITY_MISSING => package with { Capable = false },
+            RepartitionReasonCode.ARCHITECTURE_UNRESOLVED => package with { Stable = false },
+            RepartitionReasonCode.INVESTIGATION_UNRESOLVED => package with { Bounded = false },
+            RepartitionReasonCode.CROSS_MODULE_DECISION => package with { NonOverlapping = false },
+            _ => package,
+        };
+
+        var decision = new EconomicPolicyV2().EvaluateRepartition(package);
+
+        Assert.Equal(WorkOwner.Main, decision.Owner);
+        Assert.Equal(expected, decision.Reason);
+        Assert.True(decision.ReasonMatchesOwner);
+    }
+
+    [Theory]
+    [InlineData(RepartitionReasonCode.BOUNDED_FIX)]
+    [InlineData(RepartitionReasonCode.BOUNDED_TESTING)]
+    public void Worker_reason_preference_is_typed_and_main_codes_are_rejected(RepartitionReasonCode workerReason)
+    {
+        var package = new RepartitionWorkPackage(
+            TaskRiskLevel.Low, true, true, true, true, true, true, true,
+            PreferredWorkerReason: workerReason);
+        var decision = new EconomicPolicyV2().EvaluateRepartition(package);
+
+        Assert.Equal(WorkOwner.Worker, decision.Owner);
+        Assert.Equal(workerReason, decision.Reason);
+
+        var invalid = package with { PreferredWorkerReason = RepartitionReasonCode.REVIEW_REQUIRED };
+        Assert.Throws<ArgumentException>(() => new EconomicPolicyV2().EvaluateRepartition(invalid));
+    }
+
+    [Fact]
     public void Escalation_and_context_checkpoint_require_explicit_reason_and_next_step()
     {
         var policy = new EconomicPolicyV2();

@@ -512,7 +512,7 @@ public sealed class CodexDesktopAppLauncher(
         }
         else if (worker.Kind == EffectiveWorkerKind.ExternalAgent)
         {
-            builder.AppendLine($"developer_instructions = {Toml("For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket and omit workerId. Agent Switch resolves the Worker from this project's applied snapshot; never choose a Provider Worker identity freely. Never spawn cas_external_worker through native collaboration. While the task is DELEGATED or RUNNING, do not duplicate its work; review and adopt only the returned ResultPacket.")}")
+            builder.AppendLine($"developer_instructions = {Toml(BuildExternalDelegationInstructions())}")
                 .AppendLine($"# Native external collaboration remains gated: {worker.CapabilityMessage}");
         }
 
@@ -542,10 +542,30 @@ public sealed class CodexDesktopAppLauncher(
             .AppendLine(ProjectInstructionsStart)
             .AppendLine("## Codex Agent Switch managed native worker routing")
             .AppendLine()
+            .AppendLine(BuildProactiveDelegationPolicy())
+            .AppendLine()
             .AppendLine($"For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket. When invoking the configured Native Custom Worker, you MUST call spawn_agent with both actual tool arguments: agent_type=\"{worker.AgentRole}\" and fork_turns=\"none\". fork_turns is mandatory for this managed custom role: never omit it, never use fork_turns=\"all\", and never create a full-history fork. While the task is DELEGATED or RUNNING, do not duplicate its work. Report the result through report_worker_result, then perform only bounded review.")
             .AppendLine(ProjectInstructionsEnd)
             .ToString();
     }
+
+    private static string BuildExternalDelegationInstructions() => $"""
+        {BuildProactiveDelegationPolicy()}
+
+        For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket and omit workerId. Agent Switch resolves the Worker from this project's applied snapshot; never choose a Provider Worker identity freely. Never spawn cas_external_worker through native collaboration. While the task is DELEGATED or RUNNING, do not duplicate its work; review and adopt only the returned ResultPacket.
+        """;
+
+    private static string BuildProactiveDelegationPolicy() => """
+        For every non-trivial development request, perform an Initial Delegation Check after the minimum localization needed to identify concrete work. Do not wait for the user to mention workers and do not generate a long plan merely to satisfy this check.
+
+        Re-evaluate ownership before the next substantive work whenever any of these eight distinct triggers occurs: INITIAL_LOCALIZATION_COMPLETE, ARCHITECTURE_RESOLVED, WORKER_RESULT_RECEIVED, WORKER_REVIEW_COMPLETE, PHASE_CHANGE, BUILD_TEST_BOUNDED_FIXES, MODULE_COMPLETE, or WORK_CONVERGED. WORKER_RESULT_RECEIVED enters bounded review; WORKER_REVIEW_COMPLETE is a separate later trigger that must reconsider all remaining work.
+
+        Prefer WORKER when the current package is clear, bounded, based on stable interfaces, supported by the configured worker, independently verifiable, non-overlapping, and large enough to justify delegation. Risk belongs to the current package and must be re-evaluated when vague or high-risk work converges; do not inherit the original task risk forever. MAIN owns unresolved architecture, cross-module decisions, unresolved investigation, required review, and final integration.
+
+        Every ownership decision must keep a compact work state: current work, known remaining work, owner, trigger, and one short reason. MAIN reasons are ARCHITECTURE_UNRESOLVED, CROSS_MODULE_DECISION, INVESTIGATION_UNRESOLVED, WORKER_CAPABILITY_MISSING, TOO_SMALL_TO_DELEGATE, REVIEW_REQUIRED, or FINAL_INTEGRATION. WORKER reasons are BOUNDED_IMPLEMENTATION, BOUNDED_FIX, BOUNDED_UI, BOUNDED_TESTING, or REPETITIVE_WORK. A MAIN decision without one of these reasons is invalid. At each trigger, call codex_agent_switch record_repartition before beginning the next substantive package; use list_repartitions when resuming or checking prior decisions. The Main Agent reports semantic triggers—the Agent Switch host only validates and stores them and must not pretend to understand project semantics.
+
+        The default active-worker limit is concurrency-only, not a lifetime limit. After Worker A reaches a terminal result and its bounded review completes, a later trigger may dispatch Worker B or C serially. Never increase worker calls merely as a metric, never delegate a trivial package whose overhead is higher than direct work, and never duplicate a DELEGATED or RUNNING package. Review only to the risk-appropriate budget; necessary verification is not full reimplementation.
+        """;
 
     private static string? ReplaceManagedProjectInstructions(string? existing, string? block)
     {

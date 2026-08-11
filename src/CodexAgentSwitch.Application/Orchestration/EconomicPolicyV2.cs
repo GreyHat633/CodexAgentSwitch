@@ -6,6 +6,8 @@ public sealed class EconomicPolicyV2
 {
     public const int DefaultMaxActiveWorkers = 1;
 
+    private const int DelegationMajority = 4;
+
     public EconomicPolicyDecision Evaluate(TaskRiskLevel riskLevel) => riskLevel switch
     {
         TaskRiskLevel.Low => Decision(
@@ -30,6 +32,78 @@ public sealed class EconomicPolicyV2
             ReviewLevel.R2,
             "HIGH 工作包由 Sol 主导，Worker 仅承担明确、隔离且可独立复核的子包。"),
     };
+
+    /// <summary>
+    /// Re-evaluate ownership for the package in front of us.  Risk is read
+    /// from this package on every call; a previous package's decision is never
+    /// carried forward.  Four of the seven positive signals are sufficient,
+    /// except that trivial-overhead and high-risk work always remains with
+    /// MAIN.
+    /// </summary>
+    public RepartitionDecision EvaluateRepartition(RepartitionWorkPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+
+        package.Validate();
+
+        var count = package.PositiveConditionCount;
+        var workerPreferred =
+            package.RiskLevel is TaskRiskLevel.Low or TaskRiskLevel.Medium &&
+            !package.TrivialOverhead &&
+            count >= DelegationMajority;
+
+        var owner = workerPreferred ? WorkOwner.Worker : WorkOwner.Main;
+        var reason = workerPreferred
+            ? package.PreferredWorkerReason
+            : MainReason(package, count);
+        return new RepartitionDecision(
+            owner,
+            package.RiskLevel,
+            count,
+            workerPreferred,
+            reason);
+    }
+
+    public RepartitionDecision EvaluateRepartition(
+        CurrentWorkState currentWork,
+        RepartitionWorkPackage package) => EvaluateRepartition(package);
+
+    private static RepartitionReasonCode MainReason(RepartitionWorkPackage package, int count)
+    {
+        if (package.TrivialOverhead)
+        {
+            return RepartitionReasonCode.TOO_SMALL_TO_DELEGATE;
+        }
+
+        if (!package.Capable)
+        {
+            return RepartitionReasonCode.WORKER_CAPABILITY_MISSING;
+        }
+
+        if (package.RiskLevel == TaskRiskLevel.High)
+        {
+            return RepartitionReasonCode.REVIEW_REQUIRED;
+        }
+
+        if (!package.Stable)
+        {
+            return RepartitionReasonCode.ARCHITECTURE_UNRESOLVED;
+        }
+
+        if (!package.Bounded)
+        {
+            return RepartitionReasonCode.INVESTIGATION_UNRESOLVED;
+        }
+
+        if (!package.NonOverlapping)
+        {
+            return RepartitionReasonCode.CROSS_MODULE_DECISION;
+        }
+
+        return count < DelegationMajority
+            ? RepartitionReasonCode.FINAL_INTEGRATION
+            : RepartitionReasonCode.REVIEW_REQUIRED;
+    }
 
     public WorkerEscalation Escalate(
         string taskId,

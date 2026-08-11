@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using CodexAgentSwitch.Domain.Orchestration;
 using CodexAgentSwitch.Domain.Scheduling;
 
 Console.InputEncoding = Encoding.UTF8;
@@ -36,7 +37,7 @@ while (await Console.In.ReadLineAsync() is { } line)
                         ? requestedProtocol.GetString() ?? "2025-06-18"
                         : "2025-06-18",
                 capabilities = new { tools = new { listChanged = false } },
-                serverInfo = new { name = "codex-agent-switch", version = "0.1.13" },
+                serverInfo = new { name = "codex-agent-switch", version = "0.2.3" },
             },
             "ping" => new { },
             "tools/list" => new { tools = ToolDefinitions() },
@@ -66,6 +67,8 @@ static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
         "report_worker_result" => ("reportResult", ReadWorkerResult(arguments)),
         "begin_worker_review" => ("review", new { taskId = Required(arguments, "taskId") }),
         "adopt_worker_result" => ("adopt", new { taskId = Required(arguments, "taskId"), summary = Optional(arguments, "summary") }),
+        "record_repartition" => ("recordRepartition", ReadRepartition(arguments)),
+        "list_repartitions" => ("listRepartitions", new { taskGroupId = Required(arguments, "taskGroupId") }),
         "scheduler_status" => ("status", new { }),
         _ => throw new InvalidOperationException($"Unknown tool: {name}"),
     };
@@ -104,6 +107,17 @@ static WorkerResultPacket ReadWorkerResult(JsonElement arguments)
         Strings(arguments, "risks"),
         FailureReason: succeeded ? null : Optional(arguments, "failureReason"));
 }
+
+static object ReadRepartition(JsonElement arguments) => new
+{
+    taskGroupId = Required(arguments, "taskGroupId"),
+    trigger = ParseEnum<RepartitionTrigger>(arguments, "trigger").ToString(),
+    decision = ParseEnum<WorkOwner>(arguments, "decision").ToString(),
+    reason = ParseEnum<RepartitionReasonCode>(arguments, "reason").ToString(),
+    workSummary = Required(arguments, "workSummary"),
+    workerIdentity = OptionalNullable(arguments, "workerIdentity"),
+    result = OptionalNullable(arguments, "result"),
+};
 
 static async Task<JsonElement> SendAsync(string pipeName, string method, object payload)
 {
@@ -183,6 +197,39 @@ static object[] ToolDefinitions() =>
         description = "Read Scheduler state and active task count without starting model work.",
         inputSchema = new { type = "object", properties = new { }, additionalProperties = false },
     },
+    new
+    {
+        name = "record_repartition",
+        description = "Persist one Main-reported repartition decision. The Scheduler validates owner/reason consistency but does not infer semantic meaning.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new Dictionary<string, object>
+            {
+                ["taskGroupId"] = StringSchema("Task-group identifier."),
+                ["trigger"] = EnumSchema<RepartitionTrigger>("Semantic repartition trigger."),
+                ["decision"] = EnumSchema<WorkOwner>("Current work owner."),
+                ["reason"] = EnumSchema<RepartitionReasonCode>("Owner-specific reason code."),
+                ["workSummary"] = StringSchema("Short current-work summary."),
+                ["workerIdentity"] = StringSchema("Optional worker identity."),
+                ["result"] = StringSchema("Optional result or remaining-work summary."),
+            },
+            required = new[] { "taskGroupId", "trigger", "decision", "reason", "workSummary" },
+            additionalProperties = false,
+        },
+    },
+    new
+    {
+        name = "list_repartitions",
+        description = "Read persisted repartition decisions for one task group in sequence order.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new Dictionary<string, object> { ["taskGroupId"] = StringSchema("Task-group identifier.") },
+            required = new[] { "taskGroupId" },
+            additionalProperties = false,
+        },
+    },
 ];
 
 static object ResultSchema() => new
@@ -205,9 +252,12 @@ static object ResultSchema() => new
 
 static object TaskIdSchema() => new { type = "object", properties = new { taskId = StringSchema("Task id.") }, required = new[] { "taskId" }, additionalProperties = false };
 static object StringSchema(string description) => new { type = "string", description };
+static object EnumSchema<T>(string description) where T : struct, Enum => new { type = "string", description, @enum = Enum.GetNames<T>() };
 static object StringArraySchema(string description) => new { type = "array", items = new { type = "string" }, description };
 static string Required(JsonElement element, string name) => element.TryGetProperty(name, out var value) && !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString()! : throw new InvalidDataException($"{name} is required.");
 static string Optional(JsonElement element, string name) => element.TryGetProperty(name, out var value) ? value.GetString() ?? string.Empty : string.Empty;
+static string? OptionalNullable(JsonElement element, string name) => element.TryGetProperty(name, out var value) && !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString() : null;
+static T ParseEnum<T>(JsonElement element, string name) where T : struct, Enum => element.TryGetProperty(name, out var value) && Enum.TryParse<T>(value.GetString(), ignoreCase: false, out var parsed) && Enum.IsDefined(parsed) ? parsed : throw new InvalidDataException($"{name} is invalid.");
 static IReadOnlyList<string> Strings(JsonElement element, string name) => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array ? value.EnumerateArray().Select(item => item.GetString() ?? string.Empty).Where(item => item.Length > 0).ToArray() : [];
 static string? ReadArgument(string[] arguments, string name) { var index = Array.IndexOf(arguments, name); return index >= 0 && index + 1 < arguments.Length ? arguments[index + 1] : null; }
 static Task WriteResponseAsync(object response) => Console.Out.WriteLineAsync(JsonSerializer.Serialize(response, ToolHostJson.Options));

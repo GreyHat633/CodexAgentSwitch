@@ -2,6 +2,7 @@ using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using CodexAgentSwitch.Application.Scheduling;
+using CodexAgentSwitch.Domain.Orchestration;
 using CodexAgentSwitch.Domain.Scheduling;
 
 namespace CodexAgentSwitch.Infrastructure.Scheduling;
@@ -82,6 +83,10 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
                         payload.GetProperty("taskId").GetString() ?? string.Empty,
                         payload.TryGetProperty("summary", out var summary) ? summary.GetString() ?? string.Empty : string.Empty,
                         cancellationToken),
+                    "recordRepartition" => await RecordRepartitionAsync(payload, cancellationToken),
+                    "listRepartitions" => await scheduler.ListRepartitionsAsync(
+                        payload.GetProperty("taskGroupId").GetString() ?? string.Empty,
+                        cancellationToken),
                     "status" => scheduler.Snapshot,
                     _ => throw new InvalidOperationException($"未知 Scheduler IPC 方法：{method}"),
                 };
@@ -92,5 +97,33 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
                 await writer.WriteLineAsync(JsonSerializer.Serialize(new { ok = false, error = exception.Message }, JsonOptions));
             }
         }
+    }
+
+    private async Task<RepartitionTelemetry> RecordRepartitionAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var taskGroupId = payload.GetProperty("taskGroupId").GetString() ?? string.Empty;
+        var trigger = ParseEnum<RepartitionTrigger>(payload, "trigger");
+        var decision = ParseEnum<WorkOwner>(payload, "decision");
+        var reason = ParseEnum<RepartitionReasonCode>(payload, "reason");
+        var workSummary = payload.GetProperty("workSummary").GetString() ?? string.Empty;
+        var workerIdentity = payload.TryGetProperty("workerIdentity", out var worker) ? worker.GetString() : null;
+        var result = payload.TryGetProperty("result", out var resultValue) ? resultValue.GetString() : null;
+        return await scheduler.RecordRepartitionAsync(
+            taskGroupId,
+            trigger,
+            decision,
+            reason,
+            workSummary,
+            workerIdentity,
+            result,
+            cancellationToken);
+    }
+
+    private static T ParseEnum<T>(JsonElement payload, string name) where T : struct, Enum
+    {
+        var value = payload.GetProperty(name).GetString();
+        return value is not null && Enum.TryParse<T>(value, ignoreCase: false, out var parsed) && Enum.IsDefined(parsed)
+            ? parsed
+            : throw new InvalidDataException($"{name} is invalid.");
     }
 }

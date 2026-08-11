@@ -84,6 +84,21 @@ public sealed class SqliteDatabase(string databasePath)
             CREATE INDEX IF NOT EXISTS ix_scheduler_tasks_state_updated
                 ON scheduler_tasks(state, updated_at DESC);
 
+            CREATE TABLE IF NOT EXISTS scheduler_repartitions (
+                task_group_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                recorded_at TEXT NOT NULL,
+                trigger INTEGER NOT NULL,
+                decision INTEGER NOT NULL,
+                reason INTEGER NOT NULL,
+                work_summary TEXT NOT NULL,
+                worker_identity TEXT NULL,
+                result TEXT NULL,
+                PRIMARY KEY(task_group_id, sequence)
+            );
+            CREATE INDEX IF NOT EXISTS ix_scheduler_repartitions_group_sequence
+                ON scheduler_repartitions(task_group_id, sequence ASC);
+
             CREATE TABLE IF NOT EXISTS agent_projects (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
