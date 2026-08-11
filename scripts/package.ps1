@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+(?:\.\d+)?$')][string]$Version = '0.2.4.2',
-    [switch]$IncludeRuntimeInstaller
+    [switch]$IncludeRuntimeInstaller,
+    [switch]$SkipValidationBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -103,7 +104,9 @@ function Save-WindowsAppRuntimeInstaller([string]$destinationPath) {
     }
 }
 
-& (Join-Path $PSScriptRoot 'build.ps1') -Configuration Release
+if (-not $SkipValidationBuild) {
+    & (Join-Path $PSScriptRoot 'build.ps1') -Configuration Release
+}
 
 $portable = Join-Path $resolvedRelease 'portable'
 # WinUI self-contained deployment currently fails during XAML initialization on the
