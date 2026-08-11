@@ -360,11 +360,12 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
 
     private async Task<IReadOnlyList<ProviderSelectionOption>> LoadExternalProviderOptionsAsync()
     {
-        var providers = await App.Services.GetRequiredService<IProviderRepository>().ListAsync();
-        return providers
-            .Where(provider => provider.Kind != ProviderKind.NativeCodex && provider.IsEnabled)
-            .OrderBy(provider => provider.Name, StringComparer.CurrentCultureIgnoreCase)
-            .Select(provider => new ProviderSelectionOption(provider.Id, $"{provider.Name}（{provider.Id}）"))
+        var providers = await App.Services.GetRequiredService<IProviderRegistry>().LoadAsync();
+        return providers.Providers
+            .Where(entry => entry.Provider.Kind != ProviderKind.NativeCodex
+                && (entry.Provider.IsEnabled || entry.Provider.Kind == ProviderKind.OpenCodeZen))
+            .OrderBy(entry => entry.Provider.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Select(entry => new ProviderSelectionOption(entry.Id, $"{entry.Name}（{entry.Id}） · {entry.Status}"))
             .ToArray();
     }
 

@@ -52,6 +52,17 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<OpenAiCompatibleClient>();
         services.AddSingleton<IOpenCodeProcessRunner, OpenCodeZenProcessRunner>();
         services.AddSingleton<IExternalProviderClient>(provider => provider.GetRequiredService<OpenAiCompatibleClient>());
+        services.AddSingleton<IProviderRegistry>(provider => new ProviderRegistry(
+            provider.GetRequiredService<IProviderRepository>(),
+            provider.GetRequiredService<IExternalProviderClient>(),
+            provider.GetRequiredService<ICredentialStore>(),
+            provider.GetRequiredService<IClock>(),
+            async cancellationToken =>
+            {
+                var probe = await provider.GetRequiredService<IOpenCodeProcessRunner>()
+                    .ProbeAsync(Environment.CurrentDirectory, cancellationToken);
+                return new ProviderAuthResult(probe.IsAvailable, probe.IsAuthenticated, probe.Message);
+            }));
         services.AddSingleton<IExternalToolHost, LocalExternalToolHost>();
         services.AddSingleton<IExternalWorkerAdapterFactory, ExternalWorkerAdapterFactory>();
         services.AddSingleton<ProviderConfigurationValidator>();

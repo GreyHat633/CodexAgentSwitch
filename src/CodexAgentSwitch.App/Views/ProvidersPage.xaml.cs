@@ -36,16 +36,15 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
 
     private async void SaveOpenCodeZen(object sender, RoutedEventArgs e)
     {
-        var selection = OpenCodeZenModelComboBox.SelectedItem as string;
+        var selection = (OpenCodeZenModelComboBox.SelectedItem as ProviderModelOption)?.Id
+            ?? OpenCodeZenModelComboBox.SelectedItem as string;
         if (string.IsNullOrWhiteSpace(selection))
         {
             ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Refresh models and choose an OpenCode Zen model before saving.");
             return;
         }
 
-        var repository = App.Services.GetRequiredService<IProviderRepository>();
-        var existing = await repository.GetAsync(OpenCodeZenProviderId) ?? ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow);
-        await repository.UpsertAsync(existing with { ModelId = selection, UpdatedAt = DateTimeOffset.UtcNow });
+        await App.Services.GetRequiredService<IProviderRegistry>().SaveSelectionAsync(OpenCodeZenProviderId, selection);
         ShowOpenCodeZen(InfoBarSeverity.Success, "OpenCode Zen selection saved", $"Selected model: {selection}. Test the CLI before enabling it.");
         await RefreshDeepSeekAsync();
     }
@@ -72,17 +71,25 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
     {
         try
         {
-            var client = App.Services.GetRequiredService<IExternalProviderClient>();
-            var provider = await App.Services.GetRequiredService<IProviderRepository>().GetAsync(OpenCodeZenProviderId)
-                ?? ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow);
-            var models = await client.ListModelsAsync(provider);
-            OpenCodeZenModelComboBox.ItemsSource = models;
-            OpenCodeZenModelComboBox.SelectedItem = provider.ModelId;
+            var entry = await App.Services.GetRequiredService<IProviderRegistry>().RefreshAsync(OpenCodeZenProviderId);
+            var provider = entry.Provider;
+            OpenCodeZenModelComboBox.ItemsSource = entry.Models;
+            OpenCodeZenModelComboBox.SelectedItem = entry.Models.FirstOrDefault(model => string.Equals(model.Id, provider.ModelId, StringComparison.Ordinal));
+            if (entry.AuthState == ProviderAuthState.Missing)
+            {
+                ShowOpenCodeZen(InfoBarSeverity.Warning, "OpenCode Zen login required", entry.Status);
+                return;
+            }
+            if (entry.AuthState == ProviderAuthState.Unavailable)
+            {
+                ShowOpenCodeZen(InfoBarSeverity.Error, "OpenCode Zen auth probe unavailable", entry.Status);
+                return;
+            }
             if (string.IsNullOrWhiteSpace(provider.ModelId))
             {
                 ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Choose a discovered model before running a Worker.");
             }
-            else if (!models.Contains(provider.ModelId, StringComparer.Ordinal))
+            else if (!entry.Models.Any(model => string.Equals(model.Id, provider.ModelId, StringComparison.Ordinal)))
             {
                 ShowOpenCodeZen(InfoBarSeverity.Warning, "Saved model is no longer available", $"{provider.ModelId} disappeared from the refreshed Zen catalog. Reselect a model; the saved selection was preserved.");
             }
@@ -395,9 +402,9 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
 
     private async Task RefreshDeepSeekAsync()
     {
-        var repository = App.Services.GetRequiredService<IProviderRepository>();
         var credentials = App.Services.GetRequiredService<ICredentialStore>();
-        var provider = await repository.GetAsync(ProviderId);
+        var registry = await App.Services.GetRequiredService<IProviderRegistry>().LoadAsync();
+        var provider = registry.Find(ProviderId)?.Provider;
         var hasCredential = provider?.CredentialReference is not null
             && await credentials.ExistsAsync(provider.CredentialReference);
 

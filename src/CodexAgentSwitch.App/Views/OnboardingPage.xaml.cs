@@ -24,6 +24,8 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
     private bool environmentReady;
     private bool providerConnectionVerified;
     private string? verifiedProviderId;
+    private ProviderRegistrySnapshot? providerRegistry;
+    private int providerSelectionVersion;
 
     public OnboardingPage()
     {
@@ -157,14 +159,12 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
 
     private async Task LoadProvidersAsync()
     {
-        var providers = (await App.Services.GetRequiredService<IProviderRepository>().ListAsync())
-            .Where(provider => provider.Kind != ProviderKind.NativeCodex)
+        providerRegistry = await App.Services.GetRequiredService<IProviderRegistry>().LoadAsync();
+        var providers = providerRegistry.Providers
+            .Where(entry => entry.Provider.Kind != ProviderKind.NativeCodex)
+            .Select(entry => entry.Provider)
             .OrderBy(provider => provider.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
-        if (!providers.Any(provider => provider.Id == "deepseek-default"))
-        {
-            providers.Add(ProviderConfiguration.DeepSeekPreset(DateTimeOffset.UtcNow));
-        }
 
         ExternalProviderComboBox.ItemsSource = providers;
         ExternalProviderComboBox.DisplayMemberPath = nameof(ProviderConfiguration.Name);
@@ -173,7 +173,7 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
         var preferred = seedProfile?.WorkerPolicy.PreferredProviderId;
         ExternalProviderComboBox.SelectedItem = providers.FirstOrDefault(provider => provider.Id == preferred) ?? providers.FirstOrDefault();
         ProviderSetupComboBox.SelectedItem = ExternalProviderComboBox.SelectedItem;
-        ApplyProviderToEditor(ProviderSetupComboBox.SelectedItem as ProviderConfiguration);
+        await RefreshProviderModelsAsync(ProviderSetupComboBox.SelectedItem as ProviderConfiguration);
     }
 
     private void MainAgentChecked(object sender, RoutedEventArgs args)
@@ -200,7 +200,7 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
         if (ExternalProviderComboBox.SelectedItem is ProviderConfiguration selected)
         {
             ProviderSetupComboBox.SelectedItem = selected;
-            ApplyProviderToEditor(selected);
+            _ = RefreshProviderModelsAsync(selected);
         }
 
         InvalidateProviderVerification();
@@ -212,7 +212,7 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
         if (ProviderSetupComboBox.SelectedItem is ProviderConfiguration selected)
         {
             ExternalProviderComboBox.SelectedItem = selected;
-            ApplyProviderToEditor(selected);
+            _ = RefreshProviderModelsAsync(selected);
         }
 
         InvalidateProviderVerification();
@@ -230,18 +230,18 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
                 throw new InvalidOperationException("Base URL 格式无效。");
             }
 
-            var modelId = SelectedTag(ProviderModelComboBox)
+            var modelId = SelectedProviderModel()
                 ?? throw new InvalidOperationException("请选择 Provider 模型。");
             if (existing.Kind == ProviderKind.DeepSeek && modelId == DeepSeekV4Catalog.ProModelId)
             {
                 throw new InvalidOperationException("DeepSeek V4 Pro 不支持当前 Worker 协议；请选择 DeepSeek V4 Flash 0731。");
             }
 
-            var credentials = App.Services.GetRequiredService<ICredentialStore>();
-            var credentialReference = existing.CredentialReference ?? $"provider/{existing.Id}";
-            if (!string.IsNullOrWhiteSpace(ProviderApiKeyBox.Password))
+            var usesApiKey = ProviderCredentialPolicy.UsesApiKey(existing);
+            var credentialReference = ProviderCredentialPolicy.ResolveReference(existing);
+            if (usesApiKey && !string.IsNullOrWhiteSpace(ProviderApiKeyBox.Password))
             {
-                await credentials.SaveAsync(credentialReference, ProviderApiKeyBox.Password);
+                await App.Services.GetRequiredService<ICredentialStore>().SaveAsync(credentialReference!, ProviderApiKeyBox.Password);
             }
 
             var provider = existing with
@@ -494,7 +494,7 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
         {
             WorkerSource.Disabled => "未启用 Worker",
             WorkerSource.NativeCodex => $"原生 Worker：{SelectedTag(NativeWorkerComboBox) ?? "未选择"}",
-            WorkerSource.ExternalProvider => $"外部 Worker：{(ExternalProviderComboBox.SelectedItem as ProviderConfiguration)?.Name ?? "未选择"} / {SelectedTag(ProviderModelComboBox) ?? "未选择模型"}",
+            WorkerSource.ExternalProvider => $"外部 Worker：{(ExternalProviderComboBox.SelectedItem as ProviderConfiguration)?.Name ?? "未选择"} / {SelectedProviderModel() ?? "未选择模型"}",
             _ => "配置异常",
         };
         ProfileSummaryText.Text = $"主代理：{SelectedMainModel() ?? "未选择"} · 推理强度：{ReasoningLabel(SelectedTag(ReasoningEffortComboBox) ?? "未选择")}\n{worker}\n路由：{SelectedTag(RoutingModeComboBox) ?? "未选择"} · 最大 Worker：{(source == WorkerSource.Disabled ? 0 : (int)Math.Round(MaxWorkersBox.Value))} · 回退：{SelectedTag(FallbackComboBox) ?? "未选择"}";
@@ -574,8 +574,45 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
         }
 
         ProviderBaseUrlBox.Text = provider.BaseUri?.AbsoluteUri ?? DeepSeekV4Catalog.BaseUrl;
-        SelectComboTag(ProviderModelComboBox, provider.ModelId ?? DeepSeekV4Catalog.FlashModelId);
+        ProviderApiKeyBox.IsEnabled = provider.Kind != ProviderKind.OpenCodeZen;
+        if (provider.Kind == ProviderKind.OpenCodeZen)
+        {
+            ProviderApiKeyBox.Password = string.Empty;
+        }
+        ProviderModelComboBox.SelectedItem = (ProviderModelComboBox.ItemsSource as IEnumerable<ProviderModelOption>)
+            ?.FirstOrDefault(model => string.Equals(model.Id, provider.ModelId, StringComparison.Ordinal));
     }
+
+    private async Task RefreshProviderModelsAsync(ProviderConfiguration? provider)
+    {
+        if (provider is null)
+        {
+            return;
+        }
+
+        var version = ++providerSelectionVersion;
+        var entry = await App.Services.GetRequiredService<IProviderRegistry>().RefreshAsync(provider.Id);
+        if (version != providerSelectionVersion
+            || !string.Equals((ProviderSetupComboBox.SelectedItem as ProviderConfiguration)?.Id, provider.Id, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        ProviderModelComboBox.ItemsSource = entry.Models;
+        ApplyProviderToEditor(entry.Provider);
+        if (entry.RefreshFailed)
+        {
+            ProviderTestResultText.Text = entry.Status;
+        }
+    }
+
+    private string? SelectedProviderModel() => ProviderModelComboBox.SelectedItem switch
+    {
+        ProviderModelOption option => option.Id,
+        ProviderModelDefinition definition => definition.Id,
+        ComboBoxItem item => item.Tag as string,
+        _ => ProviderModelComboBox.SelectedValue as string,
+    };
 
     private void ShowError(string title, string message)
     {
