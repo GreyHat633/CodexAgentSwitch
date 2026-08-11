@@ -1,5 +1,7 @@
 using CodexAgentSwitch.Domain.Scheduling;
 using CodexAgentSwitch.Domain.Orchestration;
+using CodexAgentSwitch.Domain.Usage;
+using CodexAgentSwitch.Application.Usage;
 
 namespace CodexAgentSwitch.Application.Scheduling;
 
@@ -47,6 +49,14 @@ public sealed record PreToolUseResult(
     bool Allowed,
     bool RequiresSafetyPolicy,
     string Reason);
+
+public sealed record SchedulerRuntimeDiagnostics(
+    MainCostGuardTelemetry Economy,
+    WorkPackageLeaseStatus? Ownership,
+    string? PackageId,
+    string? WorkerIdentity,
+    string? LastReason,
+    int GuardHits);
 
 public interface ISchedulerTaskRepository
 {
@@ -126,4 +136,6 @@ public interface IWorkerScheduler : IAsyncDisposable
         Task.FromException<PreToolUseResult>(new NotSupportedException("PreToolUse is not available on this scheduler."));
     Task<WorkPackageLease?> CompletePackageAsync(string packageId, string workingDirectory, CancellationToken cancellationToken = default) =>
         Task.FromException<WorkPackageLease?>(new NotSupportedException("Package leases are not available on this scheduler."));
+    Task<SchedulerRuntimeDiagnostics> GetRuntimeDiagnosticsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromException<SchedulerRuntimeDiagnostics>(new NotSupportedException("Runtime diagnostics are not available on this scheduler."));
 }

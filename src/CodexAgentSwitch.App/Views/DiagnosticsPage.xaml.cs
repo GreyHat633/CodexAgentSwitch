@@ -1,5 +1,6 @@
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Common;
+using CodexAgentSwitch.Application.Scheduling;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -19,6 +20,8 @@ public sealed partial class DiagnosticsPage : Page
         DataRootText.Text = $"数据目录：{App.Services.GetRequiredService<AppDataPaths>().Root}";
         try
         {
+            var runtime = await App.Services.GetRequiredService<IWorkerScheduler>().GetRuntimeDiagnosticsAsync();
+            EconomyDiagnosticsText.Text = $"Current {runtime.Economy.CurrentWindowCredits:0.###} / threshold {runtime.Economy.CurrentThreshold:0.###}; stage {runtime.Economy.BackoffStage}; ownership {runtime.Ownership?.ToString() ?? "none"}; package {runtime.PackageId ?? "none"}; worker {runtime.WorkerIdentity ?? "none"}; last reason {runtime.LastReason ?? "none"}; guard hits {runtime.GuardHits}.";
             var state = await App.Services.GetRequiredService<CodexRuntimeManager>().DetectAsync();
             CodexStatusText.Text = state.Installed ? "已检测" : "不可用";
             CodexDetailText.Text = state.Installed ? $"{state.Version}；应用服务器：{(state.AppServerRunning ? "运行中" : "未启动")}。" : state.Message;

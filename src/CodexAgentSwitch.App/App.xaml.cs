@@ -79,6 +79,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<EconomicReportService>();
         services.AddSingleton<IWorkerUsageCollector, WorkerUsageCollector>();
         services.AddSingleton<IUsageSource, CodexSessionUsageSource>();
+        services.AddSingleton<MainCostGuardCoordinator>();
         services.AddSingleton<SafeWorkerDeletionCoordinator>();
         services.AddSingleton<ProfileValidator>();
         services.AddSingleton<ProfileService>();

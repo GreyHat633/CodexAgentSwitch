@@ -176,11 +176,10 @@ static object ReadRepartition(JsonElement arguments) => new
     workSummary = Required(arguments, "workSummary"),
     workerIdentity = OptionalNullable(arguments, "workerIdentity"),
     result = OptionalNullable(arguments, "result"),
-    packageId = OptionalNullable(arguments, "packageId"),
-    workingDirectory = OptionalNullable(arguments, "workingDirectory"),
-    packageKind = OptionalNullable(arguments, "packageKind"),
-    declaredScopes = Strings(arguments, "declaredScopes"),
-    costWindowIndex = arguments.TryGetProperty("costWindowIndex", out var cost) && cost.ValueKind == JsonValueKind.Number ? cost.GetInt32() : (int?)null,
+    packageId = Required(arguments, "packageId"),
+    workingDirectory = Required(arguments, "workingDirectory"),
+    packageKind = Required(arguments, "packageKind"),
+    declaredScopes = RequiredStrings(arguments, "declaredScopes"),
 };
 
 static async Task<JsonElement> SendAsync(string pipeName, string method, object payload)
@@ -283,13 +282,12 @@ static object[] ToolDefinitions() =>
                 ["workSummary"] = StringSchema("Short current-work summary."),
                 ["workerIdentity"] = StringSchema("Optional worker identity."),
                 ["result"] = StringSchema("Optional result or remaining-work summary."),
-                ["packageId"] = StringSchema("Optional package id; supplying complete lease metadata creates a durable lease."),
-                ["workingDirectory"] = StringSchema("Optional normalized package working directory."),
-                ["packageKind"] = StringSchema("Optional package kind."),
-                ["declaredScopes"] = StringArraySchema("Optional declared ownership scopes."),
-                ["costWindowIndex"] = new { type = "integer", minimum = 0 },
+                ["packageId"] = StringSchema("Durable package id."),
+                ["workingDirectory"] = StringSchema("Package working directory."),
+                ["packageKind"] = StringSchema("Package kind."),
+                ["declaredScopes"] = StringArraySchema("Declared ownership scopes."),
             },
-            required = new[] { "taskGroupId", "trigger", "decision", "reason", "workSummary" },
+            required = new[] { "taskGroupId", "trigger", "decision", "reason", "workSummary", "packageId", "workingDirectory", "packageKind", "declaredScopes" },
             additionalProperties = false,
         },
     },
@@ -334,6 +332,11 @@ static string Optional(JsonElement element, string name) => element.TryGetProper
 static string? OptionalNullable(JsonElement element, string name) => element.TryGetProperty(name, out var value) && !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString() : null;
 static T ParseEnum<T>(JsonElement element, string name) where T : struct, Enum => element.TryGetProperty(name, out var value) && Enum.TryParse<T>(value.GetString(), ignoreCase: false, out var parsed) && Enum.IsDefined(parsed) ? parsed : throw new InvalidDataException($"{name} is invalid.");
 static IReadOnlyList<string> Strings(JsonElement element, string name) => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array ? value.EnumerateArray().Select(item => item.GetString() ?? string.Empty).Where(item => item.Length > 0).ToArray() : [];
+static IReadOnlyList<string> RequiredStrings(JsonElement element, string name)
+{
+    var values = Strings(element, name);
+    return values.Count > 0 ? values : throw new InvalidDataException($"{name} is required and cannot be empty.");
+}
 static string? ReadArgument(string[] arguments, string name) { var index = Array.IndexOf(arguments, name); return index >= 0 && index + 1 < arguments.Length ? arguments[index + 1] : null; }
 static Task WriteResponseAsync(object response) => Console.Out.WriteLineAsync(JsonSerializer.Serialize(response, ToolHostJson.Options));
 

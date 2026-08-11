@@ -70,6 +70,31 @@ public sealed class MainCostGuardTests
     }
 
     [Fact]
+    public void Legal_main_checkpoint_resets_window_without_advancing_for_non_investigation_reason()
+    {
+        var guard = new MainCostGuard();
+        guard.AcceptUsage(Sample(10_000_000, 0, 0, 0));
+
+        guard.RecordCheckpoint(WorkOwner.Main, RepartitionReasonCode.REVIEW_REQUIRED);
+
+        Assert.Equal(0m, guard.CurrentWindowCredits);
+        Assert.Equal(25m, guard.CurrentThreshold);
+        Assert.Equal(0, guard.BackoffStage);
+    }
+
+    [Fact]
+    public void Coordinator_isolates_normalized_directory_and_exact_session()
+    {
+        var coordinator = new MainCostGuardCoordinator();
+        var first = coordinator.Resolve("E:/Project-A", "session-1");
+        first.AcceptUsage(Sample("session-1", "E:/Project-A", 25_000_000));
+
+        Assert.True(first.IsGuardHit);
+        Assert.False(coordinator.Resolve("E:/Project-A", "session-2").IsGuardHit);
+        Assert.False(coordinator.Resolve("E:/Project-B", "session-1").IsGuardHit);
+    }
+
+    [Fact]
     public void Rates_are_separate_reasoning_is_reported_only_and_deltas_are_monotonic()
     {
         var options = new MainCostGuardOptions(
@@ -108,4 +133,7 @@ public sealed class MainCostGuardTests
             null,
             "synthetic",
             "test");
+
+    private static NativeUsageRecord Sample(string sessionId, string cwd, long input) =>
+        new(sessionId, cwd, null, "model", "high", "Sol", 1, input, 0, input, 0, 0, input, null, null, "synthetic", "test");
 }

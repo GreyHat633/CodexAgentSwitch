@@ -1,5 +1,6 @@
 using CodexAgentSwitch.Application.Abstractions;
 using CodexAgentSwitch.Application.Scheduling;
+using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Domain.Orchestration;
 using CodexAgentSwitch.Domain.Scheduling;
 using CodexAgentSwitch.Infrastructure.Persistence;
@@ -248,6 +249,142 @@ public sealed class WorkerSchedulerTests
         Assert.Equal(2, (await scheduler.ListAsync()).Count);
     }
 
+    [Fact]
+    public async Task Main_cost_guard_uses_exact_session_and_matching_cwd_then_persists_cost_checkpoint()
+    {
+        const string root = "E:\\AISPace\\Phase6Main";
+        var leases = new LeaseMemoryRepository();
+        var source = new CountingUsageSource(new NativeUsageRecord(
+            "session-main", root, null, "model", "high", "Sol", 1,
+            25_000_000, 0, 25_000_000, 0, 0, 25_000_000, null, null, "synthetic", "test"));
+        await using var scheduler = new WorkerScheduler([], new MemoryRepository(), new AdvancingClock(),
+            leaseRepository: leases, usageSource: source, guardCoordinator: new MainCostGuardCoordinator());
+        await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Main,
+            RepartitionReasonCode.REVIEW_REQUIRED, "main", null, null, "pkg", root, "Implementation", [root], null);
+
+        var result = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("session-main", root, "apply_patch", "patch"));
+
+        Assert.False(result.Allowed);
+        Assert.Contains("CostCheckpoint", result.Reason, StringComparison.Ordinal);
+        Assert.Equal(WorkPackageLeaseStatus.INVALID, (await leases.ListAsync()).Single().Status);
+        Assert.Equal(1, source.ReadCount);
+    }
+
+    [Fact]
+    public async Task Worker_owned_mutation_is_denied_before_usage_scan_and_unknown_requires_safety()
+    {
+        const string root = "E:\\AISPace\\Phase6Worker";
+        var leases = new LeaseMemoryRepository();
+        var source = new CountingUsageSource(null);
+        await using var scheduler = new WorkerScheduler([], new MemoryRepository(), new AdvancingClock(),
+            leaseRepository: leases, usageSource: source, guardCoordinator: new MainCostGuardCoordinator());
+        await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Worker,
+            RepartitionReasonCode.BOUNDED_IMPLEMENTATION, "worker", null, null, "pkg", root, "Implementation", [root], null);
+
+        var denied = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
+        var unknown = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "shell", "mystery"));
+
+        Assert.False(denied.Allowed);
+        Assert.Equal(0, source.ReadCount);
+        Assert.True(unknown.Allowed);
+        Assert.True(unknown.RequiresSafetyPolicy);
+    }
+
+    [Fact]
+    public async Task Main_usage_from_unrelated_cwd_is_not_charged_as_a_fallback()
+    {
+        const string root = "E:\\AISPace\\Phase6Cwd";
+        var leases = new LeaseMemoryRepository();
+        var source = new CountingUsageSource(new NativeUsageRecord(
+            "session-main", "E:\\AISPace\\OtherProject", null, "model", "high", "Sol", 1,
+            25_000_000, 0, 25_000_000, 0, 0, 25_000_000, null, null, "synthetic", "test"));
+        await using var scheduler = new WorkerScheduler([], new MemoryRepository(), new AdvancingClock(),
+            leaseRepository: leases, usageSource: source, guardCoordinator: new MainCostGuardCoordinator());
+        await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Main,
+            RepartitionReasonCode.REVIEW_REQUIRED, "main", null, null, "pkg", root, "Implementation", [root], null);
+
+        var result = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("session-main", root, "apply_patch", "patch"));
+
+        Assert.True(result.Allowed);
+        Assert.Equal(1, source.ReadCount);
+    }
+
+    [Fact]
+    public async Task Main_usage_from_other_session_on_matching_cwd_is_not_charged()
+    {
+        const string root = "E:\\AISPace\\Phase6Session";
+        var leases = new LeaseMemoryRepository();
+        var source = new CountingUsageSource(new NativeUsageRecord(
+            "session-other", root, null, "model", "high", "Sol", 1,
+            25_000_000, 0, 25_000_000, 0, 0, 25_000_000, null, null, "synthetic", "test"));
+        await using var scheduler = new WorkerScheduler([], new MemoryRepository(), new AdvancingClock(),
+            leaseRepository: leases, usageSource: source, guardCoordinator: new MainCostGuardCoordinator());
+        await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Main,
+            RepartitionReasonCode.REVIEW_REQUIRED, "main", null, null, "pkg", root, "Implementation", [root], null);
+
+        var result = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("session-main", root, "apply_patch", "patch"));
+
+        Assert.True(result.Allowed);
+        Assert.Equal(1, source.ReadCount);
+    }
+
+    [Fact]
+    public async Task Cost_window_index_is_derived_and_backoff_resets_for_new_package_and_worker()
+    {
+        const string root = "E:\\AISPace\\Phase6Index";
+        var repository = new MemoryRepository();
+        var leases = new LeaseMemoryRepository();
+        await using var scheduler = new WorkerScheduler([], repository, new AdvancingClock(), leaseRepository: leases,
+            guardCoordinator: new MainCostGuardCoordinator());
+
+        var first = await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Main,
+            RepartitionReasonCode.REVIEW_REQUIRED, "main", null, null, "pkg-1", root, "Implementation", [root], 99);
+        var second = await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.WORK_CONVERGED, WorkOwner.Main,
+            RepartitionReasonCode.INVESTIGATION_UNRESOLVED, "main", null, null, "pkg-1", root, "Implementation", [root], 99);
+        var third = await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.WORK_CONVERGED, WorkOwner.Main,
+            RepartitionReasonCode.INVESTIGATION_UNRESOLVED, "main", null, null, "pkg-1", root, "Implementation", [root], 99);
+        var fourth = await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.WORK_CONVERGED, WorkOwner.Main,
+            RepartitionReasonCode.INVESTIGATION_UNRESOLVED, "main", null, null, "pkg-1", root, "Implementation", [root], 99);
+        var newPackage = await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Main,
+            RepartitionReasonCode.FINAL_INTEGRATION, "new", null, null, "pkg-2", root, "Implementation", [root], 99);
+        var worker = await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Worker,
+            RepartitionReasonCode.BOUNDED_IMPLEMENTATION, "worker", "worker-1", null, "pkg-3", root, "Implementation", [root], 99);
+
+        Assert.Equal([0, 1, 2, 2, 0, 0], new[] { first.CostWindowIndex, second.CostWindowIndex, third.CostWindowIndex, fourth.CostWindowIndex, newPackage.CostWindowIndex, worker.CostWindowIndex });
+        Assert.Equal([0, 1, 2, 2, 0, 0], (await repository.ListRepartitionsAsync("group")).Select(item => item.CostWindowIndex).ToArray());
+        Assert.Equal(0, (await leases.ListAsync()).OrderBy(item => item.PackageId, StringComparer.Ordinal).Last().CostWindowIndex);
+    }
+
+    [Fact]
+    public async Task Incomplete_package_metadata_is_rejected_before_persistence_or_guard_mutation()
+    {
+        var repository = new MemoryRepository();
+        await using var scheduler = new WorkerScheduler([], repository, new AdvancingClock(), guardCoordinator: new MainCostGuardCoordinator());
+
+        await Assert.ThrowsAsync<ArgumentException>(() => scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE,
+            WorkOwner.Main, RepartitionReasonCode.REVIEW_REQUIRED, "invalid", null, null, "pkg", null, "Implementation", ["E:\\AISPace\\Phase6Invalid"], 99));
+
+        Assert.Empty(await repository.ListRepartitionsAsync("group"));
+    }
+
+    [Fact]
+    public void ToolHost_repartition_schema_requires_metadata_and_derives_cost_index()
+    {
+        var path = Path.Combine(FindRepositoryRoot(), "src", "CodexAgentSwitch.ToolHost", "Program.cs");
+        var source = File.ReadAllText(path);
+
+        Assert.Contains("required = new[] { \"taskGroupId\", \"trigger\", \"decision\", \"reason\", \"workSummary\", \"packageId\", \"workingDirectory\", \"packageKind\", \"declaredScopes\" }", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("costWindowIndex", source, StringComparison.Ordinal);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "src", "CodexAgentSwitch.ToolHost")))
+            directory = directory.Parent;
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
+    }
+
     private static TaskPacket Packet(string nonce, string worker) => new(
         nonce,
         "project-1",
@@ -330,5 +467,28 @@ public sealed class WorkerSchedulerTests
     {
         private long ticks;
         public DateTimeOffset UtcNow => new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero).AddTicks(Interlocked.Increment(ref ticks));
+    }
+
+    private sealed class CountingUsageSource(NativeUsageRecord? record) : IUsageSource
+    {
+        public int ReadCount { get; private set; }
+        public IReadOnlyList<NativeUsageRecord> Read(CancellationToken cancellationToken = default)
+        {
+            ReadCount++;
+            return record is null ? [] : [record];
+        }
+    }
+
+    private sealed class LeaseMemoryRepository : IWorkPackageLeaseRepository
+    {
+        private readonly Dictionary<string, WorkPackageLease> items = new(StringComparer.OrdinalIgnoreCase);
+        public Task<WorkPackageLease?> GetActiveAsync(string packageId, string workingDirectory, CancellationToken cancellationToken = default) =>
+            Task.FromResult(items.TryGetValue(packageId, out var value) && value.Status is not WorkPackageLeaseStatus.INVALID and not WorkPackageLeaseStatus.COMPLETED ? value : null);
+        public Task<WorkPackageLease?> GetActiveForWorkingDirectoryAsync(string workingDirectory, CancellationToken cancellationToken = default) =>
+            Task.FromResult(items.Values.LastOrDefault(item => string.Equals(item.WorkingDirectory, WorkPackageLease.NormalizePath(workingDirectory), StringComparison.OrdinalIgnoreCase)
+                && item.Status is not WorkPackageLeaseStatus.INVALID and not WorkPackageLeaseStatus.COMPLETED));
+        public Task<IReadOnlyList<WorkPackageLease>> ListAsync(string? packageId = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<WorkPackageLease>>(items.Values.ToArray());
+        public Task SaveAsync(WorkPackageLease lease, CancellationToken cancellationToken = default) { items[lease.PackageId] = lease; return Task.CompletedTask; }
     }
 }
