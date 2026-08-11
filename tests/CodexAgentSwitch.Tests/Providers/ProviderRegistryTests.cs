@@ -35,7 +35,7 @@ public sealed class ProviderRegistryTests
         Assert.Equal(ProviderAuthState.Missing, zen.AuthState);
         Assert.Empty(zen.Models);
         Assert.Equal(0, credentials.ExistsCalls);
-        Assert.Contains("Disabled", zen.Status);
+        Assert.Contains("已停用", zen.Status);
     }
 
     [Fact]

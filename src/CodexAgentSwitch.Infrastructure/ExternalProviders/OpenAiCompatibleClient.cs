@@ -49,7 +49,7 @@ public sealed class OpenAiCompatibleClient(
                 if (openCodeProcessRunner is null)
                 {
                     return new ProviderConnectionResult(false, ProviderErrorKind.ServiceUnavailable,
-                        "OpenCode CLI probe is not configured.", zenStopwatch.Elapsed, null, null, [], true);
+                        "OpenCode CLI 登录探测未配置。", zenStopwatch.Elapsed, null, null, [], true);
                 }
 
                 var probe = await openCodeProcessRunner.ProbeAsync(Environment.CurrentDirectory, cancellationToken);
@@ -63,19 +63,19 @@ public sealed class OpenAiCompatibleClient(
                 if (string.IsNullOrWhiteSpace(provider.ModelId))
                 {
                     return new ProviderConnectionResult(false, ProviderErrorKind.InvalidConfiguration,
-                        "OpenCode Zen model selection is missing; refresh models and choose one.", zenStopwatch.Elapsed,
+                        "OpenCode Zen 尚未选择模型；请刷新模型并选择一个。", zenStopwatch.Elapsed,
                         null, null, zenModels, true);
                 }
 
                 if (!zenModels.Contains(provider.ModelId, StringComparer.Ordinal))
                 {
                     return new ProviderConnectionResult(false, ProviderErrorKind.ModelUnavailable,
-                        $"OpenCode Zen model '{provider.ModelId}' was not returned by the official catalog.", zenStopwatch.Elapsed,
+                        $"OpenCode Zen 模型“{provider.ModelId}”未出现在官方目录中。", zenStopwatch.Elapsed,
                         null, null, zenModels, true);
                 }
 
                 return new ProviderConnectionResult(true, ProviderErrorKind.None,
-                    "OpenCode Zen model discovery succeeded; the OpenCode CLI will execute requests.", zenStopwatch.Elapsed,
+                    "OpenCode Zen 模型发现成功；后续请求将由 OpenCode CLI 执行。", zenStopwatch.Elapsed,
                     provider.ModelId, null, zenModels, true);
             }
             catch (ProviderRequestException exception)
@@ -236,7 +236,7 @@ public sealed class OpenAiCompatibleClient(
         using var request = await CreateRequestAsync(provider, HttpMethod.Post, "chat/completions", cancellationToken);
         request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
         var requestUri = request.RequestUri
-            ?? throw new ProviderRequestException(ProviderErrorKind.InvalidConfiguration, "Provider request URI is invalid.");
+            ?? throw new ProviderRequestException(ProviderErrorKind.InvalidConfiguration, "Provider 请求 URI 无效。");
         using var response = await SendAsync(provider, request, cancellationToken);
         using var document = await ReadJsonAsync(response, cancellationToken);
         try

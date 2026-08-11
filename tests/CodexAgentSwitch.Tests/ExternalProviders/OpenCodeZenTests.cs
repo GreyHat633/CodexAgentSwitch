@@ -28,8 +28,14 @@ public sealed class OpenCodeZenTests
             ""));
 
         Assert.False(empty.IsAuthenticated);
+        Assert.Contains("未找到", empty.Message);
         Assert.False(unrelated.IsAuthenticated);
         Assert.True(zen.IsAuthenticated);
+        Assert.Contains("已找到", zen.Message);
+
+        var failed = OpenCodeZenProcessRunner.ClassifyAuthResult(new OpenCodeProcessResult(17, "", ""));
+        Assert.Contains("退出码 17", failed.Message);
+        Assert.Contains("'opencode auth login'", failed.Message);
     }
 
     [Fact]

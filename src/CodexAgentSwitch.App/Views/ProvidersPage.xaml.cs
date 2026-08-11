@@ -40,12 +40,12 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             ?? OpenCodeZenModelComboBox.SelectedItem as string;
         if (string.IsNullOrWhiteSpace(selection))
         {
-            ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Refresh models and choose an OpenCode Zen model before saving.");
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "尚未选择模型", "请先刷新模型，再选择一个 OpenCode Zen 模型后保存。");
             return;
         }
 
         await App.Services.GetRequiredService<IProviderRegistry>().SaveSelectionAsync(OpenCodeZenProviderId, selection);
-        ShowOpenCodeZen(InfoBarSeverity.Success, "OpenCode Zen selection saved", $"Selected model: {selection}. Test the CLI before enabling it.");
+        ShowOpenCodeZen(InfoBarSeverity.Success, "OpenCode Zen 选择已保存", $"已保存模型：{selection}。启用前请先测试 CLI。");
         await RefreshDeepSeekAsync();
     }
 
@@ -54,7 +54,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         var provider = await App.Services.GetRequiredService<IProviderRepository>().GetAsync(OpenCodeZenProviderId);
         if (provider is null || string.IsNullOrWhiteSpace(provider.ModelId))
         {
-            ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Refresh models and choose a model first.");
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "尚未选择模型", "请先刷新模型并选择一个模型。");
             return;
         }
 
@@ -64,7 +64,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             await App.Services.GetRequiredService<IProviderRepository>().UpsertAsync(provider with { IsEnabled = true, UpdatedAt = DateTimeOffset.UtcNow });
         }
         ShowOpenCodeZen(result.Succeeded ? InfoBarSeverity.Success : InfoBarSeverity.Error,
-            result.Succeeded ? "OpenCode Zen catalog ready" : "OpenCode Zen test failed", result.Message);
+            result.Succeeded ? "OpenCode Zen 目录已就绪" : "OpenCode Zen 测试失败", result.Message);
     }
 
     private async Task RefreshOpenCodeZenAsync()
@@ -77,26 +77,26 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             OpenCodeZenModelComboBox.SelectedItem = entry.Models.FirstOrDefault(model => string.Equals(model.Id, provider.ModelId, StringComparison.Ordinal));
             if (entry.AuthState == ProviderAuthState.Missing)
             {
-                ShowOpenCodeZen(InfoBarSeverity.Warning, "OpenCode Zen login required", entry.Status);
+                ShowOpenCodeZen(InfoBarSeverity.Warning, "需要登录 OpenCode Zen", entry.Status);
                 return;
             }
             if (entry.AuthState == ProviderAuthState.Unavailable)
             {
-                ShowOpenCodeZen(InfoBarSeverity.Error, "OpenCode Zen auth probe unavailable", entry.Status);
+                ShowOpenCodeZen(InfoBarSeverity.Error, "OpenCode Zen 登录探测不可用", entry.Status);
                 return;
             }
             if (string.IsNullOrWhiteSpace(provider.ModelId))
             {
-                ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Choose a discovered model before running a Worker.");
+                ShowOpenCodeZen(InfoBarSeverity.Warning, "尚未选择模型", "请先选择已发现的模型，再运行 Worker。");
             }
             else if (!entry.Models.Any(model => string.Equals(model.Id, provider.ModelId, StringComparison.Ordinal)))
             {
-                ShowOpenCodeZen(InfoBarSeverity.Warning, "Saved model is no longer available", $"{provider.ModelId} disappeared from the refreshed Zen catalog. Reselect a model; the saved selection was preserved.");
+                ShowOpenCodeZen(InfoBarSeverity.Warning, "已保存模型不再可用", $"{provider.ModelId} 已从刷新后的 Zen 目录中消失。请重新选择模型；原保存选择已保留。");
             }
         }
         catch (Exception exception)
         {
-            ShowOpenCodeZen(InfoBarSeverity.Error, "OpenCode Zen model refresh failed", exception.Message);
+            ShowOpenCodeZen(InfoBarSeverity.Error, "OpenCode Zen 模型刷新失败", exception.Message);
         }
     }
 

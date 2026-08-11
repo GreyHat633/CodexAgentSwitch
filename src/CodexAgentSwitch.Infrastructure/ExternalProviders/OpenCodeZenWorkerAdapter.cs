@@ -22,7 +22,7 @@ public sealed class OpenCodeZenWorkerAdapter(
     {
         if (!provider.IsEnabled)
         {
-            return new WorkerCapabilities(AdapterId, false, [], 1, ["OpenCode Zen provider is disabled."]);
+            return new WorkerCapabilities(AdapterId, false, [], 1, ["OpenCode Zen 服务商已停用。"]);
         }
 
         try
@@ -41,9 +41,9 @@ public sealed class OpenCodeZenWorkerAdapter(
             var missingSelection = string.IsNullOrWhiteSpace(provider.ModelId);
             var disappeared = !missingSelection && !models.Contains(provider.ModelId, StringComparer.Ordinal);
             var warnings = missingSelection
-                ? new[] { "OpenCode Zen model selection is missing; refresh models and choose one." }
+                ? new[] { "OpenCode Zen 尚未选择模型；请刷新模型并选择一个。" }
                 : disappeared
-                    ? new[] { $"Saved OpenCode Zen model '{provider.ModelId}' is no longer in the refreshed catalog; reselect a model." }
+                    ? new[] { $"已保存的 OpenCode Zen 模型“{provider.ModelId}”不在刷新后的目录中；请重新选择模型。" }
                 : Array.Empty<string>();
             return new WorkerCapabilities(AdapterId, capabilities.Length > 0 && warnings.Length == 0, capabilities, 1, warnings)
             {
@@ -73,20 +73,20 @@ public sealed class OpenCodeZenWorkerAdapter(
         cancellationToken.ThrowIfCancellationRequested();
         if (!provider.IsEnabled)
         {
-            throw new InvalidOperationException("OpenCode Zen provider is disabled.");
+            throw new InvalidOperationException("OpenCode Zen 服务商已停用。");
         }
 
         var modelId = string.IsNullOrWhiteSpace(task.ModelId) ? provider.ModelId : task.ModelId;
         if (string.IsNullOrWhiteSpace(modelId))
         {
-            throw new InvalidOperationException("OpenCode Zen model selection is missing; refresh models and choose one.");
+            throw new InvalidOperationException("OpenCode Zen 尚未选择模型；请刷新模型并选择一个。");
         }
 
         var id = Guid.NewGuid().ToString("D");
         var job = new WorkerJob(AdapterId, id, $"external-{id}", $"request-{id}", task.TaskId,
             WorkerJobStatus.Starting, clock.UtcNow, null, null);
         var runtime = new Runtime(task, modelId, job);
-        if (!jobs.TryAdd(id, runtime)) throw new InvalidOperationException("Unable to register OpenCode Zen worker job.");
+        if (!jobs.TryAdd(id, runtime)) throw new InvalidOperationException("无法登记 OpenCode Zen Worker 任务。");
         _ = Task.Run(() => ExecuteAsync(runtime));
         return Task.FromResult(job);
     }
@@ -111,7 +111,7 @@ public sealed class OpenCodeZenWorkerAdapter(
         cancellationToken.ThrowIfCancellationRequested();
         _ = Get(jobId);
         if (request.Kind == WorkerSteerKind.ContinueWaiting) return Task.CompletedTask;
-        throw new NotSupportedException("OpenCode CLI workers do not support mid-turn steering.");
+        throw new NotSupportedException("OpenCode CLI Worker 不支持回合中途转向。");
     }
 
     public Task CancelAsync(string jobId, CancellationToken cancellationToken = default)
@@ -126,7 +126,7 @@ public sealed class OpenCodeZenWorkerAdapter(
         cancellationToken.ThrowIfCancellationRequested();
         var runtime = Get(jobId);
         if (runtime.Job.Status is WorkerJobStatus.Starting or WorkerJobStatus.Running)
-            throw new InvalidOperationException("Running OpenCode CLI workers cannot be deleted.");
+            throw new InvalidOperationException("运行中的 OpenCode CLI Worker 不能删除。");
         if (jobs.TryRemove(jobId, out var removed)) removed.Cancellation.Dispose();
         return Task.CompletedTask;
     }
@@ -141,30 +141,30 @@ public sealed class OpenCodeZenWorkerAdapter(
     {
         try
         {
-            runtime.Job = runtime.Job with { Status = WorkerJobStatus.Running, StatusMessage = "OpenCode CLI request running." };
+            runtime.Job = runtime.Job with { Status = WorkerJobStatus.Running, StatusMessage = "OpenCode CLI 请求运行中。" };
             var result = await processRunner.RunAsync(runtime.Task.WorkingDirectory,
                 OpenCodeZenCatalog.InvocationModel(runtime.ModelId), runtime.Task.Prompt, runtime.Cancellation.Token);
             var status = result.ExitCode == 0 ? WorkerJobStatus.Completed : WorkerJobStatus.Failed;
-            runtime.Job = runtime.Job with { Status = status, CompletedAt = clock.UtcNow, StatusMessage = result.ExitCode == 0 ? "completed" : result.StandardError };
+            runtime.Job = runtime.Job with { Status = status, CompletedAt = clock.UtcNow, StatusMessage = result.ExitCode == 0 ? "已完成" : result.StandardError };
             Complete(runtime, new WorkerResult(runtime.Task.TaskId, status, result.ExitCode == 0 ? result.StandardOutput : result.StandardError,
                 JsonSerializer.SerializeToElement(new { result.ExitCode, result.StandardOutput, result.StandardError }),
-                status == WorkerJobStatus.Completed ? [] : ["OpenCode CLI failed"],
+                status == WorkerJobStatus.Completed ? [] : ["OpenCode CLI 执行失败"],
                 status == WorkerJobStatus.Completed ? [] : [result.StandardError], provider.Id, provider.Name,
                 null, runtime.ModelId, null, status == WorkerJobStatus.Completed ? null : "ProcessFailed"));
         }
         catch (OperationCanceledException)
         {
-            runtime.Job = runtime.Job with { Status = WorkerJobStatus.Interrupted, CompletedAt = clock.UtcNow, StatusMessage = "OpenCode CLI request cancelled." };
-            Complete(runtime, new WorkerResult(runtime.Task.TaskId, WorkerJobStatus.Interrupted, "OpenCode CLI request cancelled.", null, [], [], provider.Id, provider.Name, null, runtime.ModelId, null, "Cancelled"));
+            runtime.Job = runtime.Job with { Status = WorkerJobStatus.Interrupted, CompletedAt = clock.UtcNow, StatusMessage = "OpenCode CLI 请求已取消。" };
+            Complete(runtime, new WorkerResult(runtime.Task.TaskId, WorkerJobStatus.Interrupted, "OpenCode CLI 请求已取消。", null, [], [], provider.Id, provider.Name, null, runtime.ModelId, null, "Cancelled"));
         }
         catch (Exception exception)
         {
             runtime.Job = runtime.Job with { Status = WorkerJobStatus.Failed, CompletedAt = clock.UtcNow, StatusMessage = exception.Message };
-            Complete(runtime, new WorkerResult(runtime.Task.TaskId, WorkerJobStatus.Failed, exception.Message, null, ["OpenCode CLI unavailable"], [exception.GetType().Name], provider.Id, provider.Name, null, runtime.ModelId, null, exception.GetType().Name));
+            Complete(runtime, new WorkerResult(runtime.Task.TaskId, WorkerJobStatus.Failed, exception.Message, null, ["OpenCode CLI 不可用"], [exception.GetType().Name], provider.Id, provider.Name, null, runtime.ModelId, null, exception.GetType().Name));
         }
     }
 
-    private Runtime Get(string id) => jobs.TryGetValue(id, out var runtime) ? runtime : throw new KeyNotFoundException($"OpenCode Zen worker job not found: {id}");
+    private Runtime Get(string id) => jobs.TryGetValue(id, out var runtime) ? runtime : throw new KeyNotFoundException($"找不到 OpenCode Zen Worker 任务：{id}");
 
     private static void Complete(Runtime runtime, WorkerResult result) { runtime.Result = result; runtime.Completion.TrySetResult(result); }
 

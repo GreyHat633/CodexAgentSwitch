@@ -104,7 +104,7 @@ public sealed class ProviderRegistry(
             ?? BuiltIn(providerId);
         if (provider is null)
         {
-            throw new KeyNotFoundException($"Provider '{providerId}' was not found.");
+            throw new KeyNotFoundException($"找不到服务商“{providerId}”。");
         }
 
         var auth = await ReadAuthAsync(provider, cancellationToken);
@@ -136,12 +136,12 @@ public sealed class ProviderRegistry(
     {
         if (string.IsNullOrWhiteSpace(modelId))
         {
-            throw new ArgumentException("Model ID is required.", nameof(modelId));
+            throw new ArgumentException("模型 ID 不能为空。", nameof(modelId));
         }
 
         var provider = await repository.GetAsync(providerId, cancellationToken)
             ?? BuiltIn(providerId)
-            ?? throw new KeyNotFoundException($"Provider '{providerId}' was not found.");
+            ?? throw new KeyNotFoundException($"找不到服务商“{providerId}”。");
         var updated = provider with
         {
             ModelId = modelId.Trim(),
@@ -167,14 +167,14 @@ public sealed class ProviderRegistry(
     {
         if (provider.Kind == ProviderKind.NativeCodex)
         {
-            return new(true, true, "Codex Desktop authentication.");
+            return new(true, true, "Codex 桌面应用已完成身份验证。");
         }
 
         if (provider.Kind == ProviderKind.OpenCodeZen)
         {
             if (openCodeAuthProbe is null)
             {
-                return new(false, false, "OpenCode CLI auth probe is unavailable; run 'opencode auth login'.");
+                return new(false, false, "无法使用 OpenCode CLI 登录探测；请运行 'opencode auth login'。");
             }
 
             try
@@ -183,7 +183,7 @@ public sealed class ProviderRegistry(
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                return new(false, false, "OpenCode CLI auth probe timed out; retry or run 'opencode auth login'.");
+                return new(false, false, "OpenCode CLI 登录探测超时；请重试或运行 'opencode auth login'。");
             }
             catch (OperationCanceledException)
             {
@@ -191,15 +191,15 @@ public sealed class ProviderRegistry(
             }
             catch (Exception exception)
             {
-                return new(false, false, $"OpenCode CLI auth probe failed: {exception.Message}");
+                return new(false, false, $"OpenCode CLI 登录探测失败：{exception.Message}");
             }
         }
 
         var configured = !string.IsNullOrWhiteSpace(provider.CredentialReference)
             && await credentials.ExistsAsync(provider.CredentialReference!, cancellationToken);
         return configured
-            ? new(true, true, "Provider credential is configured.")
-            : new(true, false, "Provider API key is not configured.");
+            ? new(true, true, "服务商凭据已配置。")
+            : new(true, false, "服务商 API 密钥尚未配置。");
     }
 
     private static ProviderRegistryEntry BuildEntry(
@@ -228,12 +228,12 @@ public sealed class ProviderRegistry(
         var state = !auth.IsAvailable
             ? ProviderAuthState.Unavailable
             : auth.IsAuthenticated ? (provider.Kind == ProviderKind.NativeCodex ? ProviderAuthState.NotRequired : ProviderAuthState.Authenticated) : ProviderAuthState.Missing;
-        var disabledPrefix = provider.IsEnabled ? string.Empty : "Disabled · ";
+        var disabledPrefix = provider.IsEnabled ? string.Empty : "已停用 · ";
         var status = refreshFailed
-            ? $"Model refresh failed: {refreshError ?? auth.Message}"
+            ? $"模型刷新失败：{refreshError ?? auth.Message}"
             : state is ProviderAuthState.Missing or ProviderAuthState.Unavailable
                 ? disabledPrefix + auth.Message
-                : provider.IsEnabled ? "Enabled" : "Disabled";
+                : provider.IsEnabled ? "已启用" : "已停用";
         return new ProviderRegistryEntry(provider, options, state, status, refreshFailed, refreshError);
     }
 

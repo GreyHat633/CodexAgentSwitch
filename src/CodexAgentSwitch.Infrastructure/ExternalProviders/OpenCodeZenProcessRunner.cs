@@ -40,7 +40,7 @@ public sealed class OpenCodeZenProcessRunner : IOpenCodeProcessRunner
         if (result.ExitCode != 0)
         {
             return new OpenCodeProbeResult(true, false,
-                $"OpenCode CLI auth probe failed (exit {result.ExitCode}); run 'opencode auth login' and retry.");
+                $"OpenCode CLI 登录探测失败（退出码 {result.ExitCode}）；请运行 'opencode auth login' 后重试。");
         }
 
         var output = Regex.Replace($"{result.StandardOutput}\n{result.StandardError}", "\\x1B\\[[0-9;]*[A-Za-z]", string.Empty).Trim();
@@ -62,8 +62,8 @@ public sealed class OpenCodeZenProcessRunner : IOpenCodeProcessRunner
             || Regex.IsMatch(output, "(^|\\n)\\s*0\\s+credentials?\\s*($|\\n)", RegexOptions.IgnoreCase)
             || !hasZenProvider;
         return notAuthenticated
-            ? new OpenCodeProbeResult(true, false, "OpenCode CLI is installed, but no OpenCode login was found. Run 'opencode auth login'.")
-            : new OpenCodeProbeResult(true, true, "OpenCode CLI is installed and an existing login was found.");
+            ? new OpenCodeProbeResult(true, false, "OpenCode CLI 已安装，但未找到 OpenCode 登录。请运行 'opencode auth login'。")
+            : new OpenCodeProbeResult(true, true, "OpenCode CLI 已安装，已找到现有登录。");
     }
 
     public async Task<OpenCodeProcessResult> RunAsync(
@@ -96,7 +96,7 @@ public sealed class OpenCodeZenProcessRunner : IOpenCodeProcessRunner
         {
             if (!process.Start())
             {
-                throw new InvalidOperationException("OpenCode CLI could not be started; install 'opencode' and ensure it is on PATH.");
+                throw new InvalidOperationException("无法启动 OpenCode CLI；请安装 'opencode' 并确保它位于 PATH 中。");
             }
 
             using var registration = cancellationToken.Register(() =>
@@ -117,7 +117,7 @@ public sealed class OpenCodeZenProcessRunner : IOpenCodeProcessRunner
         }
         catch (Win32Exception exception)
         {
-            throw new InvalidOperationException("OpenCode CLI is missing or unavailable on PATH.", exception);
+            throw new InvalidOperationException("PATH 中缺少或无法使用 OpenCode CLI。", exception);
         }
     }
 
