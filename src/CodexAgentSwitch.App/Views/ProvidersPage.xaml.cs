@@ -17,6 +17,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
     private const string ProviderId = "deepseek-default";
     private const string CredentialReference = "provider/deepseek-default";
     private const string OpenCodeZenProviderId = "opencode-zen";
+    private const string OpenCodeZenCredentialReference = OpenCodeZenCatalog.CredentialReference;
     private bool workerTestInProgress;
 
     public ProvidersPage()
@@ -44,9 +45,27 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         }
 
         var repository = App.Services.GetRequiredService<IProviderRepository>();
+        var credentials = App.Services.GetRequiredService<ICredentialStore>();
         var existing = await repository.GetAsync(OpenCodeZenProviderId) ?? ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow);
-        await repository.UpsertAsync(existing with { ModelId = selection, UpdatedAt = DateTimeOffset.UtcNow });
-        ShowOpenCodeZen(InfoBarSeverity.Success, "OpenCode Zen selection saved", $"Selected model: {selection}. Test the CLI before enabling it.");
+        if (!OpenCodeZenCatalog.IsSupported(selection))
+        {
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "Unsupported model", "Select a model supported by the Chat Completions runtime.");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(OpenCodeZenApiKeyBox.Password))
+        {
+            await credentials.SaveAsync(OpenCodeZenCredentialReference, OpenCodeZenApiKeyBox.Password);
+        }
+
+        await repository.UpsertAsync(existing with
+        {
+            CredentialReference = OpenCodeZenCredentialReference,
+            ModelId = selection,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        OpenCodeZenApiKeyBox.Password = string.Empty;
+        ShowOpenCodeZen(InfoBarSeverity.Success, "OpenCode Zen API settings saved", $"Selected model: {selection}. Test it before enabling.");
         await RefreshDeepSeekAsync();
     }
 
@@ -59,13 +78,19 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             return;
         }
 
+        if (!OpenCodeZenCatalog.IsSupported(provider.ModelId))
+        {
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "Unsupported model", "Refresh models and choose a supported Chat Completions model first.");
+            return;
+        }
+
         var result = await App.Services.GetRequiredService<IExternalProviderClient>().TestConnectionAsync(provider);
         if (result.Succeeded)
         {
             await App.Services.GetRequiredService<IProviderRepository>().UpsertAsync(provider with { IsEnabled = true, UpdatedAt = DateTimeOffset.UtcNow });
         }
         ShowOpenCodeZen(result.Succeeded ? InfoBarSeverity.Success : InfoBarSeverity.Error,
-            result.Succeeded ? "OpenCode Zen catalog ready" : "OpenCode Zen test failed", result.Message);
+            result.Succeeded ? "OpenCode Zen API enabled" : "OpenCode Zen API test failed", result.Message);
     }
 
     private async Task RefreshOpenCodeZenAsync()

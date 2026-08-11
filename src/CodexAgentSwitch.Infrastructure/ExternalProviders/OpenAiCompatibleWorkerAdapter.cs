@@ -65,6 +65,17 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
 
         try
         {
+            if (provider.Kind == ProviderKind.OpenCodeZen
+                && !await client.HasCredentialAsync(provider, cancellationToken))
+            {
+                return WithToolCapabilities(new WorkerCapabilities(
+                    AdapterId,
+                    false,
+                    [],
+                    3,
+                    ["OpenCode Zen API Key is missing from Windows Credential Manager."]));
+            }
+
             var discovered = await client.ListModelsAsync(provider, cancellationToken);
             if (provider.Kind == ProviderKind.DeepSeek)
             {
@@ -76,9 +87,20 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
             }
 
             var models = discovered.Select(ToCapability).ToArray();
-            if (models.Length == 0 && !string.IsNullOrWhiteSpace(provider.ModelId))
+            if (models.Length == 0
+                && provider.Kind != ProviderKind.OpenCodeZen
+                && !string.IsNullOrWhiteSpace(provider.ModelId))
             {
                 models = [ToCapability(provider.ModelId)];
+            }
+
+            if (provider.Kind == ProviderKind.OpenCodeZen
+                && (string.IsNullOrWhiteSpace(provider.ModelId)
+                    || !OpenCodeZenCatalog.IsSupported(provider.ModelId)
+                    || !models.Any(model => string.Equals(model.Id, provider.ModelId, StringComparison.Ordinal))))
+            {
+                return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, models, 3,
+                    ["OpenCode Zen model is missing or was not returned by the official Chat Completions catalog."]));
             }
 
             if (provider.Kind == ProviderKind.DeepSeek
@@ -96,6 +118,17 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
             var models = provider.Kind == ProviderKind.DeepSeek
                 ? DeepSeekV4Catalog.Models.Select(model => ToCapability(model.Id)).ToArray()
                 : string.IsNullOrWhiteSpace(provider.ModelId) ? [] : new[] { ToCapability(provider.ModelId) };
+            if (provider.Kind == ProviderKind.OpenCodeZen)
+            {
+                if (string.IsNullOrWhiteSpace(provider.ModelId) || !OpenCodeZenCatalog.IsSupported(provider.ModelId))
+                {
+                    return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, [], 3,
+                        ["OpenCode Zen model discovery is unavailable; choose a supported model after refreshing the official catalog."]));
+                }
+
+                return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, models, 3,
+                    ["OpenCode Zen model discovery is unavailable; refresh the official catalog before running a Worker."]));
+            }
             if (provider.Kind == ProviderKind.DeepSeek
                 && provider.ModelId is not null
                 && DeepSeekV4Catalog.TryGet(provider.ModelId, out var selected)
@@ -125,10 +158,15 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
         }
 
         var modelId = string.IsNullOrWhiteSpace(task.ModelId) ? provider.ModelId : task.ModelId;
-        if (string.IsNullOrWhiteSpace(modelId))
-        {
-            throw new InvalidOperationException("外部 Worker 必须指定 Model ID。");
-        }
+            if (string.IsNullOrWhiteSpace(modelId))
+            {
+                throw new InvalidOperationException("外部 Worker 必须指定 Model ID。");
+            }
+
+            if (provider.Kind == ProviderKind.OpenCodeZen && !OpenCodeZenCatalog.IsSupported(modelId))
+            {
+                throw new InvalidOperationException("OpenCode Zen only supports the current Chat Completions model allowlist.");
+            }
 
         if (provider.Kind == ProviderKind.DeepSeek
             && DeepSeekV4Catalog.TryGet(modelId, out var selected)

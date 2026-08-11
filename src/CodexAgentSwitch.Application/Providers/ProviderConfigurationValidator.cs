@@ -79,9 +79,8 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
             }
         }
 
-        if (provider.Kind != ProviderKind.OpenCodeZen
-            && (string.IsNullOrWhiteSpace(provider.CredentialReference)
-                || !await credentialStore.ExistsAsync(provider.CredentialReference!, cancellationToken)))
+        if (string.IsNullOrWhiteSpace(provider.CredentialReference)
+            || !await credentialStore.ExistsAsync(provider.CredentialReference!, cancellationToken))
         {
             errors.Add("API Key 尚未保存到 Windows Credential Manager。");
         }
@@ -91,6 +90,13 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
             && !DeepSeekV4Catalog.TryGet(provider.ModelId, out _))
         {
             errors.Add("DeepSeek Provider only supports the DeepSeek V4 Flash and Pro catalog.");
+        }
+
+        if (provider.Kind == ProviderKind.OpenCodeZen
+            && !string.IsNullOrWhiteSpace(provider.ModelId)
+            && !OpenCodeZenCatalog.IsSupported(provider.ModelId))
+        {
+            errors.Add("OpenCode Zen only supports the current Chat Completions model allowlist.");
         }
 
         if (string.IsNullOrWhiteSpace(provider.ModelId))

@@ -1,7 +1,11 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using CodexAgentSwitch.Application.Abstractions;
 using CodexAgentSwitch.Application.Credentials;
+using CodexAgentSwitch.Application.ExternalAgents;
+using CodexAgentSwitch.Application.Workers;
+using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Domain.Workers;
 using CodexAgentSwitch.Infrastructure.ExternalProviders;
@@ -11,133 +15,200 @@ namespace CodexAgentSwitch.Tests.ExternalProviders;
 
 public sealed class OpenCodeZenTests
 {
-    [Fact]
-    public void Auth_probe_rejects_unrelated_provider_and_accepts_zen_marker()
-    {
-        var empty = OpenCodeZenProcessRunner.ClassifyAuthResult(new OpenCodeProcessResult(
-            0,
-            "Credentials ~\\.local\\share\\opencode\\auth.json\n0 credentials",
-            ""));
-        var unrelated = OpenCodeZenProcessRunner.ClassifyAuthResult(new OpenCodeProcessResult(
-            0,
-            "Credentials ~\\.local\\share\\opencode\\auth.json\nGitHub: logged in",
-            ""));
-        var zen = OpenCodeZenProcessRunner.ClassifyAuthResult(new OpenCodeProcessResult(
-            0,
-            "Credentials ~\\.local\\share\\opencode\\auth.json\nOpenCode Zen: logged in",
-            ""));
-
-        Assert.False(empty.IsAuthenticated);
-        Assert.False(unrelated.IsAuthenticated);
-        Assert.True(zen.IsAuthenticated);
-    }
+    private const string Secret = "zen-test-secret";
 
     [Fact]
-    public async Task Discovery_uses_official_data_ids_without_credentials()
+    public void Preset_uses_stable_reference_exact_endpoint_and_chat_allowlist()
     {
-        var handler = new Handler((request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("{\"data\":[{\"id\":\"zen-a\"},{\"id\":\"zen-a\"},{\"id\":\"zen-b\"}]}", Encoding.UTF8, "application/json"),
-        }));
-        var client = new OpenAiCompatibleClient(new HttpClient(handler), new EmptyCredentials());
         var provider = ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow);
 
-        var models = await client.ListModelsAsync(provider);
-
-        Assert.Equal(["zen-a", "zen-b"], models);
-        Assert.Null(handler.Last!.Headers.Authorization);
+        Assert.Equal("provider/opencode-zen", provider.CredentialReference);
+        Assert.Equal("https://opencode.ai/zen/v1", provider.BaseUri?.AbsoluteUri.TrimEnd('/'));
+        Assert.All(OpenCodeZenCatalog.Models, model => Assert.True(model.Supports(ProviderProtocol.ChatCompletions)));
+        Assert.DoesNotContain(OpenCodeZenCatalog.Models, model => model.Supports(ProviderProtocol.Responses));
     }
 
     [Fact]
-    public async Task Connection_test_probes_auth_before_catalog_without_model_request()
+    public async Task ListModels_uses_official_endpoint_and_filters_exact_allowlist()
     {
-        var handler = new Handler((request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        var handler = new Handler((request, _) =>
         {
-            Content = new StringContent("{\"data\":[{\"id\":\"zen-a\"}]}", Encoding.UTF8, "application/json"),
-        }));
-        var runner = new RecordingRunner();
-        var client = new OpenAiCompatibleClient(new HttpClient(handler), new EmptyCredentials(), runner);
-        var provider = ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow) with { ModelId = "zen-a" };
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("https://opencode.ai/zen/v1/models", request.RequestUri?.AbsoluteUri);
+            Assert.Null(request.Headers.Authorization);
+            return Task.FromResult(Json("{\"data\":[{\"id\":\"deepseek-v4-flash\"},{\"id\":\"future-unknown\"},{\"id\":\"deepseek-v4-flash\"},{\"id\":\"kimi-k3\"}]}"));
+        });
+        var client = new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentials(Secret));
+
+        var models = await client.ListModelsAsync(ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow));
+
+        Assert.Equal(["deepseek-v4-flash", "kimi-k3"], models);
+    }
+
+    [Fact]
+    public async Task TestConnection_uses_chat_completions_and_never_cli()
+    {
+        var paths = new List<string>();
+        var handler = new Handler(async (request, _) =>
+        {
+            paths.Add(request.RequestUri!.AbsolutePath);
+            if (request.RequestUri.AbsolutePath.EndsWith("/models", StringComparison.Ordinal))
+            {
+                Assert.Null(request.Headers.Authorization);
+                return Json("{\"data\":[{\"id\":\"kimi-k3\"}]}");
+            }
+
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(Secret, request.Headers.Authorization?.Parameter);
+            var body = await request.Content!.ReadAsStringAsync();
+            Assert.Contains("\"model\":\"kimi-k3\"", body);
+            Assert.DoesNotContain(Secret, body);
+            return Json("{\"model\":\"kimi-k3\",\"choices\":[{\"message\":{\"content\":\"OK\"}}]}");
+        });
+        var client = new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentials(Secret));
+        var provider = ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow) with { ModelId = "kimi-k3" };
 
         var result = await client.TestConnectionAsync(provider);
 
         Assert.True(result.Succeeded);
-        Assert.True(runner.ProbeCalled);
-        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(["/zen/v1/models", "/zen/v1/chat/completions"], paths);
+        Assert.DoesNotContain(Secret, JsonSerializer.Serialize(provider));
+        Assert.DoesNotContain(Secret, result.Message);
     }
 
     [Fact]
-    public async Task Cli_adapter_prefixes_only_at_invocation_and_preserves_selection()
+    public async Task Missing_credential_fails_before_any_request()
     {
-        var runner = new RecordingRunner();
-        var provider = ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow) with { IsEnabled = true, ModelId = "zen-a" };
-        await using var adapter = new OpenCodeZenWorkerAdapter(provider, null!, runner, new Clock());
-        var job = await adapter.SpawnAsync(new WorkerTask("g", "t", "obj", "hello", Environment.CurrentDirectory, "zen-a", "none", new WorkerScope([], [], [ScopeOperation.Read]), [], [], []));
-        var result = await adapter.WaitAsync(job.JobId, TimeSpan.FromSeconds(2));
+        var handler = new Handler((_, _) => throw new InvalidOperationException("CLI must not be called"));
+        var client = new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentials(null));
+        var result = await client.TestConnectionAsync(ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow) with { ModelId = "kimi-k3" });
 
-        Assert.NotNull(result);
-        Assert.Equal("opencode/zen-a", runner.Model);
-        Assert.Equal(Environment.CurrentDirectory, runner.WorkingDirectory);
-        Assert.Equal("zen-a", result!.ResponseModelId);
+        Assert.False(result.Succeeded);
+        Assert.Equal(ProviderErrorKind.Authentication, result.ErrorKind);
+        Assert.Equal(0, handler.CallCount);
     }
 
     [Fact]
-    public async Task Capabilities_mark_disappeared_saved_model_unavailable_without_replacing_it()
+    public void Factory_routes_zen_through_openai_compatible_worker_adapter()
     {
-        var handler = new Handler((request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        var client = new OpenAiCompatibleClient(new HttpClient(new Handler((_, _) => Task.FromResult(Json("{}")))), new FakeCredentials(Secret));
+        var factory = new ExternalWorkerAdapterFactory(client, new FakeClock());
+        var adapter = factory.Create(ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow));
+
+        Assert.IsType<OpenAiCompatibleWorkerAdapter>(adapter);
+    }
+
+    [Fact]
+    public async Task Capabilities_require_credential_even_when_catalog_is_public()
+    {
+        var handler = new Handler((_, _) => Task.FromResult(Json("{\"data\":[{\"id\":\"kimi-k3\"}]}")));
+        var client = new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentials(null));
+        var provider = ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow) with
         {
-            Content = new StringContent("{\"data\":[{\"id\":\"zen-b\"}]}", Encoding.UTF8, "application/json"),
-        }));
-        var provider = ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow) with { IsEnabled = true, ModelId = "zen-a" };
-        var client = new OpenAiCompatibleClient(new HttpClient(handler), new EmptyCredentials());
-        await using var adapter = new OpenCodeZenWorkerAdapter(provider, client, new RecordingRunner(), new Clock());
+            IsEnabled = true,
+            ModelId = "kimi-k3",
+        };
+        await using var adapter = new OpenAiCompatibleWorkerAdapter(provider, client, new FakeClock());
 
         var capabilities = await adapter.GetCapabilitiesAsync();
 
         Assert.False(capabilities.IsAvailable);
-        Assert.Contains(capabilities.Warnings, warning => warning.Contains("zen-a", StringComparison.Ordinal));
-        Assert.Equal("zen-a", provider.ModelId);
+        Assert.Contains(capabilities.Warnings, warning => warning.Contains("API Key", StringComparison.Ordinal));
+        Assert.Equal(0, handler.CallCount);
     }
 
     [Fact]
-    public async Task Sqlite_roundtrip_preserves_raw_selected_model_id()
+    public async Task Worker_uses_same_selected_provider_and_chat_completions_route()
+    {
+        var paths = new List<string>();
+        var handler = new Handler((request, _) =>
+        {
+            paths.Add(request.RequestUri!.AbsolutePath);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(Secret, request.Headers.Authorization?.Parameter);
+            return Task.FromResult(Json("{\"model\":\"kimi-k3\",\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ZEN_OK\"}}],\"usage\":{\"total_tokens\":3}}"));
+        });
+        var client = new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentials(Secret));
+        var factory = new ExternalWorkerAdapterFactory(client, new FakeClock());
+        var provider = ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow) with
+        {
+            IsEnabled = true,
+            ModelId = "kimi-k3",
+        };
+        await using var adapter = (OpenAiCompatibleWorkerAdapter)factory.Create(provider);
+        var task = new WorkerTask(
+            "zen-group",
+            "zen-group-L1",
+            "test",
+            "Reply with ZEN_OK.",
+            Environment.CurrentDirectory,
+            "kimi-k3",
+            "none",
+            new WorkerScope([], [], [ScopeOperation.Read]),
+            ["ZEN_OK"],
+            ["completed"],
+            []);
+
+        var job = await adapter.SpawnAsync(task);
+        var result = await adapter.WaitAsync(job.JobId, TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(result);
+        Assert.Equal(WorkerJobStatus.Completed, result.Status);
+        Assert.Equal("ZEN_OK", result.Summary);
+        Assert.Equal("opencode-zen", result.ProviderId);
+        Assert.Equal(new Uri("https://opencode.ai/zen/v1/chat/completions"), result.RequestUri);
+        Assert.Equal(["/zen/v1/chat/completions"], paths);
+    }
+
+    [Fact]
+    public async Task Sqlite_roundtrip_persists_selection_and_reference_without_secret()
     {
         var root = Environment.GetEnvironmentVariable("CAS_TEST_ROOT");
         if (string.IsNullOrWhiteSpace(root)) return;
-        var path = Path.Combine(root!, $"zen-{Guid.NewGuid():N}.db");
+
+        var path = Path.Combine(root, $"zen-{Guid.NewGuid():N}.db");
         var database = new SqliteDatabase(path);
         await database.InitializeAsync();
         var repository = new SqliteProviderRepository(database);
-        var provider = ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow) with { ModelId = "vendor/model.raw" };
+        var provider = ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow) with
+        {
+            ModelId = "kimi-k3",
+            IsEnabled = true,
+        };
 
         await repository.UpsertAsync(provider);
         var loaded = await repository.GetAsync(provider.Id);
 
-        Assert.Equal("vendor/model.raw", loaded?.ModelId);
+        Assert.Equal("kimi-k3", loaded?.ModelId);
+        Assert.Equal(OpenCodeZenCatalog.CredentialReference, loaded?.CredentialReference);
+        Assert.DoesNotContain(Secret, JsonSerializer.Serialize(loaded));
     }
+
+    private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, Encoding.UTF8, "application/json"),
+    };
 
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler
     {
-        public HttpRequestMessage? Last { get; private set; }
         public int CallCount { get; private set; }
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) { Last = request; CallCount++; return callback(request, cancellationToken); }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return callback(request, cancellationToken);
+        }
     }
-    private sealed class EmptyCredentials : ICredentialStore
+
+    private sealed class FakeCredentials(string? secret) : ICredentialStore
     {
-        public Task<bool> ExistsAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult(false);
+        public Task<bool> ExistsAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult(secret is not null);
         public Task SaveAsync(string referenceId, string value, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<string?> ReadAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
+        public Task<string?> ReadAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult(secret);
         public Task DeleteAsync(string referenceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
-    private sealed class RecordingRunner : IOpenCodeProcessRunner
+
+    private sealed class FakeClock : IClock
     {
-        public string? Model { get; private set; }
-        public string? WorkingDirectory { get; private set; }
-        public bool ProbeCalled { get; private set; }
-        public Task<OpenCodeProbeResult> ProbeAsync(string workingDirectory, CancellationToken cancellationToken = default)
-        { ProbeCalled = true; return Task.FromResult(new OpenCodeProbeResult(true, true, "ok")); }
-        public Task<OpenCodeProcessResult> RunAsync(string workingDirectory, string model, string prompt, CancellationToken cancellationToken = default)
-        { WorkingDirectory = workingDirectory; Model = model; return Task.FromResult(new OpenCodeProcessResult(0, "ok", "")); }
+        public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
     }
-    private sealed class Clock : IClock { public DateTimeOffset UtcNow => DateTimeOffset.UtcNow; }
 }

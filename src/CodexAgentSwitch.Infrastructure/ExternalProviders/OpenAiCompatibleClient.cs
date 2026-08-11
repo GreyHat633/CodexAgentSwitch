@@ -32,8 +32,7 @@ public sealed class ProviderRequestException(
 }
 public sealed class OpenAiCompatibleClient(
     HttpClient httpClient,
-    ICredentialStore credentialStore,
-    IOpenCodeProcessRunner? openCodeProcessRunner = null) : IExternalProviderClient
+    ICredentialStore credentialStore) : IExternalProviderClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -41,55 +40,25 @@ public sealed class OpenAiCompatibleClient(
         ProviderConfiguration provider,
         CancellationToken cancellationToken = default)
     {
-        if (provider.Kind == ProviderKind.OpenCodeZen)
-        {
-            var zenStopwatch = Stopwatch.StartNew();
-            try
-            {
-                if (openCodeProcessRunner is null)
-                {
-                    return new ProviderConnectionResult(false, ProviderErrorKind.ServiceUnavailable,
-                        "OpenCode CLI probe is not configured.", zenStopwatch.Elapsed, null, null, [], true);
-                }
-
-                var probe = await openCodeProcessRunner.ProbeAsync(Environment.CurrentDirectory, cancellationToken);
-                if (!probe.IsAvailable || !probe.IsAuthenticated)
-                {
-                    return new ProviderConnectionResult(false, ProviderErrorKind.Authentication,
-                        probe.Message, zenStopwatch.Elapsed, null, null, [], true);
-                }
-
-                var zenModels = (await ListModelsAsync(provider, cancellationToken)).ToArray();
-                if (string.IsNullOrWhiteSpace(provider.ModelId))
-                {
-                    return new ProviderConnectionResult(false, ProviderErrorKind.InvalidConfiguration,
-                        "OpenCode Zen model selection is missing; refresh models and choose one.", zenStopwatch.Elapsed,
-                        null, null, zenModels, true);
-                }
-
-                if (!zenModels.Contains(provider.ModelId, StringComparer.Ordinal))
-                {
-                    return new ProviderConnectionResult(false, ProviderErrorKind.ModelUnavailable,
-                        $"OpenCode Zen model '{provider.ModelId}' was not returned by the official catalog.", zenStopwatch.Elapsed,
-                        null, null, zenModels, true);
-                }
-
-                return new ProviderConnectionResult(true, ProviderErrorKind.None,
-                    "OpenCode Zen model discovery succeeded; the OpenCode CLI will execute requests.", zenStopwatch.Elapsed,
-                    provider.ModelId, null, zenModels, true);
-            }
-            catch (ProviderRequestException exception)
-            {
-                return new ProviderConnectionResult(false, exception.Kind, exception.Message, zenStopwatch.Elapsed,
-                    null, null, [], true);
-            }
-        }
-
         var stopwatch = Stopwatch.StartNew();
         var models = Array.Empty<string>();
         var modelDiscoverySupported = true;
         try
         {
+            if (provider.Kind == ProviderKind.OpenCodeZen
+                && !await HasCredentialAsync(provider, cancellationToken))
+            {
+                return new ProviderConnectionResult(
+                    false,
+                    ProviderErrorKind.Authentication,
+                    "Windows Credential Manager 中找不到 OpenCode Zen API Key。",
+                    stopwatch.Elapsed,
+                    null,
+                    null,
+                    models,
+                    modelDiscoverySupported);
+            }
+
             try
             {
                 models = NormalizeModels(provider, await ListModelsAsync(provider, cancellationToken));
@@ -118,6 +87,21 @@ public sealed class OpenAiCompatibleClient(
                     null,
                     models,
                     modelDiscoverySupported);
+            }
+
+            if (provider.Kind == ProviderKind.OpenCodeZen && !OpenCodeZenCatalog.IsSupported(modelId))
+            {
+                return new ProviderConnectionResult(false, ProviderErrorKind.ModelUnavailable,
+                    $"OpenCode Zen model '{modelId}' is not supported by the Chat Completions runtime.",
+                    stopwatch.Elapsed, null, null, models, modelDiscoverySupported);
+            }
+
+            if (provider.Kind == ProviderKind.OpenCodeZen
+                && !models.Contains(modelId, StringComparer.Ordinal))
+            {
+                return new ProviderConnectionResult(false, ProviderErrorKind.ModelUnavailable,
+                    $"OpenCode Zen model '{modelId}' was not returned by the official catalog.",
+                    stopwatch.Elapsed, null, null, models, true);
             }
 
             var completion = await CompleteAsync(provider, modelId, "Reply with exactly OK.", cancellationToken);
@@ -149,7 +133,15 @@ public sealed class OpenAiCompatibleClient(
         ProviderConfiguration provider,
         CancellationToken cancellationToken = default)
     {
-        using var request = await CreateRequestAsync(provider, HttpMethod.Get, "models", cancellationToken);
+        // The official Zen catalog is public. Keeping discovery anonymous lets a
+        // first-time user refresh and select a supported model before saving a key,
+        // and avoids sending the secret on a request that does not need it.
+        using var request = await CreateRequestAsync(
+            provider,
+            HttpMethod.Get,
+            "models",
+            cancellationToken,
+            requireCredential: provider.Kind != ProviderKind.OpenCodeZen);
         using var response = await SendAsync(provider, request, cancellationToken);
         using var document = await ReadJsonAsync(response, cancellationToken);
         if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
@@ -157,12 +149,15 @@ public sealed class OpenAiCompatibleClient(
             throw new ProviderRequestException(ProviderErrorKind.Protocol, "Provider 的模型列表响应缺少 data 数组。", response.StatusCode);
         }
 
-        return data.EnumerateArray()
+        var models = data.EnumerateArray()
             .Select(item => item.TryGetProperty("id", out var id) ? id.GetString() : null)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Select(id => id!)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        return provider.Kind == ProviderKind.OpenCodeZen
+            ? OpenCodeZenCatalog.FilterSupported(models)
+            : models;
     }
 
     public async Task<ExternalCompletion> CompleteAsync(
@@ -253,22 +248,23 @@ public sealed class OpenAiCompatibleClient(
         ProviderConfiguration provider,
         HttpMethod method,
         string relativePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireCredential = true)
     {
         if (provider.BaseUri is null)
         {
             throw new ProviderRequestException(ProviderErrorKind.InvalidConfiguration, "Provider Base URL 未配置。");
         }
 
-        if (provider.Kind != ProviderKind.OpenCodeZen && string.IsNullOrWhiteSpace(provider.CredentialReference))
+        if (requireCredential && string.IsNullOrWhiteSpace(provider.CredentialReference))
         {
             throw new ProviderRequestException(ProviderErrorKind.InvalidConfiguration, "Provider API Key 引用未配置。");
         }
 
-        var secret = provider.Kind == ProviderKind.OpenCodeZen
+        var secret = !requireCredential || string.IsNullOrWhiteSpace(provider.CredentialReference)
             ? null
-            : await credentialStore.ReadAsync(provider.CredentialReference!, cancellationToken);
-        if (provider.Kind != ProviderKind.OpenCodeZen && string.IsNullOrWhiteSpace(secret))
+            : await credentialStore.ReadAsync(provider.CredentialReference, cancellationToken);
+        if (requireCredential && string.IsNullOrWhiteSpace(secret))
         {
             throw new ProviderRequestException(ProviderErrorKind.Authentication, "Windows Credential Manager 中找不到 Provider API Key。");
         }
@@ -289,6 +285,12 @@ public sealed class OpenAiCompatibleClient(
 
         return request;
     }
+
+    internal async Task<bool> HasCredentialAsync(
+        ProviderConfiguration provider,
+        CancellationToken cancellationToken = default) =>
+        !string.IsNullOrWhiteSpace(provider.CredentialReference)
+        && await credentialStore.ExistsAsync(provider.CredentialReference, cancellationToken);
 
     private async Task<HttpResponseMessage> SendAsync(
         ProviderConfiguration provider,

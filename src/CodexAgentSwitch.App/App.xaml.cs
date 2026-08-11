@@ -50,7 +50,6 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<ICredentialStore, WindowsCredentialStore>();
         services.AddSingleton<HttpClient>();
         services.AddSingleton<OpenAiCompatibleClient>();
-        services.AddSingleton<IOpenCodeProcessRunner, OpenCodeZenProcessRunner>();
         services.AddSingleton<IExternalProviderClient>(provider => provider.GetRequiredService<OpenAiCompatibleClient>());
         services.AddSingleton<IExternalToolHost, LocalExternalToolHost>();
         services.AddSingleton<IExternalWorkerAdapterFactory, ExternalWorkerAdapterFactory>();
