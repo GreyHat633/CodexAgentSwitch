@@ -51,7 +51,7 @@ public sealed class OpenAiCompatibleClient(
                 return new ProviderConnectionResult(
                     false,
                     ProviderErrorKind.Authentication,
-                    "Windows Credential Manager 中找不到 OpenCode Zen API Key。",
+                    "Windows Credential Manager 中找不到 OpenCode Zen API 密钥。",
                     stopwatch.Elapsed,
                     null,
                     null,
@@ -92,7 +92,7 @@ public sealed class OpenAiCompatibleClient(
             if (provider.Kind == ProviderKind.OpenCodeZen && !OpenCodeZenCatalog.IsSupported(modelId))
             {
                 return new ProviderConnectionResult(false, ProviderErrorKind.ModelUnavailable,
-                    $"OpenCode Zen model '{modelId}' is not supported by the Chat Completions runtime.",
+                    $"OpenCode Zen 模型“{modelId}”不受当前 Chat Completions 运行时支持。",
                     stopwatch.Elapsed, null, null, models, modelDiscoverySupported);
             }
 
@@ -100,7 +100,7 @@ public sealed class OpenAiCompatibleClient(
                 && !models.Contains(modelId, StringComparer.Ordinal))
             {
                 return new ProviderConnectionResult(false, ProviderErrorKind.ModelUnavailable,
-                    $"OpenCode Zen model '{modelId}' was not returned by the official catalog.",
+                    $"OpenCode Zen 官方目录未返回模型“{modelId}”。",
                     stopwatch.Elapsed, null, null, models, true);
             }
 

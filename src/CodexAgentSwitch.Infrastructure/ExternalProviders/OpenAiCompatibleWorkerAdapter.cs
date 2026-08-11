@@ -73,7 +73,7 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                     false,
                     [],
                     3,
-                    ["OpenCode Zen API Key is missing from Windows Credential Manager."]));
+                    ["Windows Credential Manager 中尚未保存 OpenCode Zen API 密钥。"]));
             }
 
             var discovered = await client.ListModelsAsync(provider, cancellationToken);
@@ -100,7 +100,7 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                     || !models.Any(model => string.Equals(model.Id, provider.ModelId, StringComparison.Ordinal))))
             {
                 return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, models, 3,
-                    ["OpenCode Zen model is missing or was not returned by the official Chat Completions catalog."]));
+                    ["尚未选择 OpenCode Zen 模型，或所选模型不在官方 Chat Completions 目录中。"]));
             }
 
             if (provider.Kind == ProviderKind.DeepSeek
@@ -123,11 +123,11 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                 if (string.IsNullOrWhiteSpace(provider.ModelId) || !OpenCodeZenCatalog.IsSupported(provider.ModelId))
                 {
                     return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, [], 3,
-                        ["OpenCode Zen model discovery is unavailable; choose a supported model after refreshing the official catalog."]));
+                        ["OpenCode Zen 模型发现当前不可用；请刷新官方目录后选择受支持的模型。"]));
                 }
 
                 return WithToolCapabilities(new WorkerCapabilities(AdapterId, false, models, 3,
-                    ["OpenCode Zen model discovery is unavailable; refresh the official catalog before running a Worker."]));
+                    ["OpenCode Zen 模型发现当前不可用；运行 Worker 前请先刷新官方目录。"]));
             }
             if (provider.Kind == ProviderKind.DeepSeek
                 && provider.ModelId is not null
@@ -165,7 +165,7 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
 
             if (provider.Kind == ProviderKind.OpenCodeZen && !OpenCodeZenCatalog.IsSupported(modelId))
             {
-                throw new InvalidOperationException("OpenCode Zen only supports the current Chat Completions model allowlist.");
+                throw new InvalidOperationException("OpenCode Zen 当前仅支持 Chat Completions 模型白名单中的模型。");
             }
 
         if (provider.Kind == ProviderKind.DeepSeek

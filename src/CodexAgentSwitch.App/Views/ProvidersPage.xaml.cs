@@ -40,7 +40,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         var selection = OpenCodeZenModelComboBox.SelectedItem as string;
         if (string.IsNullOrWhiteSpace(selection))
         {
-            ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Refresh models and choose an OpenCode Zen model before saving.");
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "尚未选择模型", "请先刷新模型并选择一个 OpenCode Zen 模型，然后再保存。");
             return;
         }
 
@@ -49,7 +49,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         var existing = await repository.GetAsync(OpenCodeZenProviderId) ?? ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow);
         if (!OpenCodeZenCatalog.IsSupported(selection))
         {
-            ShowOpenCodeZen(InfoBarSeverity.Warning, "Unsupported model", "Select a model supported by the Chat Completions runtime.");
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "模型不受支持", "请选择当前 Chat Completions 运行时支持的模型。");
             return;
         }
 
@@ -65,7 +65,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             UpdatedAt = DateTimeOffset.UtcNow,
         });
         OpenCodeZenApiKeyBox.Password = string.Empty;
-        ShowOpenCodeZen(InfoBarSeverity.Success, "OpenCode Zen API settings saved", $"Selected model: {selection}. Test it before enabling.");
+        ShowOpenCodeZen(InfoBarSeverity.Success, "OpenCode Zen API 配置已保存", $"已选择模型：{selection}。启用前请先测试。");
         await RefreshDeepSeekAsync();
     }
 
@@ -74,13 +74,13 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         var provider = await App.Services.GetRequiredService<IProviderRepository>().GetAsync(OpenCodeZenProviderId);
         if (provider is null || string.IsNullOrWhiteSpace(provider.ModelId))
         {
-            ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Refresh models and choose a model first.");
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "尚未选择模型", "请先刷新模型并选择一个可用模型。");
             return;
         }
 
         if (!OpenCodeZenCatalog.IsSupported(provider.ModelId))
         {
-            ShowOpenCodeZen(InfoBarSeverity.Warning, "Unsupported model", "Refresh models and choose a supported Chat Completions model first.");
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "模型不受支持", "请刷新模型并选择一个受支持的 Chat Completions 模型。");
             return;
         }
 
@@ -90,7 +90,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             await App.Services.GetRequiredService<IProviderRepository>().UpsertAsync(provider with { IsEnabled = true, UpdatedAt = DateTimeOffset.UtcNow });
         }
         ShowOpenCodeZen(result.Succeeded ? InfoBarSeverity.Success : InfoBarSeverity.Error,
-            result.Succeeded ? "OpenCode Zen API enabled" : "OpenCode Zen API test failed", result.Message);
+            result.Succeeded ? "OpenCode Zen API 已启用" : "OpenCode Zen API 测试失败", result.Message);
     }
 
     private async Task RefreshOpenCodeZenAsync()
@@ -105,16 +105,16 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
             OpenCodeZenModelComboBox.SelectedItem = provider.ModelId;
             if (string.IsNullOrWhiteSpace(provider.ModelId))
             {
-                ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Choose a discovered model before running a Worker.");
+                ShowOpenCodeZen(InfoBarSeverity.Warning, "尚未选择模型", "运行 Worker 前，请先选择一个已发现的可用模型。");
             }
             else if (!models.Contains(provider.ModelId, StringComparer.Ordinal))
             {
-                ShowOpenCodeZen(InfoBarSeverity.Warning, "Saved model is no longer available", $"{provider.ModelId} disappeared from the refreshed Zen catalog. Reselect a model; the saved selection was preserved.");
+                ShowOpenCodeZen(InfoBarSeverity.Warning, "已保存的模型当前不可用", $"刷新后的 Zen 目录中已没有 {provider.ModelId}。原选择仍已保留，请重新选择模型。");
             }
         }
         catch (Exception exception)
         {
-            ShowOpenCodeZen(InfoBarSeverity.Error, "OpenCode Zen model refresh failed", exception.Message);
+            ShowOpenCodeZen(InfoBarSeverity.Error, "OpenCode Zen 模型刷新失败", exception.Message);
         }
     }
 

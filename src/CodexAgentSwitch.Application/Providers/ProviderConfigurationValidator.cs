@@ -58,7 +58,7 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
             && provider.BaseUri is not null
             && !string.Equals(provider.BaseUri.AbsoluteUri.TrimEnd('/'), OpenCodeZenCatalog.BaseUrl, StringComparison.Ordinal))
         {
-            errors.Add($"OpenCode Zen Base URL must be exactly {OpenCodeZenCatalog.BaseUrl}.");
+            errors.Add($"OpenCode Zen 基础地址必须为 {OpenCodeZenCatalog.BaseUrl}。");
         }
 
         if (provider.Timeout < TimeSpan.FromSeconds(2) || provider.Timeout > TimeSpan.FromMinutes(10))
@@ -96,7 +96,7 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
             && !string.IsNullOrWhiteSpace(provider.ModelId)
             && !OpenCodeZenCatalog.IsSupported(provider.ModelId))
         {
-            errors.Add("OpenCode Zen only supports the current Chat Completions model allowlist.");
+            errors.Add("OpenCode Zen 当前仅支持 Chat Completions 模型白名单中的模型。");
         }
 
         if (string.IsNullOrWhiteSpace(provider.ModelId))
@@ -106,7 +106,7 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
 
         if (provider.Kind == ProviderKind.OpenCodeZen && string.IsNullOrWhiteSpace(provider.ModelId))
         {
-            warnings.Add("OpenCode Zen model selection is missing; refresh models and choose one before running a Worker.");
+            warnings.Add("尚未选择 OpenCode Zen 模型；运行 Worker 前请先刷新模型并选择一个可用模型。");
         }
 
         return new ProviderValidationReport(errors, warnings);
