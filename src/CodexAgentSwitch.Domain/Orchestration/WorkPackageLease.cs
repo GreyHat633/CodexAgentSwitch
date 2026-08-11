@@ -21,6 +21,15 @@ public enum WorkPackageLifecycleEvent
     CostCheckpoint,
 }
 
+public enum WorkPackageKind
+{
+    Discovery,
+    Implementation,
+    Testing,
+    Review,
+    Other,
+}
+
 /// <summary>
 /// An in-memory ownership lease.  Persistence and scheduling layers may
 /// serialize this model, but lifecycle rules deliberately live here so every
@@ -65,10 +74,29 @@ public sealed class WorkPackageLease
         CostWindowIndex = costWindowIndex;
         DeclaredScopes = (declaredScopes ?? throw new ArgumentNullException(nameof(declaredScopes)))
             .Where(scope => !string.IsNullOrWhiteSpace(scope))
-            .Select(NormalizePath)
+            .Select(scope => NormalizePath(Path.IsPathRooted(scope)
+                ? scope
+                : Path.Combine(WorkingDirectory, scope)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         Status = status;
+    }
+
+    public WorkPackageLease(
+        string packageId,
+        string taskGroupId,
+        string workingDirectory,
+        WorkOwner owner,
+        WorkPackageKind packageKind,
+        RepartitionReasonCode reason,
+        RepartitionTrigger trigger,
+        DateTimeOffset createdAt,
+        int costWindowIndex,
+        IReadOnlyList<string> declaredScopes,
+        WorkPackageLeaseStatus status = WorkPackageLeaseStatus.DISCOVERY)
+        : this(packageId, taskGroupId, workingDirectory, owner, packageKind.ToString(), reason, trigger,
+            createdAt, costWindowIndex, declaredScopes, status)
+    {
     }
 
     public string PackageId { get; }
@@ -183,7 +211,9 @@ public sealed class WorkPackageLease
             return true;
         }
 
-        var requested = NormalizePath(scope);
+        var requested = NormalizePath(Path.IsPathRooted(scope)
+            ? scope
+            : Path.Combine(cwd, scope));
         return DeclaredScopes.Any(declared => PathContains(declared, requested));
     }
 
