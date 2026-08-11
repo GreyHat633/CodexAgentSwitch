@@ -10,11 +10,20 @@ namespace CodexAgentSwitch.Infrastructure.ExternalProviders;
 public sealed class ExternalWorkerAdapterFactory(
     OpenAiCompatibleClient client,
     IClock clock,
-    IExternalToolHost? toolHost = null) : IExternalWorkerAdapterFactory
+    IExternalToolHost? toolHost = null,
+    IOpenCodeProcessRunner? openCodeProcessRunner = null) : IExternalWorkerAdapterFactory
 {
-    public IWorkerAdapter Create(ProviderConfiguration provider) => new OpenAiCompatibleWorkerAdapter(
-        provider,
-        client,
-        clock,
-        new OpenAiCompatibleExternalAgentRuntime(client, toolHost ?? new LocalExternalToolHost()));
+    public IWorkerAdapter Create(ProviderConfiguration provider)
+    {
+        if (provider.Kind == ProviderKind.OpenCodeZen)
+        {
+            return new OpenCodeZenWorkerAdapter(provider, client, openCodeProcessRunner ?? new OpenCodeZenProcessRunner(), clock);
+        }
+
+        return new OpenAiCompatibleWorkerAdapter(
+            provider,
+            client,
+            clock,
+            new OpenAiCompatibleExternalAgentRuntime(client, toolHost ?? new LocalExternalToolHost()));
+    }
 }

@@ -54,6 +54,13 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
             errors.Add($"DeepSeek Base URL must be exactly {DeepSeekV4Catalog.BaseUrl}.");
         }
 
+        if (provider.Kind == ProviderKind.OpenCodeZen
+            && provider.BaseUri is not null
+            && !string.Equals(provider.BaseUri.AbsoluteUri.TrimEnd('/'), OpenCodeZenCatalog.BaseUrl, StringComparison.Ordinal))
+        {
+            errors.Add($"OpenCode Zen Base URL must be exactly {OpenCodeZenCatalog.BaseUrl}.");
+        }
+
         if (provider.Timeout < TimeSpan.FromSeconds(2) || provider.Timeout > TimeSpan.FromMinutes(10))
         {
             errors.Add("请求超时必须在 2 秒到 10 分钟之间。");
@@ -72,8 +79,9 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
             }
         }
 
-        if (string.IsNullOrWhiteSpace(provider.CredentialReference)
-            || !await credentialStore.ExistsAsync(provider.CredentialReference, cancellationToken))
+        if (provider.Kind != ProviderKind.OpenCodeZen
+            && (string.IsNullOrWhiteSpace(provider.CredentialReference)
+                || !await credentialStore.ExistsAsync(provider.CredentialReference!, cancellationToken)))
         {
             errors.Add("API Key 尚未保存到 Windows Credential Manager。");
         }
@@ -88,6 +96,11 @@ public sealed class ProviderConfigurationValidator(ICredentialStore credentialSt
         if (string.IsNullOrWhiteSpace(provider.ModelId))
         {
             warnings.Add("未指定 Model ID；连接测试发现模型后仍需手动选择。");
+        }
+
+        if (provider.Kind == ProviderKind.OpenCodeZen && string.IsNullOrWhiteSpace(provider.ModelId))
+        {
+            warnings.Add("OpenCode Zen model selection is missing; refresh models and choose one before running a Worker.");
         }
 
         return new ProviderValidationReport(errors, warnings);

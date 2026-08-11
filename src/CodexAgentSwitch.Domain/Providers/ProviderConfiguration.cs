@@ -7,6 +7,7 @@ public enum ProviderKind
     NativeCodex,
     DeepSeek,
     OpenAiCompatible,
+    OpenCodeZen,
 }
 
 public enum ProviderProtocol
@@ -68,6 +69,15 @@ public static class DeepSeekV4Catalog
             .Where(modelId => Models.Any(model => string.Equals(model.Id, modelId, StringComparison.Ordinal)))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+}
+
+public static class OpenCodeZenCatalog
+{
+    public const string BaseUrl = "https://opencode.ai/zen/v1";
+    public const string ProviderPrefix = "opencode/";
+
+    public static string InvocationModel(string modelId) =>
+        $"{ProviderPrefix}{modelId}";
 }
 
 public sealed record DeepSeekModelMigrationResult(
@@ -178,6 +188,20 @@ public sealed record ProviderConfiguration(
         DeepSeekV4Catalog.FlashModelId,
         new Dictionary<string, string>(),
         TimeSpan.FromSeconds(60),
+        false,
+        null,
+        now,
+        now);
+
+    public static ProviderConfiguration OpenCodeZenPreset(DateTimeOffset now) => new(
+        "opencode-zen",
+        "OpenCode Zen",
+        ProviderKind.OpenCodeZen,
+        new Uri(OpenCodeZenCatalog.BaseUrl),
+        null,
+        null,
+        new Dictionary<string, string>(),
+        TimeSpan.FromMinutes(2),
         false,
         null,
         now,

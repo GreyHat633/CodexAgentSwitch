@@ -10,6 +10,18 @@
         <StackPanel Orientation="Vertical" Spacing="8" HorizontalAlignment="Left"><StackPanel Orientation="Horizontal" Spacing="8"><Button x:Name="SaveProviderButton" Content="保存" Click="SaveProvider"/><Button x:Name="TestConnectionButton" Content="测试并启用" Style="{StaticResource AccentButtonStyle}" Click="TestAndSaveProvider"/><Button x:Name="EnableDeepSeekButton" Content="启用" Click="EnableDeepSeek"/></StackPanel><StackPanel Orientation="Horizontal" Spacing="8"><Button Content="删除服务商" Click="DeleteDeepSeek"/><Button Content="重载" Click="ReloadProviders"/><Button Content="清空密钥" Click="ClearProviderKey"/></StackPanel></StackPanel>
       </StackPanel></Border>
     </Expander>
+    <Expander x:Name="OpenCodeZenEditor" Header="OpenCode Zen (CLI)">
+      <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0"><StackPanel Spacing="10">
+        <TextBlock Text="Uses the installed OpenCode CLI and its existing login. No API key is stored here." TextWrapping="Wrap" />
+        <ComboBox x:Name="OpenCodeZenModelComboBox" PlaceholderText="Refresh models, then choose a model" />
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Button Content="Refresh models" Click="RefreshOpenCodeZenModels" />
+          <Button Content="Save selection" Click="SaveOpenCodeZen" Style="{StaticResource AccentButtonStyle}" />
+          <Button Content="Test CLI" Click="TestOpenCodeZen" />
+        </StackPanel>
+        <InfoBar x:Name="OpenCodeZenInfoBar" IsOpen="False" />
+      </StackPanel></Border>
+    </Expander>
     <InfoBar x:Name="ProviderResultBar" IsOpen="False"/>
   </StackPanel></ScrollViewer>
 </Page>

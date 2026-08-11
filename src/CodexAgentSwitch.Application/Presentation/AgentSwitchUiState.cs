@@ -196,7 +196,7 @@ public sealed class AgentSwitchUiStateProjection(
         var result = new List<ProviderUiStatus>(providerList.Count);
         foreach (var provider in providerList)
         {
-            var credentialConfigured = provider.Kind == ProviderKind.NativeCodex
+            var credentialConfigured = provider.Kind is ProviderKind.NativeCodex or ProviderKind.OpenCodeZen
                 || (!string.IsNullOrWhiteSpace(provider.CredentialReference)
                     && await credentials.ExistsAsync(provider.CredentialReference, cancellationToken));
             var lastTask = tasks

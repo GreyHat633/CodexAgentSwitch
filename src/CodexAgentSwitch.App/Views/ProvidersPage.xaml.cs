@@ -16,6 +16,7 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
 {
     private const string ProviderId = "deepseek-default";
     private const string CredentialReference = "provider/deepseek-default";
+    private const string OpenCodeZenProviderId = "opencode-zen";
     private bool workerTestInProgress;
 
     public ProvidersPage()
@@ -25,7 +26,80 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
         Loaded += OnLoaded;
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs e) => await RefreshDeepSeekAsync();
+    private async void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        await RefreshDeepSeekAsync();
+        await RefreshOpenCodeZenAsync();
+    }
+
+    private async void RefreshOpenCodeZenModels(object sender, RoutedEventArgs e) => await RefreshOpenCodeZenAsync();
+
+    private async void SaveOpenCodeZen(object sender, RoutedEventArgs e)
+    {
+        var selection = OpenCodeZenModelComboBox.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(selection))
+        {
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Refresh models and choose an OpenCode Zen model before saving.");
+            return;
+        }
+
+        var repository = App.Services.GetRequiredService<IProviderRepository>();
+        var existing = await repository.GetAsync(OpenCodeZenProviderId) ?? ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow);
+        await repository.UpsertAsync(existing with { ModelId = selection, UpdatedAt = DateTimeOffset.UtcNow });
+        ShowOpenCodeZen(InfoBarSeverity.Success, "OpenCode Zen selection saved", $"Selected model: {selection}. Test the CLI before enabling it.");
+        await RefreshDeepSeekAsync();
+    }
+
+    private async void TestOpenCodeZen(object sender, RoutedEventArgs e)
+    {
+        var provider = await App.Services.GetRequiredService<IProviderRepository>().GetAsync(OpenCodeZenProviderId);
+        if (provider is null || string.IsNullOrWhiteSpace(provider.ModelId))
+        {
+            ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Refresh models and choose a model first.");
+            return;
+        }
+
+        var result = await App.Services.GetRequiredService<IExternalProviderClient>().TestConnectionAsync(provider);
+        if (result.Succeeded)
+        {
+            await App.Services.GetRequiredService<IProviderRepository>().UpsertAsync(provider with { IsEnabled = true, UpdatedAt = DateTimeOffset.UtcNow });
+        }
+        ShowOpenCodeZen(result.Succeeded ? InfoBarSeverity.Success : InfoBarSeverity.Error,
+            result.Succeeded ? "OpenCode Zen catalog ready" : "OpenCode Zen test failed", result.Message);
+    }
+
+    private async Task RefreshOpenCodeZenAsync()
+    {
+        try
+        {
+            var client = App.Services.GetRequiredService<IExternalProviderClient>();
+            var provider = await App.Services.GetRequiredService<IProviderRepository>().GetAsync(OpenCodeZenProviderId)
+                ?? ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow);
+            var models = await client.ListModelsAsync(provider);
+            OpenCodeZenModelComboBox.ItemsSource = models;
+            OpenCodeZenModelComboBox.SelectedItem = provider.ModelId;
+            if (string.IsNullOrWhiteSpace(provider.ModelId))
+            {
+                ShowOpenCodeZen(InfoBarSeverity.Warning, "Model selection is missing", "Choose a discovered model before running a Worker.");
+            }
+            else if (!models.Contains(provider.ModelId, StringComparer.Ordinal))
+            {
+                ShowOpenCodeZen(InfoBarSeverity.Warning, "Saved model is no longer available", $"{provider.ModelId} disappeared from the refreshed Zen catalog. Reselect a model; the saved selection was preserved.");
+            }
+        }
+        catch (Exception exception)
+        {
+            ShowOpenCodeZen(InfoBarSeverity.Error, "OpenCode Zen model refresh failed", exception.Message);
+        }
+    }
+
+    private void ShowOpenCodeZen(InfoBarSeverity severity, string title, string message)
+    {
+        OpenCodeZenInfoBar.Severity = severity;
+        OpenCodeZenInfoBar.Title = title;
+        OpenCodeZenInfoBar.Message = message;
+        OpenCodeZenInfoBar.IsOpen = true;
+    }
 
     private void OpenDeepSeekConfiguration(object sender, RoutedEventArgs e) => ProviderEditor.IsExpanded = true;
 

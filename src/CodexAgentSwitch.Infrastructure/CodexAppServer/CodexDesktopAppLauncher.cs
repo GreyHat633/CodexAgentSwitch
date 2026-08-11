@@ -556,7 +556,15 @@ public sealed class CodexDesktopAppLauncher(
         """;
 
     private static string BuildProactiveDelegationPolicy() => """
-        For every non-trivial development request, perform an Initial Delegation Check after the minimum localization needed to identify concrete work. Do not wait for the user to mention workers and do not generate a long plan merely to satisfy this check.
+        For every non-trivial, multi-step, or clearly separable development request, complete a Delegation Capability Preflight after the minimum localization needed to identify concrete work and before the first substantive large implementation. Confirm or load the currently available Agent Switch scheduling tools, especially delayed-loaded delegate_worker and Worker orchestration capability; do not assume that a capability exists merely because it is documented.
+
+        If the scheduling tools are available, require the Initial Delegation Check immediately after the preflight and before beginning large implementation. If the tools are unavailable, record a short reason such as WORKER_CAPABILITY_MISSING and continue with MAIN without deadlocking; an unavailable preflight is not permission to skip the check silently.
+
+        Exempt one-line changes, clearly tiny configuration edits, read-only questions, user-forbidden Worker use, and micro tasks whose delegation overhead exceeds their value. Do not wrap every shell command in a delegation decision.
+
+        Do not wait for the user to mention workers and do not generate a long plan merely to satisfy this check.
+
+        The Delegation Capability Preflight is a gate before the Initial Delegation Check, not a ninth RepartitionTrigger.
 
         Re-evaluate ownership before the next substantive work whenever any of these eight distinct triggers occurs: INITIAL_LOCALIZATION_COMPLETE, ARCHITECTURE_RESOLVED, WORKER_RESULT_RECEIVED, WORKER_REVIEW_COMPLETE, PHASE_CHANGE, BUILD_TEST_BOUNDED_FIXES, MODULE_COMPLETE, or WORK_CONVERGED. WORKER_RESULT_RECEIVED enters bounded review; WORKER_REVIEW_COMPLETE is a separate later trigger that must reconsider all remaining work.
 

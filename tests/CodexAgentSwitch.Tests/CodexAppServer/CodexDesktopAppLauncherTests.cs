@@ -54,7 +54,17 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("fork_turns is mandatory", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("never omit it", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("never use fork_turns=\"all\"", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("Delegation Capability Preflight", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("delayed-loaded delegate_worker", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("If the scheduling tools are available", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("If the tools are unavailable", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("continue with MAIN without deadlocking", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("Exempt one-line changes", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("not a ninth RepartitionTrigger", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("Initial Delegation Check", projectInstructions, StringComparison.Ordinal);
+            Assert.True(
+                projectInstructions.IndexOf("Delegation Capability Preflight", StringComparison.Ordinal)
+                    < projectInstructions.IndexOf("Initial Delegation Check", StringComparison.Ordinal));
             Assert.Contains("INITIAL_LOCALIZATION_COMPLETE", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("WORKER_RESULT_RECEIVED", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("WORKER_REVIEW_COMPLETE", projectInstructions, StringComparison.Ordinal);
@@ -322,6 +332,13 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("Never spawn cas_external_worker", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("omit workerId", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("Initial Delegation Check", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("Delegation Capability Preflight", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("If the scheduling tools are available", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("If the tools are unavailable", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("Exempt one-line changes", projectConfiguration, StringComparison.Ordinal);
+            Assert.True(
+                projectConfiguration.IndexOf("Delegation Capability Preflight", StringComparison.Ordinal)
+                    < projectConfiguration.IndexOf("Initial Delegation Check", StringComparison.Ordinal));
             Assert.Contains("WORKER_REVIEW_COMPLETE", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("Risk belongs to the current package", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("record_repartition", projectConfiguration, StringComparison.Ordinal);
