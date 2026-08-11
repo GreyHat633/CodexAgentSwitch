@@ -1,0 +1,24 @@
+{
+  "version": "0.2.4",
+  "temp": "E:\\AISPace\\主模型项目区\\state\\tmp",
+  "bundleExtractOverride": "E:\\AISPace\\主模型项目区\\state\\bundle-extract",
+  "monitoredPhysicalEntriesBefore": 2,
+  "monitoredPhysicalEntriesAfter": 2,
+  "physicalChanges": [],
+  "launches": [
+    {
+      "entryPoint": "portable-app",
+      "started": true
+    },
+    {
+      "entryPoint": "installed-app",
+      "started": true
+    },
+    {
+      "entryPoint": "runtime-bootstrapper",
+      "started": true
+    }
+  ],
+  "sourceResult": "E:\\AISPace\\主模型项目区\\state\\worktrees\\cas-024-phase2\\.tmp\\c-drive-release-audit-20260812-015536\\result.json",
+  "passed": true
+}
