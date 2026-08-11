@@ -90,6 +90,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<WorkerOrchestrator>();
         services.AddSingleton<ControlledTaskService>();
         services.AddSingleton<ISchedulerTaskRepository, SqliteSchedulerTaskRepository>();
+        services.AddSingleton<IWorkPackageLeaseRepository, SqliteWorkPackageLeaseRepository>();
         services.AddSingleton<IWorkerExecutor, NativeWorkerExecutor>();
         services.AddSingleton<IWorkerExecutor, ExternalWorkerExecutor>();
         services.AddSingleton<AppliedProjectWorkerGuard>();

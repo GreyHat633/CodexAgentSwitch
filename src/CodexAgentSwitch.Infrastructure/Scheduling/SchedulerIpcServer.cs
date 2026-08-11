@@ -70,9 +70,9 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
             {
                 using var document = JsonDocument.Parse(line);
                 var root = document.RootElement;
-                var method = root.GetProperty("method").GetString();
+                var method = root.GetProperty("method").GetString() ?? string.Empty;
                 var payload = root.TryGetProperty("payload", out var value) ? value : default;
-                object result = method switch
+                object? result = method switch
                 {
                     "dispatch" => await scheduler.DispatchAsync(payload.Deserialize<TaskPacket>(JsonOptions)
                         ?? throw new InvalidDataException("TaskPacket 无效。"), cancellationToken),
@@ -84,6 +84,17 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
                         payload.TryGetProperty("summary", out var summary) ? summary.GetString() ?? string.Empty : string.Empty,
                         cancellationToken),
                     "recordRepartition" => await RecordRepartitionAsync(payload, cancellationToken),
+                    "preToolUse" => await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest(
+                        payload.GetProperty("sessionId").GetString() ?? string.Empty,
+                        payload.GetProperty("workingDirectory").GetString() ?? string.Empty,
+                        payload.GetProperty("toolName").GetString() ?? string.Empty,
+                        payload.TryGetProperty("toolInput", out var toolInput)
+                            ? toolInput.ValueKind == JsonValueKind.String ? toolInput.GetString() : toolInput.GetRawText()
+                            : null), cancellationToken),
+                    "completePackage" => await scheduler.CompletePackageAsync(
+                        payload.GetProperty("packageId").GetString() ?? string.Empty,
+                        payload.GetProperty("workingDirectory").GetString() ?? string.Empty,
+                        cancellationToken),
                     "listRepartitions" => await scheduler.ListRepartitionsAsync(
                         payload.GetProperty("taskGroupId").GetString() ?? string.Empty,
                         cancellationToken),
@@ -108,6 +119,13 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
         var workSummary = payload.GetProperty("workSummary").GetString() ?? string.Empty;
         var workerIdentity = payload.TryGetProperty("workerIdentity", out var worker) ? worker.GetString() : null;
         var result = payload.TryGetProperty("result", out var resultValue) ? resultValue.GetString() : null;
+        var packageId = payload.TryGetProperty("packageId", out var package) ? package.GetString() : null;
+        var workingDirectory = payload.TryGetProperty("workingDirectory", out var cwd) ? cwd.GetString() : null;
+        var packageKind = payload.TryGetProperty("packageKind", out var kind) ? kind.GetString() : null;
+        var declaredScopes = payload.TryGetProperty("declaredScopes", out var scopes) && scopes.ValueKind == JsonValueKind.Array
+            ? scopes.EnumerateArray().Select(item => item.GetString() ?? string.Empty).Where(item => item.Length > 0).ToArray()
+            : null;
+        var costWindowIndex = payload.TryGetProperty("costWindowIndex", out var cost) && cost.ValueKind == JsonValueKind.Number ? cost.GetInt32() : (int?)null;
         return await scheduler.RecordRepartitionAsync(
             taskGroupId,
             trigger,
@@ -116,6 +134,11 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
             workSummary,
             workerIdentity,
             result,
+            packageId,
+            workingDirectory,
+            packageKind,
+            declaredScopes,
+            costWindowIndex,
             cancellationToken);
     }
 

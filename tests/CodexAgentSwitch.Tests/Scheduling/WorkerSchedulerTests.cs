@@ -165,6 +165,31 @@ public sealed class WorkerSchedulerTests
     }
 
     [Fact]
+    public async Task Repartition_supersedes_different_package_in_same_working_directory()
+    {
+        var root = Path.Combine(Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? Path.GetTempPath(), "lease-supersession-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var database = new SqliteDatabase(Path.Combine(root, "leases.db"));
+            await database.InitializeAsync();
+            var leases = new SqliteWorkPackageLeaseRepository(database);
+            await using var scheduler = new WorkerScheduler([], new MemoryRepository(), new AdvancingClock(), leaseRepository: leases);
+            await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Main, RepartitionReasonCode.FINAL_INTEGRATION, "A", null, null, "pkg-A", root, "Implementation", [root], 0);
+            await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.MODULE_COMPLETE, WorkOwner.Main, RepartitionReasonCode.FINAL_INTEGRATION, "B", null, null, "pkg-B", root, "Implementation", [root], 0);
+
+            Assert.Null(await leases.GetActiveAsync("pkg-A", root));
+            Assert.Equal("pkg-B", (await leases.GetActiveForWorkingDirectoryAsync(root))!.PackageId);
+            Assert.Equal(3, (await leases.ListAsync()).Count);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task Sqlite_repartition_events_round_trip_append_only_in_sequence_order_with_utc_fields()
     {
         var root = Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? Path.Combine(Path.GetTempPath(), "cas-tests");

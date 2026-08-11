@@ -18,6 +18,7 @@ using CodexAgentSwitch.Domain.Tasks;
 using CodexAgentSwitch.Domain.Usage;
 using CodexAgentSwitch.Domain.Workers;
 using CodexAgentSwitch.Infrastructure.Scheduling;
+using CodexAgentSwitch.Infrastructure.Persistence;
 
 namespace CodexAgentSwitch.Tests.Scheduling;
 
@@ -107,6 +108,31 @@ public sealed class SchedulerIpcServerTests
             """);
         Assert.Contains("\"ok\":false", invalidResponse, StringComparison.Ordinal);
         Assert.Single(await scheduler.ListRepartitionsAsync("group-ipc"));
+    }
+
+    [Fact]
+    public async Task PreToolUse_ipc_denies_definite_mutation_and_leaves_unknown_to_policy()
+    {
+        var root = Path.Combine(Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? Path.GetTempPath(), "pretool-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var database = new SqliteDatabase(Path.Combine(root, "pretool.db"));
+            await database.InitializeAsync();
+            var leases = new SqliteWorkPackageLeaseRepository(database);
+            await using var scheduler = new WorkerScheduler([new EchoExecutor()], new MemoryRepository(), new FixedClock(), leaseRepository: leases);
+            await scheduler.StartAsync();
+            await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Worker, RepartitionReasonCode.BOUNDED_IMPLEMENTATION, "worker", null, null, "pkg", root, "Implementation", [root], 0);
+            var pipeName = $"CAS-pretool-{Guid.NewGuid():N}";
+            await using var server = new SchedulerIpcServer(scheduler, pipeName);
+            await server.StartAsync();
+            var denied = await SendRequestAsync(pipeName, $"{{\"method\":\"preToolUse\",\"payload\":{{\"sessionId\":\"s\",\"workingDirectory\":\"{root.Replace("\\", "\\\\")}\",\"toolName\":\"apply_patch\",\"toolInput\":{{\"patch\":\"x\"}}}}}}");
+            Assert.Contains("\"allowed\":false", denied, StringComparison.OrdinalIgnoreCase);
+            var unknown = await SendRequestAsync(pipeName, $"{{\"method\":\"preToolUse\",\"payload\":{{\"sessionId\":\"s\",\"workingDirectory\":\"{root.Replace("\\", "\\\\")}\",\"toolName\":\"shell\",\"toolInput\":\"mystery-command\"}}}}");
+            Assert.Contains("\"allowed\":true", unknown, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("RequiresSafetyPolicy", unknown, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     private static async Task<string> SendRequestAsync(string pipeName, string request)

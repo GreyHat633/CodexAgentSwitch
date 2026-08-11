@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodexAgentSwitch.Application.NativeCodex;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Projects;
@@ -93,6 +94,7 @@ public sealed class CodexDesktopAppLauncher(
         "agents/cas-external-worker.toml",
     ];
     private const string DesktopEntryFile = "desktop-entry.json";
+    private const string HooksFile = "hooks.json";
 
     public async Task<CodexDesktopAppDiscovery> DetectAsync(CancellationToken cancellationToken = default)
     {
@@ -313,6 +315,9 @@ public sealed class CodexDesktopAppLauncher(
                 : Path.Combine(backupDirectory, ProjectInstructionsFile);
             var instructionsWereMissing = backupDirectory is not null
                 && File.Exists(Path.Combine(backupDirectory, $"{ProjectInstructionsFile}.missing"));
+            var hooksPath = Path.Combine(project.WorkingDirectory, ".codex", HooksFile);
+            var hooksBackupPath = backupDirectory is null ? null : Path.Combine(backupDirectory, HooksFile);
+            var hooksWereMissing = backupDirectory is not null && File.Exists(Path.Combine(backupDirectory, $"{HooksFile}.missing"));
             if (instructionsBackupPath is not null && File.Exists(instructionsBackupPath))
             {
                 File.Copy(instructionsBackupPath, projectInstructionsPath, true);
@@ -329,6 +334,16 @@ public sealed class CodexDesktopAppLauncher(
                 var existingInstructions = await File.ReadAllTextAsync(projectInstructionsPath, cancellationToken);
                 var restoredInstructions = ReplaceManagedProjectInstructions(existingInstructions, null);
                 await WriteOrRemoveManagedProjectInstructionsAsync(projectInstructionsPath, restoredInstructions, cancellationToken);
+            }
+
+            if (hooksBackupPath is not null && File.Exists(hooksBackupPath))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(hooksPath)!);
+                File.Copy(hooksBackupPath, hooksPath, true);
+            }
+            else if (hooksWereMissing && File.Exists(hooksPath))
+            {
+                File.Delete(hooksPath);
             }
 
             return new NativeProjectAdaptationResult(project, true, true, configurationPath, adaptation.BackupPath, "已恢复写入前的项目配置。");
@@ -355,6 +370,10 @@ public sealed class CodexDesktopAppLauncher(
         var existingProjectInstructions = File.Exists(projectInstructionsPath)
             ? await File.ReadAllTextAsync(projectInstructionsPath, cancellationToken)
             : null;
+        var hooksPath = Path.Combine(directory, HooksFile);
+        var existingHooks = File.Exists(hooksPath)
+            ? await File.ReadAllTextAsync(hooksPath, cancellationToken)
+            : null;
         var worker = EffectiveWorkerDefinition.Resolve(profile.WorkerPolicy);
         var managedAgent = worker.Kind == EffectiveWorkerKind.NativeAgent && worker.CanRunInNativeCodex
             ? BuildNativeAgentConfiguration(worker)
@@ -366,6 +385,7 @@ public sealed class CodexDesktopAppLauncher(
         var nextProjectInstructions = ReplaceManagedProjectInstructions(
             existingProjectInstructions,
             BuildManagedProjectInstructions(worker));
+        var nextHooks = BuildManagedHooks(existingHooks, profile.WorkerPolicy.Enabled && profile.WorkerPolicy.Source != WorkerSource.Disabled);
         var existingAgents = new Dictionary<string, byte[]?>(StringComparer.Ordinal);
         foreach (var relativePath in ManagedWorkerAgentFiles)
         {
@@ -374,8 +394,9 @@ public sealed class CodexDesktopAppLauncher(
         }
         var projectChanged = !string.Equals(existing, next, StringComparison.Ordinal);
         var projectInstructionsChanged = !string.Equals(existingProjectInstructions, nextProjectInstructions, StringComparison.Ordinal);
+        var hooksChanged = !string.Equals(existingHooks, nextHooks, StringComparison.Ordinal);
         var agentChanged = HasWorkerAgentChanges(existingAgents, worker.ConfigFile, managedAgent);
-        if (!projectChanged && !projectInstructionsChanged && !agentChanged)
+        if (!projectChanged && !projectInstructionsChanged && !agentChanged && !hooksChanged)
         {
             return new ProjectConfigurationWrite(configurationPath, false, false, null, existing is not null, Fingerprint(next));
         }
@@ -393,16 +414,11 @@ public sealed class CodexDesktopAppLauncher(
                 new CodexConfigurationLayers(
                     next,
                     null,
-                    managedAgent is null
-                        ? null
-                        : new Dictionary<string, string>(StringComparer.Ordinal)
-                        {
-                            [worker.ConfigFile!] = managedAgent,
-                        }),
+                    BuildValidationProjectFiles(worker, managedAgent, nextHooks)),
                 cancellationToken);
 
             string? backupPath = null;
-            if (projectChanged || projectInstructionsChanged || agentChanged)
+            if (projectChanged || projectInstructionsChanged || agentChanged || hooksChanged)
             {
                 var backupDirectory = Path.Combine(
                     paths.NativeCodexDirectory,
@@ -429,6 +445,14 @@ public sealed class CodexDesktopAppLauncher(
                 {
                     await File.WriteAllTextAsync(instructionsBackupPath, existingProjectInstructions, new UTF8Encoding(false), cancellationToken);
                 }
+                if (existingHooks is null)
+                {
+                    await File.WriteAllTextAsync(Path.Combine(backupDirectory, $"{HooksFile}.missing"), string.Empty, new UTF8Encoding(false), cancellationToken);
+                }
+                else
+                {
+                    await File.WriteAllTextAsync(Path.Combine(backupDirectory, HooksFile), existingHooks, new UTF8Encoding(false), cancellationToken);
+                }
             }
 
             try
@@ -454,6 +478,18 @@ public sealed class CodexDesktopAppLauncher(
                         cancellationToken);
                 }
 
+                if (hooksChanged)
+                {
+                    if (nextHooks is null)
+                    {
+                        if (File.Exists(hooksPath)) File.Delete(hooksPath);
+                    }
+                    else
+                    {
+                        await File.WriteAllTextAsync(hooksPath, nextHooks, new UTF8Encoding(false), cancellationToken);
+                    }
+                }
+
                 if (projectChanged)
                 {
                     File.Move(temporaryPath, configurationPath, overwrite: true);
@@ -476,10 +512,15 @@ public sealed class CodexDesktopAppLauncher(
                     existingProjectInstructions is null ? null : Encoding.UTF8.GetBytes(existingProjectInstructions),
                     existingProjectInstructions is null,
                     cancellationToken);
+                await RestoreOriginalFileAsync(
+                    hooksPath,
+                    existingHooks is null ? null : Encoding.UTF8.GetBytes(existingHooks),
+                    existingHooks is null,
+                    cancellationToken);
                 throw;
             }
 
-            return new ProjectConfigurationWrite(configurationPath, false, projectChanged || projectInstructionsChanged || agentChanged, backupPath, existing is not null, Fingerprint(next));
+            return new ProjectConfigurationWrite(configurationPath, false, projectChanged || projectInstructionsChanged || agentChanged || hooksChanged, backupPath, existing is not null, Fingerprint(next));
         }
         finally
         {
@@ -525,10 +566,85 @@ public sealed class CodexDesktopAppLauncher(
                 .AppendLine($"args = [{Toml("--pipe")}, {Toml(SchedulerEndpoint.PipeName)}]")
                 .AppendLine("startup_timeout_sec = 5")
                 .AppendLine("tool_timeout_sec = 7200")
-                .AppendLine("enabled = true");
+                .AppendLine("enabled = true")
+                .AppendLine("required = true");
+
         }
 
         return builder.AppendLine(ManagedEnd).ToString();
+    }
+
+    private static string? BuildManagedHooks(string? existing, bool enabled)
+    {
+        JsonObject root;
+        try
+        {
+            root = string.IsNullOrWhiteSpace(existing)
+                ? new JsonObject()
+                : JsonNode.Parse(existing)?.AsObject() ?? new JsonObject();
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            // Preserve an invalid unrelated file by making the managed update
+            // explicit; validation will report the candidate rather than
+            // silently discarding user data.
+            throw new InvalidOperationException("Existing .codex/hooks.json is not valid JSON; refusing to overwrite unrelated hook entries.");
+        }
+
+        var hooks = root["hooks"] as JsonObject ?? new JsonObject();
+        root["hooks"] = hooks;
+        var preToolUse = hooks["PreToolUse"] as JsonArray ?? new JsonArray();
+        hooks["PreToolUse"] = preToolUse;
+        for (var index = preToolUse.Count - 1; index >= 0; index--)
+        {
+            if (IsManagedHookGroup(preToolUse[index])) preToolUse.RemoveAt(index);
+        }
+        if (!enabled)
+        {
+            if (preToolUse.Count == 0) hooks.Remove("PreToolUse");
+            if (hooks.Count == 0) root.Remove("hooks");
+            return root.Count == 0 ? null : root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        }
+
+        var command = Path.Combine(AppContext.BaseDirectory, "ToolHost", "CodexAgentSwitch.ToolHost.exe");
+        var managed = new JsonObject
+        {
+            ["matcher"] = "Bash|apply_patch|Edit|Write",
+            ["hooks"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["type"] = "command",
+                    ["commandWindows"] = $"\"{command}\" --hook pre-tool-use --pipe {SchedulerEndpoint.PipeName}",
+                },
+            },
+        };
+        preToolUse.Add(managed);
+
+        return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static bool IsManagedHookGroup(JsonNode? node)
+    {
+        if (node is JsonObject direct && direct["commandWindows"]?.GetValue<string>()?.Contains("--hook pre-tool-use", StringComparison.OrdinalIgnoreCase) == true)
+            return true;
+        if (node is not JsonObject group || group["hooks"] is not JsonArray handlers) return false;
+        return handlers.OfType<JsonObject>().Any(handler =>
+            handler["commandWindows"]?.GetValue<string>()?.Contains("--hook pre-tool-use", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildValidationProjectFiles(
+        EffectiveWorkerDefinition worker,
+        string? managedAgent,
+        string? hooks)
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (hooks is not null) files[HooksFile] = hooks;
+        if (managedAgent is not null && worker.ConfigFile is not null)
+        {
+            files[worker.ConfigFile] = managedAgent;
+        }
+        return files.Count == 0 ? null : files;
     }
 
     private static string? BuildManagedProjectInstructions(EffectiveWorkerDefinition worker)
