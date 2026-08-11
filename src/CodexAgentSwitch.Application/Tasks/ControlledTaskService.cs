@@ -27,7 +27,10 @@ public sealed class ControlledTaskService
     private readonly IWorkerUsageCollector usageCollector;
     private readonly IClock clock;
     private readonly IProjectRepository? projectRepository;
+    private readonly SessionContextBudget contextBudget;
+    private readonly MainCostGuardCoordinator mainCostGuards;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> active = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, MainContextEpoch> contextEpochs = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim updateGate = new(1, 1);
 
     public ControlledTaskService(
@@ -40,7 +43,9 @@ public sealed class ControlledTaskService
         IUsageLedgerRepository usageLedger,
         IWorkerUsageCollector usageCollector,
         IClock clock,
-        IProjectRepository? projectRepository = null)
+        IProjectRepository? projectRepository = null,
+        SessionContextBudget? contextBudget = null,
+        MainCostGuardCoordinator? mainCostGuards = null)
     {
         this.tasks = tasks;
         this.profiles = profiles;
@@ -52,6 +57,8 @@ public sealed class ControlledTaskService
         this.usageCollector = usageCollector;
         this.clock = clock;
         this.projectRepository = projectRepository;
+        this.contextBudget = contextBudget ?? new SessionContextBudget();
+        this.mainCostGuards = mainCostGuards ?? new MainCostGuardCoordinator();
     }
 
     public event Func<ControlledTaskSession, Task>? TaskChanged;
@@ -523,6 +530,7 @@ public sealed class ControlledTaskService
         await runtime.EnsureStartedAsync(cancellationToken);
         var session = await RequireAsync(taskId, cancellationToken);
         var mainThreadId = session.MainThreadId;
+        var existingMainThread = mainThreadId is not null;
         if (mainThreadId is null)
         {
             mainThreadId = await runtime.MainAgent.CreateThreadAsync(
@@ -532,6 +540,7 @@ public sealed class ControlledTaskService
                 cancellationToken);
             session = session with { MainThreadId = mainThreadId, UpdatedAt = clock.UtcNow };
             await SaveAndPublishAsync(session, cancellationToken);
+            contextEpochs[session.Id] = new MainContextEpoch(mainThreadId, session.CreatedAt, 0, 0m, false);
         }
         else
         {
@@ -544,6 +553,17 @@ public sealed class ControlledTaskService
         }
 
         var ledger = await EnsureLedgerAsync(session, cancellationToken);
+        if (existingMainThread)
+        {
+            (session, mainThreadId, ledger) = await PrepareMainContextAsync(
+                session,
+                localTurnId,
+                mainThreadId!,
+                snapshot,
+                ledger,
+                cancellationToken);
+        }
+
         var effectiveDecision = decision;
         if (decision.Kind == DelegationDecisionKind.InvokeWorker && !decision.Forced)
         {
@@ -655,6 +675,154 @@ public sealed class ControlledTaskService
         ledger = ledger with { CompletedAt = clock.UtcNow, UpdatedAt = clock.UtcNow };
         await usageLedger.UpsertTaskGroupAsync(ledger, cancellationToken);
     }
+
+    private async Task<(ControlledTaskSession Session, string MainThreadId, TaskGroupLedger Ledger)> PrepareMainContextAsync(
+        ControlledTaskSession session,
+        string localTurnId,
+        string mainThreadId,
+        TaskProfileSnapshot snapshot,
+        TaskGroupLedger ledger,
+        CancellationToken cancellationToken)
+    {
+        var cumulativeNormalizedCost = mainCostGuards.ResolveForWorkingDirectory(session.WorkingDirectory)
+            .Telemetry.SessionCumulativeNormalizedCredits;
+        var epoch = contextEpochs.GetOrAdd(
+            session.Id,
+            _ => new MainContextEpoch(mainThreadId, session.CreatedAt, 0, 0m, false));
+        if (!string.Equals(epoch.ThreadId, mainThreadId, StringComparison.Ordinal))
+        {
+            epoch = new MainContextEpoch(
+                mainThreadId,
+                clock.UtcNow,
+                Math.Max(0, session.Turns.Count - 1),
+                cumulativeNormalizedCost,
+                false);
+            contextEpochs[session.Id] = epoch;
+        }
+
+        var age = clock.UtcNow - epoch.StartedAt;
+        if (age < TimeSpan.Zero)
+        {
+            age = TimeSpan.Zero;
+        }
+        var turnCount = Math.Max(0, session.Turns.Count - epoch.StartTurnCount);
+        var normalizedCost = cumulativeNormalizedCost >= epoch.StartNormalizedCost
+            ? cumulativeNormalizedCost - epoch.StartNormalizedCost
+            : cumulativeNormalizedCost;
+
+        var decision = contextBudget.Evaluate(new SessionContextBudgetInput(
+            age,
+            turnCount,
+            normalizedCost));
+        if (decision.Recommendation == SessionContextRecommendation.Continue)
+        {
+            return (session, mainThreadId, ledger);
+        }
+
+        var checkpoint = BuildCompactCheckpoint(session, localTurnId, mainThreadId, decision, clock.UtcNow);
+        if (decision.Recommendation == SessionContextRecommendation.Compact)
+        {
+            if (epoch.Compacted)
+            {
+                return (session, mainThreadId, ledger);
+            }
+            await runtime.MainAgent.CompactThreadAsync(mainThreadId, cancellationToken);
+            contextEpochs[session.Id] = epoch with { Compacted = true };
+            return (session, mainThreadId, ledger);
+        }
+
+        var rollover = await runtime.MainAgent.RolloverThreadAsync(
+            mainThreadId,
+            checkpoint,
+            snapshot.MainAgent.ModelId,
+            snapshot.MainAgent.ReasoningEffort,
+            session.WorkingDirectory,
+            snapshot.ApprovalMode,
+            startFirstTurn: true,
+            cancellationToken: cancellationToken);
+        if (!string.Equals(rollover.PreviousThreadId, mainThreadId, StringComparison.Ordinal)
+            || string.Equals(rollover.NewThreadId, mainThreadId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Main thread rollover returned invalid thread provenance.");
+        }
+
+        session = session with
+        {
+            MainThreadId = rollover.NewThreadId,
+            UpdatedAt = clock.UtcNow,
+        };
+        await SaveAndPublishAsync(session, cancellationToken);
+        ledger = ledger with
+        {
+            MainThreadId = rollover.NewThreadId,
+            UpdatedAt = clock.UtcNow,
+        };
+        await usageLedger.UpsertTaskGroupAsync(ledger, cancellationToken);
+        contextEpochs[session.Id] = new MainContextEpoch(
+            rollover.NewThreadId,
+            clock.UtcNow,
+            session.Turns.Count,
+            cumulativeNormalizedCost,
+            false);
+
+        if (rollover.FirstTurn is null
+            || !string.Equals(rollover.FirstTurn.ThreadId, rollover.NewThreadId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Main thread rollover did not return a valid checkpoint replay turn.");
+        }
+        var replay = await runtime.MainAgent.WaitForTurnAsync(
+            rollover.NewThreadId,
+            rollover.FirstTurn.TurnId,
+            cancellationToken);
+        if (replay.Status is not ControlledTaskStatus.Completed)
+        {
+            throw new InvalidOperationException($"Context checkpoint replay failed: {replay.ErrorMessage ?? replay.Status.ToString()}");
+        }
+
+        return (session, rollover.NewThreadId, ledger);
+    }
+
+    private static CompactCheckpoint BuildCompactCheckpoint(
+        ControlledTaskSession session,
+        string localTurnId,
+        string sourceThreadId,
+        SessionContextBudgetDecision decision,
+        DateTimeOffset timestamp)
+    {
+        var completed = session.Turns
+            .Where(turn => turn.Status is ControlledTaskStatus.Completed)
+            .Select(turn => $"{turn.Id}: {turn.UserInput}")
+            .ToArray();
+        var remaining = session.Turns
+            .Where(turn => turn.Status is not ControlledTaskStatus.Completed)
+            .Select(turn => $"{turn.Id}: {turn.UserInput}")
+            .ToArray();
+        var stableInterfaces = new[]
+        {
+            $"main-model: {session.MainModelId}",
+            $"reasoning-effort: {session.MainReasoningEffort}",
+        };
+        var necessaryFiles = new[] { session.WorkingDirectory };
+        var testStatus = $"controlled-task-status: {session.Status}; budget: {decision.Recommendation}";
+        var nextPhaseEntry = $"resume pending Main work for turn {localTurnId}";
+        return new CompactCheckpoint(
+            completed,
+            remaining,
+            stableInterfaces,
+            necessaryFiles,
+            testStatus,
+            nextPhaseEntry,
+            sourceThreadId,
+            session.Id,
+            timestamp);
+    }
+
+    private sealed record MainContextEpoch(
+        string ThreadId,
+        DateTimeOffset StartedAt,
+        int StartTurnCount,
+        decimal StartNormalizedCost,
+        bool Compacted);
 
     private async Task<(DelegationDecision Decision, TaskGroupLedger Ledger)> ConfirmDelegationWithSolAsync(
         ControlledTaskSession session,
