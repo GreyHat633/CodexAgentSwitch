@@ -12,6 +12,8 @@ public enum MainAgentEventKind
     TraceItem,
     ApprovalRequested,
     TurnCompleted,
+    CompactionStarted,
+    CompactionCompleted,
 }
 
 public sealed record MainAgentEvent(
@@ -24,6 +26,10 @@ public sealed record MainAgentEvent(
     TaskMessageKind? MessageKind = null);
 
 public sealed record MainAgentTurnHandle(string ThreadId, string TurnId);
+
+public sealed record MainAgentCompactionHandle(string ThreadId, bool RequestAccepted, JsonElement RawResponse);
+
+public sealed record MainAgentRolloverResult(string PreviousThreadId, string NewThreadId, CompactCheckpoint Checkpoint, MainAgentTurnHandle? FirstTurn);
 
 public sealed record MainAgentTurnResult(
     string ThreadId,
@@ -79,4 +85,23 @@ public interface IMainAgentSession
         string turnId,
         bool approve,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Starts native compaction. Completion is reported through EventReceived.</summary>
+    Task<MainAgentCompactionHandle> CompactThreadAsync(
+        string threadId,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Native thread compaction is not available for this session.");
+
+    /// <summary>Creates a fresh thread and optionally starts it with a bounded checkpoint replay.</summary>
+    /// Worker terminal resume remains scheduler-event-driven; this API adds no polling loop.
+    Task<MainAgentRolloverResult> RolloverThreadAsync(
+        string previousThreadId,
+        CompactCheckpoint checkpoint,
+        string modelId,
+        string reasoningEffort,
+        string workingDirectory,
+        ExecutionApprovalMode approvalMode,
+        bool startFirstTurn = true,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Fresh-thread rollover is not available for this session.");
 }

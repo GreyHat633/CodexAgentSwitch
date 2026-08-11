@@ -10,18 +10,68 @@ public sealed class CodexMainAgentSession : IMainAgentSession
 {
     private readonly CodexAppServerClient client;
     private readonly ICodexModelResolver modelResolver;
+    private readonly Func<string, object?, CancellationToken, Task<JsonElement>> request;
     private readonly ConcurrentDictionary<string, TurnRuntime> turns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingApproval> approvals = new(StringComparer.Ordinal);
 
-    public CodexMainAgentSession(CodexAppServerClient client, ICodexModelResolver? modelResolver = null)
+    public CodexMainAgentSession(
+        CodexAppServerClient client,
+        ICodexModelResolver? modelResolver = null,
+        Func<string, object?, CancellationToken, Task<JsonElement>>? request = null)
     {
         this.client = client;
         this.modelResolver = modelResolver ?? new CodexModelResolver();
+        this.request = request ?? ((method, parameters, cancellationToken) => client.RequestAsync(method, parameters, cancellationToken));
         client.NotificationReceived += OnNotificationAsync;
         client.ServerRequestReceived += OnServerRequestAsync;
     }
 
     public event Func<MainAgentEvent, Task>? EventReceived;
+
+    public async Task<MainAgentCompactionHandle> CompactThreadAsync(
+        string threadId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(threadId)) throw new ArgumentException("A thread id is required.", nameof(threadId));
+        // The acknowledgement only means the server accepted the request. The
+        // eventual compaction result remains notification/event driven.
+        var response = await request("thread/compact/start", new { threadId }, cancellationToken);
+        return new MainAgentCompactionHandle(threadId, true, response.Clone());
+    }
+
+    public async Task<MainAgentRolloverResult> RolloverThreadAsync(
+        string previousThreadId,
+        CompactCheckpoint checkpoint,
+        string modelId,
+        string reasoningEffort,
+        string workingDirectory,
+        ExecutionApprovalMode approvalMode,
+        bool startFirstTurn = true,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(previousThreadId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reasoningEffort);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        if (!string.Equals(checkpoint.SourceThreadId, previousThreadId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Checkpoint provenance does not match the previous thread.", nameof(checkpoint));
+        }
+        var newThreadId = await CreateThreadAsync(modelId, workingDirectory, approvalMode, cancellationToken);
+        if (string.Equals(previousThreadId, newThreadId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Rollover must create a fresh thread; the previous thread was reused.");
+        }
+
+        MainAgentTurnHandle? firstTurn = null;
+        if (startFirstTurn)
+        {
+            firstTurn = await StartTurnAsync(newThreadId, checkpoint.RenderReplayText(), modelId, reasoningEffort, workingDirectory, approvalMode, cancellationToken);
+        }
+
+        return new MainAgentRolloverResult(previousThreadId, newThreadId, checkpoint, firstTurn);
+    }
 
     public async Task<string> CreateThreadAsync(
         string modelId,
@@ -30,7 +80,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         CancellationToken cancellationToken = default)
     {
         var model = await modelResolver.ResolveAsync(client, modelId, cancellationToken);
-        var response = await client.RequestAsync(
+        var response = await request(
             "thread/start",
             new
             {
@@ -54,7 +104,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         CancellationToken cancellationToken = default)
     {
         var model = await modelResolver.ResolveAsync(client, modelId, cancellationToken);
-        await client.RequestAsync(
+        await request(
             "thread/resume",
             new
             {
@@ -77,7 +127,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         CancellationToken cancellationToken = default)
     {
         var model = await modelResolver.ResolveAsync(client, modelId, cancellationToken);
-        var response = await client.RequestAsync(
+        var response = await request(
             "turn/start",
             new
             {
@@ -112,7 +162,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         string turnId,
         CancellationToken cancellationToken = default)
     {
-        var response = await client.RequestAsync("thread/read", new { threadId, includeTurns = true }, cancellationToken);
+        var response = await request("thread/read", new { threadId, includeTurns = true }, cancellationToken);
         if (!response.TryGetProperty("thread", out var thread)
             || !thread.TryGetProperty("turns", out var threadTurns))
         {
@@ -148,7 +198,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
 
     public async Task InterruptTurnAsync(string threadId, string turnId, CancellationToken cancellationToken = default)
     {
-        await client.RequestAsync("turn/interrupt", new { threadId, turnId }, cancellationToken);
+        await request("turn/interrupt", new { threadId, turnId }, cancellationToken);
     }
 
     public async Task RespondToApprovalAsync(
@@ -177,6 +227,24 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         var turnId = parameters.TryGetProperty("turnId", out var turnIdElement)
             ? turnIdElement.GetString()
             : turn.ValueKind == JsonValueKind.Object && turn.TryGetProperty("id", out var nestedTurnId) ? nestedTurnId.GetString() : null;
+        // Native compaction is represented as a normal item lifecycle event;
+        // it is not a separate thread/compaction notification stream.
+        if (threadId is not null
+            && method is ("item/started" or "item/completed")
+            && parameters.TryGetProperty("item", out var compactionItem)
+            && compactionItem.ValueKind == JsonValueKind.Object
+            && compactionItem.TryGetProperty("type", out var compactionType)
+            && compactionType.GetString() == "contextCompaction")
+        {
+            var kind = method == "item/completed"
+                ? MainAgentEventKind.CompactionCompleted
+                : MainAgentEventKind.CompactionStarted;
+            if (EventReceived is not null)
+            {
+                await EventReceived.Invoke(new MainAgentEvent(kind, threadId, turnId ?? string.Empty, null, ReadStatus(compactionItem), parameters.Clone()));
+            }
+            return;
+        }
         if (threadId is null || turnId is null || !turns.TryGetValue(Key(threadId, turnId), out var runtime))
         {
             return;
