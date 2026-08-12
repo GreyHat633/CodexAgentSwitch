@@ -3,6 +3,9 @@ using System.Threading.Channels;
 using CodexAgentSwitch.Application.Abstractions;
 using CodexAgentSwitch.Domain.Orchestration;
 using CodexAgentSwitch.Domain.Scheduling;
+using CodexAgentSwitch.Domain.Usage;
+using CodexAgentSwitch.Application.Orchestration;
+using CodexAgentSwitch.Application.Usage;
 
 namespace CodexAgentSwitch.Application.Scheduling;
 
@@ -12,12 +15,20 @@ public sealed class WorkerScheduler(
     IClock clock,
     IEnumerable<ITaskPacketResolver>? resolvers = null,
     IEnumerable<IDelegationPolicyGuard>? guards = null,
-    IEnumerable<ISchedulerResultObserver>? observers = null) : IWorkerScheduler
+    IEnumerable<ISchedulerResultObserver>? observers = null,
+    IWorkPackageLeaseRepository? leaseRepository = null,
+    MainCostGuard? mainCostGuard = null,
+    IUsageSource? usageSource = null,
+    MainCostGuardCoordinator? guardCoordinator = null) : IWorkerScheduler
 {
     private readonly IReadOnlyList<IWorkerExecutor> executors = executors.ToArray();
     private readonly IReadOnlyList<ITaskPacketResolver> resolvers = resolvers?.ToArray() ?? [];
     private readonly IReadOnlyList<IDelegationPolicyGuard> guards = guards?.ToArray() ?? [];
     private readonly IReadOnlyList<ISchedulerResultObserver> observers = observers?.ToArray() ?? [];
+    private readonly IWorkPackageLeaseRepository? leaseRepository = leaseRepository;
+    private readonly IUsageSource? usageSource = usageSource;
+    private readonly MainCostGuardCoordinator guardCoordinator = guardCoordinator
+        ?? new MainCostGuardCoordinator(initialGuard: mainCostGuard);
     private readonly Channel<QueuedWork> queue = Channel.CreateUnbounded<QueuedWork>(new UnboundedChannelOptions
     {
         SingleReader = true,
@@ -193,6 +204,10 @@ public sealed class WorkerScheduler(
         tasks[result.TaskId] = updated;
         await repository.UpsertAsync(updated, cancellationToken);
         await NotifyResultAsync(updated, cancellationToken);
+        if (stateValue == DelegationState.ResultReceived)
+        {
+            await TransitionLeaseAsync(result.TaskId, WorkPackageLifecycleEvent.WorkerTerminalResult, cancellationToken);
+        }
         if (state != SchedulerState.Paused)
         {
             state = ActiveCount() > 0 ? SchedulerState.Working : SchedulerState.Ready;
@@ -210,7 +225,7 @@ public sealed class WorkerScheduler(
     public Task<IReadOnlyList<ScheduledDelegation>> ListAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<ScheduledDelegation>>(tasks.Values.OrderByDescending(item => item.UpdatedAt).ToArray());
 
-    public async Task<RepartitionTelemetry> RecordRepartitionAsync(
+    public Task<RepartitionTelemetry> RecordRepartitionAsync(
         string taskGroupId,
         RepartitionTrigger trigger,
         WorkOwner decision,
@@ -218,6 +233,23 @@ public sealed class WorkerScheduler(
         string workSummary,
         string? workerIdentity = null,
         string? result = null,
+        CancellationToken cancellationToken = default) =>
+        RecordRepartitionAsync(taskGroupId, trigger, decision, reason, workSummary, workerIdentity, result,
+            null, null, null, null, null, cancellationToken);
+
+    public async Task<RepartitionTelemetry> RecordRepartitionAsync(
+        string taskGroupId,
+        RepartitionTrigger trigger,
+        WorkOwner decision,
+        RepartitionReasonCode reason,
+        string workSummary,
+        string? workerIdentity,
+        string? result,
+        string? packageId,
+        string? workingDirectory,
+        string? packageKind,
+        IReadOnlyList<string>? declaredScopes,
+        int? costWindowIndex,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(taskGroupId))
@@ -230,6 +262,16 @@ public sealed class WorkerScheduler(
             throw new ArgumentException("Work summary is required.", nameof(workSummary));
         }
 
+        var metadata = new object?[] { packageId, workingDirectory, packageKind, declaredScopes };
+        if (metadata.Any(item => item is not null) && metadata.Any(item => item is null))
+        {
+            throw new ArgumentException("Complete package metadata (packageId, workingDirectory, packageKind, declaredScopes) is required.");
+        }
+        if (costWindowIndex is not null && metadata.All(item => item is null))
+        {
+            throw new ArgumentException("Cost window index cannot be supplied without complete package metadata.", nameof(costWindowIndex));
+        }
+
         var record = new RepartitionRecord(0, trigger, decision, reason, workSummary, workerIdentity, result);
         record.Validate();
 
@@ -238,6 +280,22 @@ public sealed class WorkerScheduler(
         {
             var history = await repository.ListRepartitionsAsync(taskGroupId, cancellationToken);
             var sequence = history.Count == 0 ? 1 : history.Max(item => item.Sequence) + 1;
+            var prior = leaseRepository is not null && workingDirectory is not null
+                ? await leaseRepository.GetActiveForWorkingDirectoryAsync(workingDirectory, cancellationToken)
+                : null;
+            var packageGuard = workingDirectory is null
+                ? null
+                : guardCoordinator.ResolveForWorkingDirectory(workingDirectory);
+            if (packageGuard is not null && decision == WorkOwner.Main && packageId is not null
+                && (prior is null || !string.Equals(prior.PackageId, packageId, StringComparison.Ordinal)))
+            {
+                packageGuard.StartPackage();
+            }
+            if (packageGuard is not null)
+            {
+                packageGuard.RecordCheckpoint(trigger, decision, reason);
+            }
+            var derivedCostWindowIndex = packageGuard?.BackoffStage ?? costWindowIndex ?? 0;
             var telemetry = new RepartitionTelemetry(
                 taskGroupId,
                 sequence,
@@ -247,8 +305,28 @@ public sealed class WorkerScheduler(
                 record.Reason,
                 record.WorkSummary,
                 record.WorkerIdentity,
-                record.Result);
+                record.Result,
+                packageId,
+                workingDirectory,
+                packageKind,
+                declaredScopes,
+                derivedCostWindowIndex);
             await repository.AppendRepartitionAsync(telemetry, cancellationToken);
+            if (leaseRepository is not null && packageId is not null && workingDirectory is not null
+                && packageKind is not null && declaredScopes is not null)
+            {
+                if (prior is not null)
+                {
+                    prior.Invalidate("A newer repartition superseded this lease.");
+                    await leaseRepository.SaveAsync(prior, cancellationToken);
+                }
+
+                var lease = new WorkPackageLease(
+                    packageId, taskGroupId, workingDirectory, decision, packageKind, reason, trigger,
+                    telemetry.RecordedAt, derivedCostWindowIndex, declaredScopes,
+                    decision == WorkOwner.Main ? WorkPackageLeaseStatus.MAIN_OWNED : WorkPackageLeaseStatus.WORKER_OWNED);
+                await leaseRepository.SaveAsync(lease, cancellationToken);
+            }
             return telemetry;
         }
         finally
@@ -268,6 +346,101 @@ public sealed class WorkerScheduler(
 
         return repository.ListRepartitionsAsync(taskGroupId, cancellationToken);
     }
+
+    public async Task<PreToolUseResult> EvaluatePreToolUseAsync(PreToolUseRequest request, CancellationToken cancellationToken = default)
+    {
+        var tool = request.ToolName?.Trim() ?? string.Empty;
+        var command = tool.Equals("apply_patch", StringComparison.OrdinalIgnoreCase)
+            || tool.Equals("edit", StringComparison.OrdinalIgnoreCase)
+            || tool.Equals("write", StringComparison.OrdinalIgnoreCase) ? tool : request.ToolInput;
+        var classification = MutationClassifier.Classify(command);
+        if (classification.IsReadOnly)
+        {
+            return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), true, false, "Read-only operation is allowed.");
+        }
+        if (classification.IsUnknown)
+        {
+            return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), true, true, "Unknown operation was not classified; existing safety policy must decide.");
+        }
+        var lease = leaseRepository is null ? null : await leaseRepository.GetActiveForWorkingDirectoryAsync(request.WorkingDirectory, cancellationToken);
+        if (lease?.Status == WorkPackageLeaseStatus.WORKER_OWNED)
+        {
+            return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), false, false,
+                "Mutation denied: the current package is owned by Worker.");
+        }
+
+        if (lease?.Status == WorkPackageLeaseStatus.MAIN_OWNED && usageSource is not null
+            && !string.IsNullOrWhiteSpace(request.SessionId))
+        {
+            var guard = guardCoordinator.Resolve(request.WorkingDirectory, request.SessionId);
+            var requestedCwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
+            var usage = usageSource.Read(cancellationToken)
+                .Where(item => string.Equals(item.SessionId, request.SessionId, StringComparison.Ordinal)
+                    && (string.Equals(item.AgentRole, "Sol", StringComparison.Ordinal)
+                        || string.Equals(item.AgentRole, "Main", StringComparison.Ordinal))
+                    && (string.Equals(NormalizeOptional(item.Cwd), requestedCwd, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(NormalizeOptional(item.Project), requestedCwd, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(item => item.EndedAt ?? item.StartedAt)
+                .FirstOrDefault();
+            if (usage is not null)
+            {
+                guard.AcceptUsage(usage);
+            }
+
+            if (guard.IsGuardHit)
+            {
+                if (lease.TryTransition(WorkPackageLifecycleEvent.CostCheckpoint, out _))
+                {
+                    await leaseRepository!.SaveAsync(lease, cancellationToken);
+                }
+                return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), false, false,
+                    "MAIN normalized-credit cost guard reached; ownership lease invalidated at CostCheckpoint.");
+            }
+        }
+        var decision = new MainToolOwnershipGate(lease).Evaluate(command, request.WorkingDirectory);
+        return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), decision.Allowed, false, decision.Message);
+    }
+
+    public async Task<WorkPackageLease?> CompletePackageAsync(string packageId, string workingDirectory, CancellationToken cancellationToken = default)
+    {
+        if (leaseRepository is null) return null;
+        var lease = await leaseRepository.GetActiveAsync(packageId, workingDirectory, cancellationToken);
+        if (lease is null) return null;
+        lease.OnPackageComplete();
+        await leaseRepository.SaveAsync(lease, cancellationToken);
+        return lease;
+    }
+
+    public async Task<SchedulerRuntimeDiagnostics> GetRuntimeDiagnosticsAsync(CancellationToken cancellationToken = default)
+    {
+        WorkPackageLease? lease = null;
+        if (leaseRepository is not null)
+        {
+            lease = (await leaseRepository.ListAsync(cancellationToken: cancellationToken))
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+        }
+        var active = tasks.Values
+            .Where(item => item.State is DelegationState.Created or DelegationState.Delegated or DelegationState.Running)
+            .OrderByDescending(item => item.UpdatedAt)
+            .FirstOrDefault();
+        var telemetry = lease is null
+            ? null
+            : (await repository.ListRepartitionsAsync(lease.TaskGroupId, cancellationToken))
+                .Where(item => string.Equals(item.PackageId, lease.PackageId, StringComparison.Ordinal))
+                .OrderByDescending(item => item.Sequence)
+                .FirstOrDefault();
+        var economy = lease is null
+            ? new MainCostGuardTelemetry(0m, 0m, 0, 0m, 0, null, null, false)
+            : guardCoordinator.ResolveForWorkingDirectory(lease.WorkingDirectory).Telemetry;
+        return new SchedulerRuntimeDiagnostics(economy, lease?.Status, lease?.PackageId,
+            active?.Packet.WorkerId ?? telemetry?.WorkerIdentity,
+            lease?.InvalidReason ?? economy.LastReason?.ToString() ?? telemetry?.Reason.ToString(), economy.GuardHitCount);
+    }
+
+    private static string NormalizeOptional(string? path) => string.IsNullOrWhiteSpace(path)
+        ? string.Empty
+        : WorkPackageLease.NormalizePath(path);
 
     public async ValueTask DisposeAsync()
     {
@@ -303,6 +476,10 @@ public sealed class WorkerScheduler(
                     var completed = running with { State = finalState, Result = result with { State = finalState }, UpdatedAt = clock.UtcNow, CompletedAt = clock.UtcNow, FailureReason = result.FailureReason };
                     tasks[item.Packet.TaskId] = completed;
                     await repository.UpsertAsync(completed, cancellationToken);
+                    if (finalState == DelegationState.ResultReceived)
+                    {
+                        await TransitionLeaseAsync(item.Packet.TaskId, WorkPackageLifecycleEvent.WorkerTerminalResult, cancellationToken);
+                    }
                     await NotifyResultAsync(completed, cancellationToken);
                     item.Completion.TrySetResult(completed.Result!);
                 }
@@ -357,6 +534,10 @@ public sealed class WorkerScheduler(
         var updated = existing with { State = target, Result = result, UpdatedAt = clock.UtcNow };
         tasks[taskId] = updated;
         await repository.UpsertAsync(updated, cancellationToken);
+        if (target == DelegationState.Adopted)
+        {
+            await TransitionLeaseAsync(taskId, WorkPackageLifecycleEvent.WorkerReviewComplete, cancellationToken);
+        }
         Publish();
         return result;
     }
@@ -378,6 +559,15 @@ public sealed class WorkerScheduler(
         {
             await observer.OnResultAsync(task, cancellationToken);
         }
+    }
+
+    private async Task TransitionLeaseAsync(string taskId, WorkPackageLifecycleEvent lifecycleEvent, CancellationToken cancellationToken)
+    {
+        if (leaseRepository is null || !tasks.TryGetValue(taskId, out var task)) return;
+        var lease = await leaseRepository.GetActiveAsync(taskId, task.Packet.WorkingDirectory, cancellationToken)
+            ?? await leaseRepository.GetActiveForWorkingDirectoryAsync(task.Packet.WorkingDirectory, cancellationToken);
+        if (lease is null || !lease.TryTransition(lifecycleEvent, out _)) return;
+        await leaseRepository.SaveAsync(lease, cancellationToken);
     }
 
     private sealed record QueuedWork(TaskPacket Packet, IWorkerExecutor Executor, TaskCompletionSource<WorkerResultPacket> Completion);

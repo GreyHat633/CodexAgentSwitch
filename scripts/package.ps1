@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+(?:\.\d+)?$')][string]$Version = '0.2.4.2',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:\.\d+)?$')][string]$Version = '0.2.5',
     [switch]$IncludeRuntimeInstaller,
     [switch]$SkipValidationBuild
 )

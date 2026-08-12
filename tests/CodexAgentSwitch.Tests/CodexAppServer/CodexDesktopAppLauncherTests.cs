@@ -46,6 +46,10 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("[agents.cas_luna_worker]", config, StringComparison.Ordinal);
             Assert.DoesNotContain("developer_instructions", config, StringComparison.Ordinal);
             Assert.Contains("[mcp_servers.codex_agent_switch]", config, StringComparison.Ordinal);
+            Assert.Contains("required = true", config, StringComparison.Ordinal);
+            var hooks = await File.ReadAllTextAsync(Path.Combine(project, ".codex", "hooks.json"));
+            Assert.Contains("\"matcher\": \"Bash|apply_patch|Edit|Write\"", hooks, StringComparison.Ordinal);
+            Assert.Contains("\"commandWindows\"", hooks, StringComparison.Ordinal);
             Assert.DoesNotContain("agents.default_subagent", config, StringComparison.OrdinalIgnoreCase);
             var projectInstructions = await File.ReadAllTextAsync(Path.Combine(project, "AGENTS.md"));
             Assert.Contains("Codex Agent Switch managed native worker routing", projectInstructions, StringComparison.Ordinal);
@@ -135,6 +139,30 @@ public sealed class CodexDesktopAppLauncherTests
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task Disabled_worker_policy_preserves_unrelated_hooks_and_removes_only_managed_hook()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-hooks-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        Directory.CreateDirectory(Path.Combine(projectDirectory, ".codex"));
+        var hooksPath = Path.Combine(projectDirectory, ".codex", "hooks.json");
+        await File.WriteAllTextAsync(hooksPath, "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Other\",\"hooks\":[{\"type\":\"command\",\"commandWindows\":\"other.exe\"}]}]}}");
+        try
+        {
+            var launcher = CreateLauncher(new AppDataPaths(Path.Combine(root, "app-data")), new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"), new RecordingDesktopStarter(), new PassThroughConfigurationValidator());
+            var now = DateTimeOffset.UtcNow;
+            var profile = Profile.CreateDefault(now) with { WorkerPolicy = new WorkerPolicy(false, WorkerSource.Disabled, null, null, 0, RoutingMode.Single, FallbackAction.SingleAgent) };
+            var project = new AgentProject("hooks", "Hooks", projectDirectory, false, now, now);
+            var result = await launcher.ApplyToProjectsAsync(profile, [project]);
+            Assert.True(Assert.Single(result).Succeeded);
+            var hooks = await File.ReadAllTextAsync(hooksPath);
+            Assert.Contains("other.exe", hooks, StringComparison.Ordinal);
+            Assert.DoesNotContain("--hook pre-tool-use", hooks, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     [Fact]

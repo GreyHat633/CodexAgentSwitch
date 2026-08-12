@@ -6,6 +6,28 @@ namespace CodexAgentSwitch.Tests.CodexAppServer;
 public sealed class CodexProjectConfigurationValidatorTests
 {
     [Fact]
+    public void Hook_report_requires_user_controlled_trust_and_exact_command_review()
+    {
+        var report = CodexProjectConfigurationValidator.ReportHooks(new Dictionary<string, string>
+        {
+            ["hooks.json"] = "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"commandWindows\":\"ToolHost.exe\"}]}]}}",
+        });
+        Assert.True(report.HooksPresent);
+        Assert.True(report.PreToolUseConfigured);
+        Assert.Contains("trust", report.ReviewNotice, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("user-controlled", report.ReviewNotice, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ToolHost_hook_failure_uses_supported_deny_shape()
+    {
+        var path = Path.Combine(FindRepositoryRoot(), "src", "CodexAgentSwitch.ToolHost", "Program.cs");
+        var source = File.ReadAllText(path);
+        Assert.Contains("permissionDecision = \"deny\"", source, StringComparison.Ordinal);
+        Assert.Contains("Agent Switch ownership gate is unavailable; retry after Scheduler recovery.", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("permissionDecision = \"ask\"", source, StringComparison.Ordinal);
+    }
+    [Fact]
     [Trait("Category", "LiveCodexConfig")]
     public async Task Current_codex_loads_the_whitelisted_fixture_and_rejects_the_legacy_map_fixture()
     {

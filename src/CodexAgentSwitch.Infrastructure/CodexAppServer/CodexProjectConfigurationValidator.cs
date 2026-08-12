@@ -32,8 +32,25 @@ public sealed record CodexConfigurationLayers(
     string? UserToml = null,
     IReadOnlyDictionary<string, string>? ProjectFiles = null);
 
+public sealed record CodexProjectConfigurationReport(
+    bool HooksPresent,
+    bool PreToolUseConfigured,
+    string ReviewNotice)
+{
+    public const string UserControlledReviewNotice =
+        "Project trust and exact hook-command review remain user-controlled; Agent Switch never auto-grants trust or hook hash trust.";
+}
+
 public sealed class CodexProjectConfigurationValidator(AppDataPaths paths) : ICodexProjectConfigurationValidator
 {
+    public static CodexProjectConfigurationReport ReportHooks(IReadOnlyDictionary<string, string>? projectFiles)
+    {
+        var hooks = projectFiles?.TryGetValue("hooks.json", out var value) == true ? value : null;
+        var configured = hooks?.Contains("PreToolUse", StringComparison.OrdinalIgnoreCase) == true
+            && hooks.Contains("commandWindows", StringComparison.OrdinalIgnoreCase);
+        return new(hooks is not null, configured, CodexProjectConfigurationReport.UserControlledReviewNotice);
+    }
+
     public async Task ValidateAsync(CodexCommand command, string candidateToml, CancellationToken cancellationToken = default)
     {
         await ValidateLayeredAsync(command, new CodexConfigurationLayers(candidateToml), cancellationToken);

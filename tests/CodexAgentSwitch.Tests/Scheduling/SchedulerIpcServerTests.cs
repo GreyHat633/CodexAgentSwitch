@@ -18,6 +18,7 @@ using CodexAgentSwitch.Domain.Tasks;
 using CodexAgentSwitch.Domain.Usage;
 using CodexAgentSwitch.Domain.Workers;
 using CodexAgentSwitch.Infrastructure.Scheduling;
+using CodexAgentSwitch.Infrastructure.Persistence;
 
 namespace CodexAgentSwitch.Tests.Scheduling;
 
@@ -79,6 +80,48 @@ public sealed class SchedulerIpcServerTests
     }
 
     [Fact]
+    public async Task Nested_working_directory_resolves_applied_parent_worker()
+    {
+        var resolver = new AppliedProjectWorkerGuard(new ProjectRepository(Project("deepseek-default")));
+        var packet = new TaskPacket(
+            "task-nested", string.Empty, "E:\\AISPace\\TestSpace\\state\\acceptance\\fixture", string.Empty,
+            "Implement fixture", ["src"], ["src"], ["src"], ["tests pass"], [], "Return result");
+
+        var resolved = await resolver.ResolveAsync(packet);
+
+        Assert.Equal("deepseek-default", resolved.WorkerId);
+    }
+
+    [Fact]
+    public async Task Most_specific_registered_project_wins_for_nested_working_directory()
+    {
+        var projects = new ProjectRepository(
+            Project("outer-worker", workingDirectory: "E:\\AISPace\\TestSpace", projectId: "outer"),
+            Project("inner-worker", workingDirectory: "E:\\AISPace\\TestSpace\\nested", projectId: "inner"));
+        var resolver = new AppliedProjectWorkerGuard(projects);
+        var packet = new TaskPacket(
+            "task-inner", string.Empty, "E:\\AISPace\\TestSpace\\nested\\fixture", string.Empty,
+            "Implement fixture", ["src"], ["src"], ["src"], ["tests pass"], [], "Return result");
+
+        var resolved = await resolver.ResolveAsync(packet);
+
+        Assert.Equal("inner-worker", resolved.WorkerId);
+    }
+
+    [Fact]
+    public async Task Similar_directory_prefix_does_not_resolve_applied_project()
+    {
+        var resolver = new AppliedProjectWorkerGuard(new ProjectRepository(Project("deepseek-default")));
+        var packet = new TaskPacket(
+            "task-sibling", string.Empty, "E:\\AISPace\\TestSpace-other\\fixture", string.Empty,
+            "Implement fixture", ["src"], ["src"], ["src"], ["tests pass"], [], "Return result");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.ResolveAsync(packet));
+
+        Assert.Contains("未能从项目已应用方案解析 Worker", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Repartition_telemetry_round_trips_over_ipc_and_rejects_undefined_enum()
     {
         var pipeName = $"CAS-test-{Guid.NewGuid():N}";
@@ -107,6 +150,31 @@ public sealed class SchedulerIpcServerTests
             """);
         Assert.Contains("\"ok\":false", invalidResponse, StringComparison.Ordinal);
         Assert.Single(await scheduler.ListRepartitionsAsync("group-ipc"));
+    }
+
+    [Fact]
+    public async Task PreToolUse_ipc_denies_definite_mutation_and_leaves_unknown_to_policy()
+    {
+        var root = Path.Combine(Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? Path.GetTempPath(), "pretool-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var database = new SqliteDatabase(Path.Combine(root, "pretool.db"));
+            await database.InitializeAsync();
+            var leases = new SqliteWorkPackageLeaseRepository(database);
+            await using var scheduler = new WorkerScheduler([new EchoExecutor()], new MemoryRepository(), new FixedClock(), leaseRepository: leases);
+            await scheduler.StartAsync();
+            await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.PHASE_CHANGE, WorkOwner.Worker, RepartitionReasonCode.BOUNDED_IMPLEMENTATION, "worker", null, null, "pkg", root, "Implementation", [root], 0);
+            var pipeName = $"CAS-pretool-{Guid.NewGuid():N}";
+            await using var server = new SchedulerIpcServer(scheduler, pipeName);
+            await server.StartAsync();
+            var denied = await SendRequestAsync(pipeName, $"{{\"method\":\"preToolUse\",\"payload\":{{\"sessionId\":\"s\",\"workingDirectory\":\"{root.Replace("\\", "\\\\")}\",\"toolName\":\"apply_patch\",\"toolInput\":{{\"patch\":\"x\"}}}}}}");
+            Assert.Contains("\"allowed\":false", denied, StringComparison.OrdinalIgnoreCase);
+            var unknown = await SendRequestAsync(pipeName, $"{{\"method\":\"preToolUse\",\"payload\":{{\"sessionId\":\"s\",\"workingDirectory\":\"{root.Replace("\\", "\\\\")}\",\"toolName\":\"shell\",\"toolInput\":\"mystery-command\"}}}}");
+            Assert.Contains("\"allowed\":true", unknown, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("RequiresSafetyPolicy", unknown, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     private static async Task<string> SendRequestAsync(string pipeName, string request)
@@ -174,7 +242,11 @@ public sealed class SchedulerIpcServerTests
         }
     }
 
-    private static AgentProject Project(string workerId, Guid? appliedProfileId = null)
+    private static AgentProject Project(
+        string workerId,
+        Guid? appliedProfileId = null,
+        string workingDirectory = "E:\\AISPace\\TestSpace",
+        string projectId = "project-1")
     {
         var now = new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero);
         var profileId = appliedProfileId ?? Guid.Parse("a8a9a9d4-1f72-4824-a9bd-21c26b701301");
@@ -183,7 +255,7 @@ public sealed class SchedulerIpcServerTests
             nameof(EffectiveWorkerKind.ExternalAgent), null, null, workerId, "medium", 1,
             "Economic", "SchedulerRequired", "fixture");
         return new AgentProject(
-            "project-1", "TestSpace", "E:\\AISPace\\TestSpace", false, now, now, profileId,
+            projectId, "TestSpace", workingDirectory, false, now, now, profileId,
             new NativeCodexProjectAdaptation(profileId, "Sol + DeepSeek", ".codex/config.toml", null, now, "fixture", false, snapshot));
     }
 

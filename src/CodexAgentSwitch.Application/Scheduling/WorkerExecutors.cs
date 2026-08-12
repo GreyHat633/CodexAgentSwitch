@@ -222,11 +222,29 @@ public sealed class AppliedProjectWorkerGuard(IProjectRepository projects) : ITa
         }
     }
 
-    private async Task<AgentProject?> FindProjectAsync(TaskPacket packet, CancellationToken cancellationToken) =>
-        !string.IsNullOrWhiteSpace(packet.ProjectId)
-            ? await projects.GetAsync(packet.ProjectId, cancellationToken)
-            : (await projects.ListAsync(cancellationToken)).FirstOrDefault(item =>
-                string.Equals(Path.GetFullPath(item.WorkingDirectory), Path.GetFullPath(packet.WorkingDirectory), StringComparison.OrdinalIgnoreCase));
+    private async Task<AgentProject?> FindProjectAsync(TaskPacket packet, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(packet.ProjectId))
+        {
+            return await projects.GetAsync(packet.ProjectId, cancellationToken);
+        }
+
+        var workingDirectory = NormalizePath(packet.WorkingDirectory);
+        return (await projects.ListAsync(cancellationToken))
+            .Select(project => new { Project = project, Root = NormalizePath(project.WorkingDirectory) })
+            .Where(candidate => Contains(candidate.Root, workingDirectory))
+            .OrderByDescending(candidate => candidate.Root.Length)
+            .Select(candidate => candidate.Project)
+            .FirstOrDefault();
+    }
+
+    private static string NormalizePath(string path) =>
+        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static bool Contains(string root, string path) =>
+        string.Equals(root, path, StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     private static string? GetAppliedWorker(AgentProject? project)
     {

@@ -20,6 +20,7 @@
                     <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="DeepSeek" /><TextBlock Grid.Column="1" Text="未配置" /><TextBlock Grid.Column="2" Text="跳过" Foreground="{ThemeResource WarningBrush}" /></Grid>
                 </StackPanel>
             </Border>
+            <Border Style="{StaticResource CardBorderStyle}"><StackPanel Spacing="8"><TextBlock Text="经济 / 所有权运行状态" Style="{StaticResource SectionTitleStyle}" /><TextBlock x:Name="EconomyDiagnosticsText" Style="{StaticResource BodyTextStyle}" TextWrapping="Wrap" /></StackPanel></Border>
             <Expander Header="开发者诊断详情">
                 <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0"><StackPanel Spacing="8"><TextBlock Text="原始 Thread ID、JSON-RPC 与日志只在此渐进披露区域出现。" Style="{StaticResource CaptionTextStyle}" /><TextBox FontFamily="Cascadia Mono" IsReadOnly="True" AcceptsReturn="True" Height="130" Text="[sanitized] initialize: ok&#x0a;[sanitized] schema: compatible&#x0a;[sanitized] credential value: [REDACTED]" /></StackPanel></Border>
             </Expander>

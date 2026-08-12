@@ -8,6 +8,13 @@ Console.InputEncoding = Encoding.UTF8;
 Console.OutputEncoding = new UTF8Encoding(false);
 
 var pipeName = ReadArgument(args, "--pipe") ?? SchedulerEndpoint.PipeName;
+var hookMode = string.Equals(ReadArgument(args, "--hook"), "pre-tool-use", StringComparison.OrdinalIgnoreCase);
+if (hookMode)
+{
+    await RunPreToolUseHookAsync(pipeName);
+}
+else
+{
 while (await Console.In.ReadLineAsync() is { } line)
 {
     line = line.TrimStart('\uFEFF');
@@ -37,7 +44,7 @@ while (await Console.In.ReadLineAsync() is { } line)
                         ? requestedProtocol.GetString() ?? "2025-06-18"
                         : "2025-06-18",
                 capabilities = new { tools = new { listChanged = false } },
-                serverInfo = new { name = "codex-agent-switch", version = "0.2.4.2" },
+                serverInfo = new { name = "codex-agent-switch", version = "0.2.5" },
             },
             "ping" => new { },
             "tools/list" => new { tools = ToolDefinitions() },
@@ -56,6 +63,57 @@ while (await Console.In.ReadLineAsync() is { } line)
         });
     }
 }
+}
+
+static async Task RunPreToolUseHookAsync(string pipeName)
+{
+    var line = await Console.In.ReadLineAsync();
+    if (string.IsNullOrWhiteSpace(line)) return;
+    try
+    {
+        using var document = JsonDocument.Parse(line);
+        var root = document.RootElement;
+        var sessionId = ReadJsonString(root, "session_id") ?? ReadJsonString(root, "sessionId") ?? string.Empty;
+        var cwd = ReadJsonString(root, "cwd") ?? ReadJsonString(root, "workingDirectory") ?? Environment.CurrentDirectory;
+        var toolName = ReadJsonString(root, "tool_name") ?? ReadJsonString(root, "toolName") ?? string.Empty;
+        var input = root.TryGetProperty("tool_input", out var toolInput) ? toolInput.GetRawText() : root.TryGetProperty("toolInput", out var inputValue) ? inputValue.GetRawText() : null;
+        var result = await SendAsync(pipeName, "preToolUse", new { sessionId, workingDirectory = cwd, toolName, toolInput = input });
+        var denied = result.TryGetProperty("allowed", out var allowed) && !allowed.GetBoolean();
+        if (denied)
+        {
+            await WriteResponseAsync(new
+            {
+                hookSpecificOutput = new
+                {
+                    hookEventName = "PreToolUse",
+                    permissionDecision = "deny",
+                    permissionDecisionReason = result.TryGetProperty("reason", out var reason) ? reason.GetString() : "Agent Switch ownership gate denied the mutation.",
+                },
+            });
+        }
+        else
+        {
+            await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = "PreToolUse" } });
+        }
+    }
+    catch (Exception)
+    {
+        // Codex does not support "ask" for PreToolUse hooks. Scheduler or
+        // malformed-input failures therefore deny this narrowly matched hook.
+        await WriteResponseAsync(new
+        {
+            hookSpecificOutput = new
+            {
+                hookEventName = "PreToolUse",
+                permissionDecision = "deny",
+                permissionDecisionReason = "Agent Switch ownership gate is unavailable; retry after Scheduler recovery.",
+            },
+        });
+    }
+}
+
+static string? ReadJsonString(JsonElement element, string name) =>
+    element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
 static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
 {
@@ -67,6 +125,7 @@ static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
         "report_worker_result" => ("reportResult", ReadWorkerResult(arguments)),
         "begin_worker_review" => ("review", new { taskId = Required(arguments, "taskId") }),
         "adopt_worker_result" => ("adopt", new { taskId = Required(arguments, "taskId"), summary = Optional(arguments, "summary") }),
+        "complete_package" => ("completePackage", new { packageId = Required(arguments, "packageId"), workingDirectory = Required(arguments, "workingDirectory") }),
         "record_repartition" => ("recordRepartition", ReadRepartition(arguments)),
         "list_repartitions" => ("listRepartitions", new { taskGroupId = Required(arguments, "taskGroupId") }),
         "scheduler_status" => ("status", new { }),
@@ -117,6 +176,10 @@ static object ReadRepartition(JsonElement arguments) => new
     workSummary = Required(arguments, "workSummary"),
     workerIdentity = OptionalNullable(arguments, "workerIdentity"),
     result = OptionalNullable(arguments, "result"),
+    packageId = Required(arguments, "packageId"),
+    workingDirectory = Required(arguments, "workingDirectory"),
+    packageKind = Required(arguments, "packageKind"),
+    declaredScopes = RequiredStrings(arguments, "declaredScopes"),
 };
 
 static async Task<JsonElement> SendAsync(string pipeName, string method, object payload)
@@ -193,6 +256,12 @@ static object[] ToolDefinitions() =>
     },
     new
     {
+        name = "complete_package",
+        description = "Mark a usable or review lease COMPLETED after the package is complete.",
+        inputSchema = new { type = "object", properties = new { packageId = StringSchema("Package id."), workingDirectory = StringSchema("Package working directory.") }, required = new[] { "packageId", "workingDirectory" }, additionalProperties = false },
+    },
+    new
+    {
         name = "scheduler_status",
         description = "Read Scheduler state and active task count without starting model work.",
         inputSchema = new { type = "object", properties = new { }, additionalProperties = false },
@@ -213,8 +282,12 @@ static object[] ToolDefinitions() =>
                 ["workSummary"] = StringSchema("Short current-work summary."),
                 ["workerIdentity"] = StringSchema("Optional worker identity."),
                 ["result"] = StringSchema("Optional result or remaining-work summary."),
+                ["packageId"] = StringSchema("Durable package id."),
+                ["workingDirectory"] = StringSchema("Package working directory."),
+                ["packageKind"] = StringSchema("Package kind."),
+                ["declaredScopes"] = StringArraySchema("Declared ownership scopes."),
             },
-            required = new[] { "taskGroupId", "trigger", "decision", "reason", "workSummary" },
+            required = new[] { "taskGroupId", "trigger", "decision", "reason", "workSummary", "packageId", "workingDirectory", "packageKind", "declaredScopes" },
             additionalProperties = false,
         },
     },
@@ -259,6 +332,11 @@ static string Optional(JsonElement element, string name) => element.TryGetProper
 static string? OptionalNullable(JsonElement element, string name) => element.TryGetProperty(name, out var value) && !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString() : null;
 static T ParseEnum<T>(JsonElement element, string name) where T : struct, Enum => element.TryGetProperty(name, out var value) && Enum.TryParse<T>(value.GetString(), ignoreCase: false, out var parsed) && Enum.IsDefined(parsed) ? parsed : throw new InvalidDataException($"{name} is invalid.");
 static IReadOnlyList<string> Strings(JsonElement element, string name) => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array ? value.EnumerateArray().Select(item => item.GetString() ?? string.Empty).Where(item => item.Length > 0).ToArray() : [];
+static IReadOnlyList<string> RequiredStrings(JsonElement element, string name)
+{
+    var values = Strings(element, name);
+    return values.Count > 0 ? values : throw new InvalidDataException($"{name} is required and cannot be empty.");
+}
 static string? ReadArgument(string[] arguments, string name) { var index = Array.IndexOf(arguments, name); return index >= 0 && index + 1 < arguments.Length ? arguments[index + 1] : null; }
 static Task WriteResponseAsync(object response) => Console.Out.WriteLineAsync(JsonSerializer.Serialize(response, ToolHostJson.Options));
 

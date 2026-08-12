@@ -113,7 +113,7 @@ public sealed class OpenCodeZenTests
         var capabilities = await adapter.GetCapabilitiesAsync();
 
         Assert.False(capabilities.IsAvailable);
-        Assert.Contains(capabilities.Warnings, warning => warning.Contains("API Key", StringComparison.Ordinal));
+        Assert.Contains(capabilities.Warnings, warning => warning.Contains("API 密钥", StringComparison.Ordinal));
         Assert.Equal(0, handler.CallCount);
     }
 

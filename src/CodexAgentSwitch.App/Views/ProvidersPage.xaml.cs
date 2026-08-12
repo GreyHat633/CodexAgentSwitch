@@ -37,7 +37,8 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
 
     private async void SaveOpenCodeZen(object sender, RoutedEventArgs e)
     {
-        var selection = OpenCodeZenModelComboBox.SelectedItem as string;
+        var selection = (OpenCodeZenModelComboBox.SelectedItem as ProviderModelOption)?.Id
+            ?? OpenCodeZenModelComboBox.SelectedItem as string;
         if (string.IsNullOrWhiteSpace(selection))
         {
             ShowOpenCodeZen(InfoBarSeverity.Warning, "尚未选择模型", "请先刷新模型并选择一个 OpenCode Zen 模型，然后再保存。");
@@ -97,17 +98,25 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
     {
         try
         {
-            var client = App.Services.GetRequiredService<IExternalProviderClient>();
-            var provider = await App.Services.GetRequiredService<IProviderRepository>().GetAsync(OpenCodeZenProviderId)
-                ?? ProviderConfiguration.OpenCodeZenPreset(DateTimeOffset.UtcNow);
-            var models = await client.ListModelsAsync(provider);
-            OpenCodeZenModelComboBox.ItemsSource = models;
-            OpenCodeZenModelComboBox.SelectedItem = provider.ModelId;
+            var entry = await App.Services.GetRequiredService<IProviderRegistry>().RefreshAsync(OpenCodeZenProviderId);
+            var provider = entry.Provider;
+            OpenCodeZenModelComboBox.ItemsSource = entry.Models;
+            OpenCodeZenModelComboBox.SelectedItem = entry.Models.FirstOrDefault(model => string.Equals(model.Id, provider.ModelId, StringComparison.Ordinal));
+            if (entry.AuthState == ProviderAuthState.Missing)
+            {
+                ShowOpenCodeZen(InfoBarSeverity.Warning, "需要 OpenCode Zen API 密钥", entry.Status);
+                return;
+            }
+            if (entry.AuthState == ProviderAuthState.Unavailable)
+            {
+                ShowOpenCodeZen(InfoBarSeverity.Error, "OpenCode Zen 凭据状态不可用", entry.Status);
+                return;
+            }
             if (string.IsNullOrWhiteSpace(provider.ModelId))
             {
                 ShowOpenCodeZen(InfoBarSeverity.Warning, "尚未选择模型", "运行 Worker 前，请先选择一个已发现的可用模型。");
             }
-            else if (!models.Contains(provider.ModelId, StringComparer.Ordinal))
+            else if (!entry.Models.Any(model => string.Equals(model.Id, provider.ModelId, StringComparison.Ordinal)))
             {
                 ShowOpenCodeZen(InfoBarSeverity.Warning, "已保存的模型当前不可用", $"刷新后的 Zen 目录中已没有 {provider.ModelId}。原选择仍已保留，请重新选择模型。");
             }
@@ -420,9 +429,9 @@ public sealed partial class ProvidersPage : Page, IContentActionHandler
 
     private async Task RefreshDeepSeekAsync()
     {
-        var repository = App.Services.GetRequiredService<IProviderRepository>();
         var credentials = App.Services.GetRequiredService<ICredentialStore>();
-        var provider = await repository.GetAsync(ProviderId);
+        var registry = await App.Services.GetRequiredService<IProviderRegistry>().LoadAsync();
+        var provider = registry.Find(ProviderId)?.Provider;
         var hasCredential = provider?.CredentialReference is not null
             && await credentials.ExistsAsync(provider.CredentialReference);
 

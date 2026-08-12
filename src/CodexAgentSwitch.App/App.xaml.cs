@@ -51,6 +51,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<HttpClient>();
         services.AddSingleton<OpenAiCompatibleClient>();
         services.AddSingleton<IExternalProviderClient>(provider => provider.GetRequiredService<OpenAiCompatibleClient>());
+        services.AddSingleton<IProviderRegistry, ProviderRegistry>();
         services.AddSingleton<IExternalToolHost, LocalExternalToolHost>();
         services.AddSingleton<IExternalWorkerAdapterFactory, ExternalWorkerAdapterFactory>();
         services.AddSingleton<ProviderConfigurationValidator>();
@@ -67,6 +68,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<EconomicReportService>();
         services.AddSingleton<IWorkerUsageCollector, WorkerUsageCollector>();
         services.AddSingleton<IUsageSource, CodexSessionUsageSource>();
+        services.AddSingleton<MainCostGuardCoordinator>();
         services.AddSingleton<SafeWorkerDeletionCoordinator>();
         services.AddSingleton<ProfileValidator>();
         services.AddSingleton<ProfileService>();
@@ -89,6 +91,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<WorkerOrchestrator>();
         services.AddSingleton<ControlledTaskService>();
         services.AddSingleton<ISchedulerTaskRepository, SqliteSchedulerTaskRepository>();
+        services.AddSingleton<IWorkPackageLeaseRepository, SqliteWorkPackageLeaseRepository>();
         services.AddSingleton<IWorkerExecutor, NativeWorkerExecutor>();
         services.AddSingleton<IWorkerExecutor, ExternalWorkerExecutor>();
         services.AddSingleton<AppliedProjectWorkerGuard>();

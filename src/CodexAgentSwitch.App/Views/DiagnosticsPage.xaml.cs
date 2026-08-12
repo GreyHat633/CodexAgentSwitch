@@ -1,5 +1,7 @@
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Common;
+using CodexAgentSwitch.Application.Scheduling;
+using CodexAgentSwitch.Domain.Orchestration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -19,6 +21,8 @@ public sealed partial class DiagnosticsPage : Page
         DataRootText.Text = $"数据目录：{App.Services.GetRequiredService<AppDataPaths>().Root}";
         try
         {
+            var runtime = await App.Services.GetRequiredService<IWorkerScheduler>().GetRuntimeDiagnosticsAsync();
+            EconomyDiagnosticsText.Text = $"当前窗口额度 {runtime.Economy.CurrentWindowCredits:0.###} / 阈值 {runtime.Economy.CurrentThreshold:0.###}；退避阶段 {runtime.Economy.BackoffStage}；所有权 {LeaseStatusLabel(runtime.Ownership)}；包 {runtime.PackageId ?? "无"}；Worker {runtime.WorkerIdentity ?? "无"}；最后原因 {runtime.LastReason ?? "无"}；防护命中 {runtime.GuardHits}。";
             var state = await App.Services.GetRequiredService<CodexRuntimeManager>().DetectAsync();
             CodexStatusText.Text = state.Installed ? "已检测" : "不可用";
             CodexDetailText.Text = state.Installed ? $"{state.Version}；应用服务器：{(state.AppServerRunning ? "运行中" : "未启动")}。" : state.Message;
@@ -34,6 +38,18 @@ public sealed partial class DiagnosticsPage : Page
             DiagnosticResultBar.Message = exception.Message;
         }
     }
+
+    private static string LeaseStatusLabel(WorkPackageLeaseStatus? status) => status switch
+    {
+        null => "无",
+        WorkPackageLeaseStatus.DISCOVERY => "发现",
+        WorkPackageLeaseStatus.MAIN_OWNED => "主代理持有",
+        WorkPackageLeaseStatus.WORKER_OWNED => "Worker 持有",
+        WorkPackageLeaseStatus.REVIEW => "审查",
+        WorkPackageLeaseStatus.INVALID => "无效",
+        WorkPackageLeaseStatus.COMPLETED => "已完成",
+        _ => status.Value.ToString(),
+    };
 
     private void ExportDiagnostics(object sender, RoutedEventArgs e)
     {

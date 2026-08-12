@@ -231,7 +231,7 @@ public sealed class OpenAiCompatibleClient(
         using var request = await CreateRequestAsync(provider, HttpMethod.Post, "chat/completions", cancellationToken);
         request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
         var requestUri = request.RequestUri
-            ?? throw new ProviderRequestException(ProviderErrorKind.InvalidConfiguration, "Provider request URI is invalid.");
+            ?? throw new ProviderRequestException(ProviderErrorKind.InvalidConfiguration, "Provider 请求 URI 无效。");
         using var response = await SendAsync(provider, request, cancellationToken);
         using var document = await ReadJsonAsync(response, cancellationToken);
         try

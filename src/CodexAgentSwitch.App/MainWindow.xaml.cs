@@ -316,7 +316,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        await Task.Delay(500);
+        var captureDelay = int.TryParse(Environment.GetEnvironmentVariable("CAS_CAPTURE_DELAY_MS"), out var configuredDelay)
+            ? Math.Clamp(configuredDelay, 100, 10_000)
+            : 500;
+        await Task.Delay(captureDelay);
         Directory.CreateDirectory(Path.GetDirectoryName(capturePath)!);
         await File.WriteAllBytesAsync(capturePath, []);
 
