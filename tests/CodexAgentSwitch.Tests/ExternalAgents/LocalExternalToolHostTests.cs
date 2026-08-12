@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using CodexAgentSwitch.Application.Credentials;
 using CodexAgentSwitch.Application.ExternalAgents;
+using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Infrastructure.ExternalAgents;
 using CodexAgentSwitch.Infrastructure.ExternalProviders;
@@ -803,6 +804,164 @@ public sealed class LocalExternalToolHostTests
     }
 
     [Fact]
+    public async Task Runtime_silently_extends_soft_provider_lease_and_completes_after_turn_24()
+    {
+        var requestCount = 0;
+        var handler = new StubHandler((_, _) =>
+        {
+            requestCount++;
+            return Task.FromResult(requestCount < 28
+                ? ToolCallResponse($"call-{requestCount}", "shell", JsonSerializer.Serialize(new { command = $"step-{requestCount}" }))
+                : CompletionResponse("completed-after-extension"));
+        });
+        var runtime = new OpenAiCompatibleExternalAgentRuntime(
+            new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore()),
+            new ImmediateToolHost());
+
+        var result = await runtime.ExecuteAsync(Provider(), "tool-model", "Finish all steps.", Session(Path.GetFullPath(AppContext.BaseDirectory)));
+
+        Assert.Equal(ExternalAgentRuntimeState.Completed, result.State);
+        Assert.Equal(28, result.ProviderTurns);
+        Assert.Equal(27, result.ToolCalls);
+        Assert.Equal(1, result.LeaseExtensionCount);
+        Assert.Null(result.HardLimitReason);
+    }
+
+    [Fact]
+    public async Task Runtime_hard_provider_stop_allows_exactly_one_toolless_finalization()
+    {
+        var requestCount = 0;
+        var finalizationRequests = 0;
+        var handler = new StubHandler(async (request, _) =>
+        {
+            requestCount++;
+            using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var isFinalization = !payload.RootElement.TryGetProperty("tools", out var tools) || tools.GetArrayLength() == 0;
+            if (isFinalization)
+            {
+                finalizationRequests++;
+                var messages = payload.RootElement.GetProperty("messages");
+                var lastMessage = messages[ messages.GetArrayLength() - 1 ].GetProperty("content").GetString();
+                Assert.Contains("Runtime hard stop", lastMessage, StringComparison.Ordinal);
+                return CompletionResponse("completed work only");
+            }
+
+            return ToolCallResponse($"call-{requestCount}", "shell", JsonSerializer.Serialize(new { command = $"step-{requestCount}" }));
+        });
+        var runtime = new OpenAiCompatibleExternalAgentRuntime(
+            new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore()),
+            new ImmediateToolHost(),
+            new ExternalAgentRuntimeOptions
+            {
+                InitialProviderTurnSoftLimit = 2,
+                ProviderTurnLeaseIncrement = 1,
+                HardProviderTurnLimit = 3,
+                InitialToolCallSoftLimit = 10,
+                HardToolCallLimit = 10,
+            });
+
+        var result = await runtime.ExecuteAsync(Provider(), "tool-model", "Keep working.", Session(Path.GetFullPath(AppContext.BaseDirectory)));
+
+        Assert.Equal(ExternalAgentRuntimeState.Blocked, result.State);
+        Assert.Equal("provider-turn-limit", result.HardLimitReason);
+        Assert.Equal(3, result.ProviderTurns);
+        Assert.Equal(3, result.ToolCalls);
+        Assert.Equal(4, requestCount);
+        Assert.Equal(1, finalizationRequests);
+        Assert.True(result.FinalizationAttempted);
+        Assert.True(result.FinalizationSucceeded);
+        Assert.Equal("completed work only", result.Content);
+        Assert.False(result.CostVerified);
+    }
+
+    [Fact]
+    public async Task Runtime_enforces_hard_tool_cap_before_executing_oversized_batch()
+    {
+        var requestCount = 0;
+        var handler = new StubHandler(async (request, _) =>
+        {
+            requestCount++;
+            using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            if (!payload.RootElement.TryGetProperty("tools", out var tools) || tools.GetArrayLength() == 0)
+            {
+                return CompletionResponse("bounded final status");
+            }
+
+            return ToolCallsResponse(requestCount * 10, 2);
+        });
+        var runtime = new OpenAiCompatibleExternalAgentRuntime(
+            new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore()),
+            new ImmediateToolHost(),
+            new ExternalAgentRuntimeOptions
+            {
+                InitialProviderTurnSoftLimit = 10,
+                HardProviderTurnLimit = 10,
+                InitialToolCallSoftLimit = 2,
+                ToolCallLeaseIncrement = 1,
+                HardToolCallLimit = 3,
+            });
+
+        var result = await runtime.ExecuteAsync(Provider(), "tool-model", "Use tools.", Session(Path.GetFullPath(AppContext.BaseDirectory)));
+
+        Assert.Equal(ExternalAgentRuntimeState.Blocked, result.State);
+        Assert.Equal("tool-call-limit", result.HardLimitReason);
+        Assert.Equal(2, result.ToolCalls);
+        Assert.True(result.FinalizationSucceeded);
+    }
+
+    [Fact]
+    public async Task Runtime_uses_each_tasks_configured_monetary_budget_and_marks_unavailable_usage_unverified()
+    {
+        var pricing = new ProviderPricing(1m, 0m, "CNY", null);
+        var lowBudget = new BudgetLimits(0.5m, null, null, null, null, "CNY");
+        var highBudget = lowBudget with { PerTask = 1m };
+
+        async Task<(ExternalAgentRuntimeResult Result, int Requests)> Execute(BudgetLimits budget, bool includeUsage)
+        {
+            var requests = 0;
+            var handler = new StubHandler((_, _) =>
+            {
+                requests++;
+                if (requests == 1)
+                {
+                    return Task.FromResult(includeUsage
+                        ? ToolCallResponseWithUsage("call-budget", 600_000, 0)
+                        : ToolCallResponse("call-budget", "shell", "{\"command\":\"step\"}"));
+                }
+                return Task.FromResult(includeUsage
+                    ? CompletionResponseWithUsage("within configured budget", 100_000, 0)
+                    : CompletionResponse("within configured budget"));
+            });
+            var runtime = new OpenAiCompatibleExternalAgentRuntime(
+                new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore()),
+                new ImmediateToolHost());
+            var result = await runtime.ExecuteAsync(
+                Provider(pricing),
+                "tool-model",
+                "Work within budget.",
+                Session(Path.GetFullPath(AppContext.BaseDirectory)),
+                budgetSnapshot: budget);
+            return (result, requests);
+        }
+
+        var low = await Execute(lowBudget, includeUsage: true);
+        var high = await Execute(highBudget, includeUsage: true);
+        var unknown = await Execute(lowBudget, includeUsage: false);
+
+        Assert.Equal(ExternalAgentRuntimeState.Blocked, low.Result.State);
+        Assert.Equal("monetary-budget", low.Result.HardLimitReason);
+        Assert.Equal(1, low.Requests);
+        Assert.True(low.Result.CostVerified);
+        Assert.Equal(lowBudget, low.Result.BudgetSnapshot);
+        Assert.Equal(ExternalAgentRuntimeState.Completed, high.Result.State);
+        Assert.Equal(2, high.Requests);
+        Assert.True(high.Result.CostVerified);
+        Assert.Equal(ExternalAgentRuntimeState.Completed, unknown.Result.State);
+        Assert.Equal(2, unknown.Requests);
+        Assert.False(unknown.Result.CostVerified);
+    }
+
+    [Fact]
     public async Task Runtime_distinguishes_user_cancellation_from_wall_clock_timeout()
     {
         var handler = new StubHandler(async (_, token) =>
@@ -846,7 +1005,7 @@ public sealed class LocalExternalToolHostTests
         [],
         DateTimeOffset.UtcNow);
 
-    private static ProviderConfiguration Provider() => new(
+    private static ProviderConfiguration Provider(ProviderPricing? pricing = null) => new(
         "tool-provider",
         "Tool Provider",
         ProviderKind.OpenAiCompatible,
@@ -856,7 +1015,7 @@ public sealed class LocalExternalToolHostTests
         new Dictionary<string, string>(),
         TimeSpan.FromSeconds(5),
         true,
-        null,
+        pricing,
         DateTimeOffset.UtcNow,
         DateTimeOffset.UtcNow);
 
@@ -913,10 +1072,79 @@ public sealed class LocalExternalToolHostTests
         },
     }));
 
+    private static HttpResponseMessage ToolCallResponseWithUsage(string id, long inputTokens, long outputTokens) => Json(JsonSerializer.Serialize(new
+    {
+        model = "tool-model",
+        usage = new { prompt_tokens = inputTokens, completion_tokens = outputTokens, total_tokens = inputTokens + outputTokens },
+        choices = new[]
+        {
+            new
+            {
+                finish_reason = "tool_calls",
+                message = new
+                {
+                    content = (string?)null,
+                    tool_calls = new[] { new { id, type = "function", function = new { name = "shell", arguments = "{\"command\":\"step\"}" } } },
+                },
+            },
+        },
+    }));
+
+    private static HttpResponseMessage ToolCallsResponse(int firstId, int count) => Json(JsonSerializer.Serialize(new
+    {
+        model = "tool-model",
+        choices = new[]
+        {
+            new
+            {
+                finish_reason = "tool_calls",
+                message = new
+                {
+                    content = (string?)null,
+                    tool_calls = Enumerable.Range(firstId, count).Select(id => new
+                    {
+                        id = $"call-{id}",
+                        type = "function",
+                        function = new { name = "shell", arguments = JsonSerializer.Serialize(new { command = $"step-{id}" }) },
+                    }).ToArray(),
+                },
+            },
+        },
+    }));
+
+    private static HttpResponseMessage CompletionResponse(string content) => Json(JsonSerializer.Serialize(new
+    {
+        model = "tool-model",
+        choices = new[] { new { finish_reason = "stop", message = new { content } } },
+    }));
+
+    private static HttpResponseMessage CompletionResponseWithUsage(string content, long inputTokens, long outputTokens) => Json(JsonSerializer.Serialize(new
+    {
+        model = "tool-model",
+        usage = new { prompt_tokens = inputTokens, completion_tokens = outputTokens, total_tokens = inputTokens + outputTokens },
+        choices = new[] { new { finish_reason = "stop", message = new { content } } },
+    }));
+
     private sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> response) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             response(request, cancellationToken);
+    }
+
+    private sealed class ImmediateToolHost : IExternalToolHost
+    {
+        public Task<ExternalToolExecutionResult> ExecuteAsync(
+            ExternalToolSession session,
+            ExternalToolExecutionRequest request,
+            CancellationToken cancellationToken = default) => Task.FromResult(new ExternalToolExecutionResult(
+                request.ToolCallId,
+                request.ToolName,
+                "ok",
+                string.Empty,
+                0,
+                false,
+                false,
+                false));
     }
 
     private sealed class FakeCredentialStore : ICredentialStore

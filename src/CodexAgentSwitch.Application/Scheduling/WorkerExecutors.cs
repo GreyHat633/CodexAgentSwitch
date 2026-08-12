@@ -133,6 +133,7 @@ public sealed class ExternalWorkerExecutor(
             AllowedReadScope = packet.AllowedReadScope,
             AllowedWriteScope = packet.AllowedWriteScope,
             ExternalWorkerPermission = snapshot.ExternalWorkerPermission,
+            BudgetSnapshot = snapshot.Budget,
         };
         var execution = await orchestrator.ExecuteAsync(snapshot, workerTask, cancellationToken: cancellationToken);
         return new WorkerResultPacket(

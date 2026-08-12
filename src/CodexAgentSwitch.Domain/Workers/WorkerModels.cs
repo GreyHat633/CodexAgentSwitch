@@ -62,6 +62,8 @@ public sealed record WorkerTask(
     JsonElement? OutputSchema = null,
     ExecutionApprovalMode ApprovalMode = ExecutionApprovalMode.Automatic)
 {
+    public BudgetLimits? BudgetSnapshot { get; init; }
+
     public IReadOnlyList<string> AllowedReadScope { get; init; } = [];
 
     public IReadOnlyList<string> AllowedWriteScope { get; init; } = [];
@@ -106,6 +108,18 @@ public sealed record WorkerResult(
     ProviderUsage? Usage = null,
     string? FailureKind = null)
 {
+    public BudgetLimits? BudgetSnapshot { get; init; }
+
+    public bool? CostVerified { get; init; }
+
+    public int? LeaseExtensionCount { get; init; }
+
+    public string? HardLimitReason { get; init; }
+
+    public bool? FinalizationAttempted { get; init; }
+
+    public bool? FinalizationSucceeded { get; init; }
+
     public IReadOnlyList<string> ChangedFiles { get; init; } = [];
 
     public int? ProviderTurns { get; init; }

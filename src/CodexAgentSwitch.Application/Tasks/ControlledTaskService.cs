@@ -997,6 +997,7 @@ public sealed class ControlledTaskService
             AllowedReadScope = [session.WorkingDirectory],
             AllowedWriteScope = [],
             ExternalWorkerPermission = snapshot.ExternalWorkerPermission,
+            BudgetSnapshot = snapshot.Budget,
         };
 
         var execution = await workerOrchestrator.ExecuteAsync(

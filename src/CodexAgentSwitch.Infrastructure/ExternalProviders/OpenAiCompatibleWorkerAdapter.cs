@@ -312,6 +312,12 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                     FailedToolCalls = completion.FailedToolCalls,
                     DeniedToolCalls = completion.DeniedToolCalls,
                     Duration = completion.Duration,
+                    BudgetSnapshot = completion.BudgetSnapshot,
+                    CostVerified = completion.CostVerified,
+                    LeaseExtensionCount = completion.LeaseExtensionCount,
+                    HardLimitReason = completion.HardLimitReason,
+                    FinalizationAttempted = completion.FinalizationAttempted,
+                    FinalizationSucceeded = completion.FinalizationSucceeded,
                 });
         }
         catch (ProviderRequestException exception)
@@ -410,7 +416,8 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
             runtime.ModelId,
             runtime.Task.Prompt,
             session,
-            runtime.Cancellation.Token);
+            runtime.Cancellation.Token,
+            runtime.Task.BudgetSnapshot);
         var status = result.State switch
         {
             ExternalAgentRuntimeState.Completed => WorkerJobStatus.Completed,
@@ -433,6 +440,12 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
             FailedToolCalls = result.FailedToolCalls,
             DeniedToolCalls = result.DeniedToolCalls,
             Duration = result.Duration,
+            BudgetSnapshot = result.BudgetSnapshot,
+            CostVerified = result.CostVerified,
+            LeaseExtensionCount = result.LeaseExtensionCount,
+            HardLimitReason = result.HardLimitReason,
+            FinalizationAttempted = result.FinalizationAttempted,
+            FinalizationSucceeded = result.FinalizationSucceeded,
         };
     }
 
@@ -464,6 +477,12 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                 result.ToolCalls,
                 result.FailedToolCalls,
                 result.DeniedToolCalls,
+                result.LeaseExtensionCount,
+                result.HardLimitReason,
+                result.BudgetSnapshot,
+                result.CostVerified,
+                result.FinalizationAttempted,
+                result.FinalizationSucceeded,
                 DurationMilliseconds = result.Duration.TotalMilliseconds,
             },
         });
@@ -536,5 +555,17 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
         public int? DeniedToolCalls { get; init; }
 
         public TimeSpan? Duration { get; init; }
+
+        public BudgetLimits? BudgetSnapshot { get; init; }
+
+        public bool CostVerified { get; init; }
+
+        public int LeaseExtensionCount { get; init; }
+
+        public string? HardLimitReason { get; init; }
+
+        public bool FinalizationAttempted { get; init; }
+
+        public bool FinalizationSucceeded { get; init; }
     }
 }
