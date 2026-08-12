@@ -144,6 +144,74 @@ public sealed class CodexDesktopAppLauncherTests
     }
 
     [Fact]
+    public async Task Managed_worker_routing_replaces_backend_instructions_and_disabled_worker_restores_user_content()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-worker-routing-switch-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        Directory.CreateDirectory(projectDirectory);
+        var originalInstructions = string.Join(Environment.NewLine, "# User guidance", string.Empty, "Keep this text unchanged.", string.Empty);
+        var instructionsPath = Path.Combine(projectDirectory, "AGENTS.md");
+        await File.WriteAllTextAsync(instructionsPath, originalInstructions);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                new PassThroughConfigurationValidator());
+            var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
+            var nativeProfile = Profile.CreateDefault(now) with
+            {
+                WorkerPolicy = new WorkerPolicy(true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.SingleAgent),
+            };
+            var externalProfile = Profile.CreateDefault(now) with
+            {
+                WorkerPolicy = new WorkerPolicy(true, WorkerSource.ExternalProvider, "deepseek-default", null, 1, RoutingMode.Economic, FallbackAction.StopDelegation),
+            };
+            var disabledProfile = Profile.CreateDefault(now) with
+            {
+                WorkerPolicy = new WorkerPolicy(false, WorkerSource.Disabled, null, null, 0, RoutingMode.Single, FallbackAction.SingleAgent),
+            };
+
+            Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(nativeProfile, [project])).Succeeded);
+            var nativeInstructions = await File.ReadAllTextAsync(instructionsPath);
+            Assert.StartsWith(originalInstructions, nativeInstructions, StringComparison.Ordinal);
+            Assert.Contains("Codex Agent Switch managed native worker routing", nativeInstructions, StringComparison.Ordinal);
+            Assert.Contains("spawn_agent", nativeInstructions, StringComparison.Ordinal);
+            Assert.Contains("cas_luna_worker", nativeInstructions, StringComparison.Ordinal);
+
+            Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(externalProfile, [project])).Succeeded);
+            var externalInstructions = await File.ReadAllTextAsync(instructionsPath);
+            Assert.StartsWith(originalInstructions, externalInstructions, StringComparison.Ordinal);
+            Assert.Contains("Codex Agent Switch managed external worker routing", externalInstructions, StringComparison.Ordinal);
+            Assert.Contains("Delegation Capability Preflight", externalInstructions, StringComparison.Ordinal);
+            Assert.Contains("Initial Delegation Check", externalInstructions, StringComparison.Ordinal);
+            Assert.Contains("record_repartition", externalInstructions, StringComparison.Ordinal);
+            Assert.Contains("delegate_worker", externalInstructions, StringComparison.Ordinal);
+            Assert.DoesNotContain("spawn_agent", externalInstructions, StringComparison.Ordinal);
+            Assert.DoesNotContain("cas_luna_worker", externalInstructions, StringComparison.Ordinal);
+
+            Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(nativeProfile, [project])).Succeeded);
+            var restoredNativeInstructions = await File.ReadAllTextAsync(instructionsPath);
+            Assert.Contains("Codex Agent Switch managed native worker routing", restoredNativeInstructions, StringComparison.Ordinal);
+            Assert.Contains("spawn_agent", restoredNativeInstructions, StringComparison.Ordinal);
+            Assert.Contains("cas_luna_worker", restoredNativeInstructions, StringComparison.Ordinal);
+            Assert.DoesNotContain("managed external worker routing", restoredNativeInstructions, StringComparison.Ordinal);
+            Assert.DoesNotContain("ExternalWorkerExecutor", restoredNativeInstructions, StringComparison.Ordinal);
+
+            Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(disabledProfile, [project])).Succeeded);
+            Assert.Equal(originalInstructions, await File.ReadAllTextAsync(instructionsPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Disabled_worker_policy_preserves_unrelated_hooks_and_removes_only_managed_hook()
     {
         var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
@@ -361,7 +429,7 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("agents.enabled = false", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("Native external collaboration remains gated", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("[mcp_servers.codex_agent_switch]", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("Never spawn cas_external_worker", projectConfiguration, StringComparison.Ordinal);
+            Assert.Contains("Do not invoke Codex Native Agents for this backend", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("omit workerId", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("Initial Delegation Check", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("Delegation Capability Preflight", projectConfiguration, StringComparison.Ordinal);
@@ -380,6 +448,15 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.DoesNotContain("model_provider", projectConfiguration, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("model_providers", projectConfiguration, StringComparison.OrdinalIgnoreCase);
             Assert.False(File.Exists(Path.Combine(projectDirectory, ".codex", "agents", "cas-external-worker.toml")));
+            var projectInstructions = await File.ReadAllTextAsync(Path.Combine(projectDirectory, "AGENTS.md"));
+            Assert.Contains("Codex Agent Switch managed external worker routing", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("Delegation Capability Preflight", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("Initial Delegation Check", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("record_repartition", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("delegate_worker", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("ExternalWorkerExecutor", projectInstructions, StringComparison.Ordinal);
+            Assert.DoesNotContain("spawn_agent", projectInstructions, StringComparison.Ordinal);
+            Assert.DoesNotContain("cas_luna_worker", projectInstructions, StringComparison.Ordinal);
         }
         finally
         {

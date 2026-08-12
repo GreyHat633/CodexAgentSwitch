@@ -672,27 +672,43 @@ public sealed class CodexDesktopAppLauncher(
 
     private static string? BuildManagedProjectInstructions(EffectiveWorkerDefinition worker)
     {
-        if (!worker.CanRunInNativeCodex || worker.Kind != EffectiveWorkerKind.NativeAgent)
+        if (worker.Kind == EffectiveWorkerKind.None)
         {
             return null;
         }
 
+        var heading = worker.Kind == EffectiveWorkerKind.NativeAgent
+            ? "## Codex Agent Switch managed native worker routing"
+            : "## Codex Agent Switch managed external worker routing";
+        var backendRouting = worker.Kind switch
+        {
+            EffectiveWorkerKind.NativeAgent when worker.CanRunInNativeCodex => BuildNativeDelegationInstructions(worker),
+            EffectiveWorkerKind.ExternalAgent => BuildExternalWorkerRoutingInstructions(),
+            _ => "No backend-specific Worker route is currently available. Keep work with MAIN unless delegation_preflight resolves a runnable Worker.",
+        };
+
         return new StringBuilder()
             .AppendLine(ProjectInstructionsStart)
-            .AppendLine("## Codex Agent Switch managed native worker routing")
+            .AppendLine(heading)
             .AppendLine()
             .AppendLine(BuildProactiveDelegationPolicy())
             .AppendLine()
-            .AppendLine($"For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket. When invoking the configured Native Custom Worker, you MUST call spawn_agent with both actual tool arguments: agent_type=\"{worker.AgentRole}\" and fork_turns=\"none\". fork_turns is mandatory for this managed custom role: never omit it, never use fork_turns=\"all\", and never create a full-history fork. While the task is DELEGATED or RUNNING, do not duplicate its work. Report the result through report_worker_result, then perform only bounded review.")
-            .AppendLine(ProjectInstructionsEnd)
+            .AppendLine(backendRouting)
+            .Append(ProjectInstructionsEnd)
             .ToString();
     }
+
+    private static string BuildNativeDelegationInstructions(EffectiveWorkerDefinition worker) =>
+        $"For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket. When invoking the configured Native Custom Worker, you MUST call spawn_agent with both actual tool arguments: agent_type=\"{worker.AgentRole}\" and fork_turns=\"none\". fork_turns is mandatory for this managed custom role: never omit it, never use fork_turns=\"all\", and never create a full-history fork. While the task is DELEGATED or RUNNING, do not duplicate its work. Report the result through report_worker_result, then perform only bounded review.";
 
     private static string BuildExternalDelegationInstructions() => $"""
         {BuildProactiveDelegationPolicy()}
 
-        For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket and omit workerId. Agent Switch resolves the Worker from this project's applied snapshot; never choose a Provider Worker identity freely. Never spawn cas_external_worker through native collaboration. While the task is DELEGATED or RUNNING, do not duplicate its work; review and adopt only the returned ResultPacket.
+        {BuildExternalWorkerRoutingInstructions()}
         """;
+
+    private static string BuildExternalWorkerRoutingInstructions() =>
+        "For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket and omit workerId. Agent Switch resolves the External Worker from this project's applied snapshot and executes it through ExternalWorkerExecutor; never choose a Provider Worker identity freely. Do not invoke Codex Native Agents for this backend. While the task is DELEGATED or RUNNING, do not duplicate its work; review and adopt only the returned ResultPacket.";
 
     private static string BuildProactiveDelegationPolicy() => """
         For every non-trivial, multi-step, or clearly separable development request, complete a Delegation Capability Preflight after the minimum localization needed to identify concrete work and before the first substantive large implementation. Confirm or load the currently available Agent Switch scheduling tools, especially delayed-loaded delegate_worker and Worker orchestration capability; do not assume that a capability exists merely because it is documented.
@@ -720,9 +736,14 @@ public sealed class CodexDesktopAppLauncher(
     {
         if (block is not null)
         {
-            return existing is null
-                ? block
-                : ReplaceManagedBlock(existing, block, ProjectInstructionsStart, ProjectInstructionsEnd);
+            if (existing is null)
+            {
+                return block;
+            }
+
+            return existing.Contains(ProjectInstructionsStart, StringComparison.Ordinal)
+                ? ReplaceManagedBlock(existing, block, ProjectInstructionsStart, ProjectInstructionsEnd)
+                : string.Concat(existing, Environment.NewLine, Environment.NewLine, block);
         }
 
         if (existing is null || !existing.Contains(ProjectInstructionsStart, StringComparison.Ordinal))
@@ -730,8 +751,33 @@ public sealed class CodexDesktopAppLauncher(
             return existing;
         }
 
-        var withoutManagedBlock = RemoveManagedBlock(existing, ProjectInstructionsStart, ProjectInstructionsEnd);
+        var withoutManagedBlock = RemoveManagedProjectInstructions(existing);
         return string.IsNullOrWhiteSpace(withoutManagedBlock) ? null : withoutManagedBlock;
+    }
+
+    private static string RemoveManagedProjectInstructions(string existing)
+    {
+        var start = existing.IndexOf(ProjectInstructionsStart, StringComparison.Ordinal);
+        var end = existing.IndexOf(ProjectInstructionsEnd, start, StringComparison.Ordinal);
+        if (end < start)
+        {
+            throw new InvalidOperationException("当前 Agent Switch 管理块不完整，未覆盖原文件。");
+        }
+
+        end += ProjectInstructionsEnd.Length;
+        if (existing.AsSpan(end).StartsWith(Environment.NewLine, StringComparison.Ordinal))
+        {
+            end += Environment.NewLine.Length;
+        }
+
+        var separator = string.Concat(Environment.NewLine, Environment.NewLine);
+        if (start >= separator.Length
+            && existing.AsSpan(start - separator.Length, separator.Length).SequenceEqual(separator))
+        {
+            start -= separator.Length;
+        }
+
+        return string.Concat(existing.AsSpan(0, start), existing.AsSpan(end));
     }
 
     private static bool HasWorkerAgentChanges(

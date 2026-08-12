@@ -112,16 +112,16 @@ $portable = Join-Path $resolvedRelease 'portable'
 # WinUI self-contained deployment currently fails during XAML initialization on the
 # Windows 10 22H2 primary acceptance host. Ship the stable framework-dependent
 # app instead; the same release includes the offline runtime bootstrapper below.
-dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained false -p:Platform=x64 -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:EnableMsixTooling=true -p:Version=$Version -o $portable --nologo
+dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained false -p:Platform=x64 -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:EnableMsixTooling=true -p:Version=$Version -p:AssemblyVersion=$Version -p:FileVersion=$Version -p:InformationalVersion=$Version -o $portable --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Portable publish failed.' }
 Assert-MultiFilePublish $portable 'CodexAgentSwitch.App'
 $toolHostPublish = Join-Path $resolvedRelease 'tool-host-publish'
-dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.ToolHost\CodexAgentSwitch.ToolHost.csproj') -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Version=$Version -o $toolHostPublish --nologo
+dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.ToolHost\CodexAgentSwitch.ToolHost.csproj') -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Version=$Version -p:AssemblyVersion=$Version -p:FileVersion=$Version -p:InformationalVersion=$Version -o $toolHostPublish --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Scheduler Tool Host publish failed.' }
 Assert-MultiFilePublish $toolHostPublish 'CodexAgentSwitch.ToolHost'
 Copy-PublishContents $toolHostPublish (Join-Path $portable 'ToolHost')
 $brokerPublish = Join-Path $resolvedRelease 'credential-broker-publish'
-dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.CredentialBroker\CodexAgentSwitch.CredentialBroker.csproj') -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Version=$Version -o $brokerPublish --nologo
+dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.CredentialBroker\CodexAgentSwitch.CredentialBroker.csproj') -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Version=$Version -p:AssemblyVersion=$Version -p:FileVersion=$Version -p:InformationalVersion=$Version -o $brokerPublish --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Credential broker publish failed.' }
 Assert-MultiFilePublish $brokerPublish 'CodexAgentSwitch.CredentialBroker'
 Copy-PublishContents $brokerPublish (Join-Path $portable 'NativeCredentialBroker')
@@ -131,7 +131,7 @@ $portableHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $portableZip).Hash.
 Set-Content -LiteralPath ($portableZip + '.sha256') -Value "$portableHash  $([IO.Path]::GetFileName($portableZip))" -Encoding ASCII
 
 $setupPublish = Join-Path $resolvedRelease 'setup-publish'
-dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.Setup\CodexAgentSwitch.Setup.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:Version=$Version -o $setupPublish --nologo
+dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.Setup\CodexAgentSwitch.Setup.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:Version=$Version -p:AssemblyVersion=$Version -p:FileVersion=$Version -p:InformationalVersion=$Version -o $setupPublish --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Setup publish failed.' }
 Assert-MultiFilePublish $setupPublish 'CodexAgentSwitch.Setup'
 $setupBundle = Join-Path $resolvedRelease 'setup-bundle'
@@ -147,7 +147,7 @@ $compactZip = $null
 if ($IncludeRuntimeInstaller) {
     $compact = Join-Path $resolvedRelease 'compact-runtime'
     $compactApp = Join-Path $compact 'App'
-    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained false -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:Version=$Version -o $compactApp --nologo
+    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.App\CodexAgentSwitch.App.csproj') -c Release -r win-x64 --self-contained false -p:WindowsAppSDKSelfContained=false -p:PublishSingleFile=false -p:Version=$Version -p:AssemblyVersion=$Version -p:FileVersion=$Version -p:InformationalVersion=$Version -o $compactApp --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Compact publish failed.' }
     Assert-MultiFilePublish $compactApp 'CodexAgentSwitch.App'
     Copy-PublishContents $toolHostPublish (Join-Path $compactApp 'ToolHost')
@@ -156,7 +156,7 @@ if ($IncludeRuntimeInstaller) {
     if (-not (Test-Path -LiteralPath $appPri)) { throw 'Compact publish did not generate the application PRI resource index.' }
     Copy-Item -LiteralPath $appPri -Destination $compactApp -Force
     $bootstrapPublish = Join-Path $resolvedRelease 'bootstrap-publish'
-    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.Bootstrapper\CodexAgentSwitch.Bootstrapper.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:Version=$Version -o $bootstrapPublish --nologo
+    dotnet publish (Join-Path $repo 'src\CodexAgentSwitch.Bootstrapper\CodexAgentSwitch.Bootstrapper.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:Version=$Version -p:AssemblyVersion=$Version -p:FileVersion=$Version -p:InformationalVersion=$Version -o $bootstrapPublish --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Bootstrapper publish failed.' }
     Assert-MultiFilePublish $bootstrapPublish 'CodexAgentSwitch.Bootstrapper'
     Copy-PublishContents $bootstrapPublish $compact
