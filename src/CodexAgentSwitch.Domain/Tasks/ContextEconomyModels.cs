@@ -118,3 +118,139 @@ public sealed class SessionContextBudgetOptions
     public decimal RolloverNormalizedCost { get; }
     public static SessionContextBudgetOptions Default { get; } = new();
 }
+
+public enum ContextPressureSource
+{
+    Unavailable,
+    NativeRenderedTokens,
+    EstimatedFromInput,
+    TrendOnly,
+}
+
+public enum ContextPressureBand
+{
+    Normal,
+    Observe,
+    Candidate,
+    Pending,
+    HardProtection,
+}
+
+public enum ContextEconomyState
+{
+    Idle,
+    Candidate,
+    PendingSafeBoundary,
+    Compacting,
+    Verifying,
+    Cooldown,
+    CompactFailed,
+    Ineffective,
+    VerifyDeferred,
+    ContextProtectionBlocked,
+}
+
+public enum ContextEconomyAction
+{
+    None,
+    Observe,
+    MarkCandidate,
+    RequireCompaction,
+    HardProtect,
+}
+
+public enum CompactionEffectiveness
+{
+    Unknown,
+    Effective,
+    Marginal,
+    Ineffective,
+    Deferred,
+}
+
+public enum ContextEconomyTransition
+{
+    CandidateDetected,
+    MandatoryDetected,
+    HardProtectionDetected,
+    SafeBoundaryReached,
+    CompactionAccepted,
+    CompactionCompleted,
+    VerificationEffective,
+    VerificationMarginal,
+    VerificationIneffective,
+    VerificationDeferred,
+    CompactionFailed,
+    RetryExhausted,
+    CooldownExpired,
+}
+
+public sealed class ContextEconomyOptions
+{
+    public bool Enabled { get; init; } = true;
+    public decimal ObservePressure { get; init; } = 0.40m;
+    public decimal CandidatePressure { get; init; } = 0.55m;
+    public decimal MandatoryPressure { get; init; } = 0.65m;
+    public decimal HardProtectionPressure { get; init; } = 0.80m;
+    public decimal GrowthRatioThreshold { get; init; } = 1.80m;
+    public int GrowthConsecutiveTurns { get; init; } = 3;
+    public int BaselineTurns { get; init; } = 3;
+    public decimal EffectiveReduction { get; init; } = 0.40m;
+    public decimal MarginalReduction { get; init; } = 0.20m;
+    public int CooldownMainTurns { get; init; } = 8;
+    public int MaxCompactionAttemptsPerEpisode { get; init; } = 2;
+    public bool AutoRollover { get; init; }
+    public TimeSpan CompactionTimeout { get; init; } = TimeSpan.FromMinutes(2);
+
+    public void Validate()
+    {
+        if (ObservePressure is < 0 or > 1
+            || CandidatePressure < ObservePressure
+            || MandatoryPressure < CandidatePressure
+            || HardProtectionPressure < MandatoryPressure
+            || HardProtectionPressure > 1)
+            throw new InvalidOperationException("Context pressure thresholds must be ordered within 0..1.");
+        if (GrowthRatioThreshold <= 1 || GrowthConsecutiveTurns <= 0 || BaselineTurns is < 2 or > 3)
+            throw new InvalidOperationException("Growth policy is invalid.");
+        if (MarginalReduction is < 0 or > 1 || EffectiveReduction < MarginalReduction || EffectiveReduction > 1)
+            throw new InvalidOperationException("Effectiveness thresholds are invalid.");
+        if (CooldownMainTurns < 0 || MaxCompactionAttemptsPerEpisode is < 1 or > 2 || CompactionTimeout <= TimeSpan.Zero)
+            throw new InvalidOperationException("Compaction protection settings are invalid.");
+        if (AutoRollover)
+            throw new InvalidOperationException("Automatic rollover is disabled in 0.2.5.");
+    }
+}
+
+public sealed record ContextTurnSample(
+    long InputTokens,
+    long CachedInputTokens,
+    long? RenderedContextTokens = null,
+    long? ContextWindowTokens = null,
+    bool IsNormalMainTurn = true,
+    bool IsLargeNewContext = false,
+    DateTimeOffset? CapturedAt = null);
+
+public sealed record ContextPressureTelemetry(
+    decimal? Pressure,
+    ContextPressureSource Source,
+    decimal? BaselineInput,
+    decimal? GrowthRatio,
+    int ConsecutiveGrowthTurns,
+    long CurrentInput,
+    long CurrentCachedInput);
+
+public sealed record ContextEconomyDecision(
+    ContextPressureBand Band,
+    ContextEconomyAction Action,
+    ContextPressureTelemetry Telemetry,
+    bool CooldownSuppressed,
+    string Reason);
+
+public sealed record CompactionEffectivenessResult(
+    CompactionEffectiveness Classification,
+    decimal? Reduction,
+    decimal? PreInputMedian,
+    decimal? PostInputMedian,
+    decimal? PreCachedMedian,
+    decimal? PostCachedMedian,
+    string Reason);
