@@ -117,6 +117,53 @@ public sealed record SchedulerSnapshot(
     IReadOnlyList<ScheduledDelegation> ActiveTasks,
     string? FaultMessage);
 
+/// <summary>Inputs accepted by the model-free delegation preflight.</summary>
+public sealed record DelegationPreflightRequest(
+    string WorkingDirectory,
+    string? ProjectId = null,
+    string? WorkerId = null,
+    string? TaskId = null);
+
+public sealed record DelegationProjectCandidate(
+    string ProjectId,
+    string DisplayName,
+    string NormalizedRoot);
+
+/// <summary>
+/// Deterministic scheduler readiness.  This is intentionally a data-only
+/// contract: preflight never reads model/provider output and never opens the
+/// persistence implementation directly.
+/// </summary>
+public sealed record DelegationPreflightResult(
+    bool SchedulerReady,
+    bool NativeReady,
+    bool RegistrationReady,
+    bool NativeSpawnReady,
+    bool NativeAgentCapability,
+    bool ProjectResolved,
+    bool ProfileResolved,
+    bool WorkerEnabled,
+    bool WorkerAvailable,
+    bool SlotAvailable,
+    bool DispatchReady,
+    string? ProjectId,
+    string? WorkerId,
+    string? ProjectResolutionSource,
+    string? ProfileId,
+    string ReasonCode,
+    IReadOnlyList<string>? ReasonCodes = null,
+    IReadOnlyList<DelegationProjectCandidate>? ProjectCandidates = null)
+{
+    public IReadOnlyList<string> Reasons => ReasonCodes ?? [ReasonCode];
+    public IReadOnlyList<DelegationProjectCandidate> Candidates => ProjectCandidates ?? [];
+    public bool SchedulerReachable => true;
+    public bool AppliedProfileResolved => ProfileResolved;
+    public bool WorkerRoleResolved => !string.IsNullOrWhiteSpace(WorkerId);
+    public bool WorkerSlotAvailable => SlotAvailable;
+    public string? WorkerRole => WorkerId;
+    public string PreflightReasonCode => ReasonCode;
+}
+
 public static class SchedulerEndpoint
 {
     public static string PipeName

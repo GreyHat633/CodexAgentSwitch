@@ -74,6 +74,8 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
                 var payload = root.TryGetProperty("payload", out var value) ? value : default;
                 object? result = method switch
                 {
+                    "delegationPreflight" => await scheduler.DelegationPreflightAsync(payload.Deserialize<DelegationPreflightRequest>(JsonOptions)
+                        ?? throw new InvalidDataException("DelegationPreflightRequest invalid."), cancellationToken),
                     "dispatch" => await scheduler.DispatchAsync(payload.Deserialize<TaskPacket>(JsonOptions)
                         ?? throw new InvalidDataException("TaskPacket 无效。"), cancellationToken),
                     "reportResult" => await scheduler.ReportNativeResultAsync(payload.Deserialize<WorkerResultPacket>(JsonOptions)

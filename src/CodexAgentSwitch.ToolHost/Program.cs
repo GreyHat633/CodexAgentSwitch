@@ -121,6 +121,7 @@ static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
     var arguments = parameters.TryGetProperty("arguments", out var value) ? value : default;
     var (method, payload) = name switch
     {
+        "delegation_preflight" => ("delegationPreflight", (object)ReadPreflight(arguments)),
         "delegate_worker" => ("dispatch", (object)ReadTaskPacket(arguments)),
         "report_worker_result" => ("reportResult", ReadWorkerResult(arguments)),
         "begin_worker_review" => ("review", new { taskId = Required(arguments, "taskId") }),
@@ -152,6 +153,12 @@ static TaskPacket ReadTaskPacket(JsonElement arguments) => new(
     Strings(arguments, "acceptanceCriteria"),
     Strings(arguments, "constraints"),
     Required(arguments, "outputContract"));
+
+static DelegationPreflightRequest ReadPreflight(JsonElement arguments) => new(
+    Required(arguments, "workingDirectory"),
+    OptionalNullable(arguments, "projectId"),
+    OptionalNullable(arguments, "workerId"),
+    OptionalNullable(arguments, "taskId"));
 
 static WorkerResultPacket ReadWorkerResult(JsonElement arguments)
 {
@@ -211,6 +218,24 @@ static async Task<JsonElement> SendAsync(string pipeName, string method, object 
 
 static object[] ToolDefinitions() =>
 [
+    new
+    {
+        name = "delegation_preflight",
+        description = "Model-free scheduler/project/profile/worker readiness check. Resolves omitted projectId and workerId before dispatch.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new Dictionary<string, object>
+            {
+                ["workingDirectory"] = StringSchema("Absolute project working directory."),
+                ["projectId"] = StringSchema("Optional registered project id."),
+                ["workerId"] = StringSchema("Optional applied worker id."),
+                ["taskId"] = StringSchema("Optional task id for slot diagnostics."),
+            },
+            required = new[] { "workingDirectory" },
+            additionalProperties = false,
+        },
+    },
     new
     {
         name = "delegate_worker",

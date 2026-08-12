@@ -25,6 +25,127 @@ namespace CodexAgentSwitch.Tests.Scheduling;
 public sealed class SchedulerIpcServerTests
 {
     [Fact]
+    public async Task Delegation_preflight_resolves_registered_child_and_fills_identity()
+    {
+        var project = Project("deepseek-default");
+        var guard = new AppliedProjectWorkerGuard(new ProjectRepository(project));
+        var resolved = await guard.ResolveAsync(new TaskPacket("preflight-child", "", "E:\\AISPace\\TestSpace\\child", "", "goal", ["src"], [], [], ["ok"], [], "out"));
+        Assert.Equal(project.Id, resolved.ProjectId);
+        Assert.Equal("deepseek-default", resolved.WorkerId);
+    }
+
+    [Fact]
+    public async Task Delegation_preflight_reports_exact_resolution_and_worker_reasons()
+    {
+        var now = new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero);
+        var profile = new Profile(Guid.NewGuid(), "native", new AgentSelection("model", "medium"),
+            new WorkerPolicy(true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.StopDelegation),
+            new BudgetLimits(null, null, null, null, null, "CNY"), true, now, now, null);
+        var native = Project("native-codex") with
+        {
+            NativeCodexAdaptation = Project("native-codex").NativeCodexAdaptation! with
+            {
+                AppliedSnapshot = Project("native-codex").NativeCodexAdaptation!.AppliedSnapshot! with
+                {
+                    ProfileId = profile.Id, WorkerKind = nameof(EffectiveWorkerKind.NativeAgent), WorkerRole = "cas_luna_worker",
+                    ProviderId = null, ConfigurationFingerprint = "fingerprint", ValidationStatus = "SchedulerRequired"
+                }
+            }
+        };
+        var preflight = new DelegationPreflight(new ProjectRepository(native), new ProfileRepository(profile), [new NativeWorkerExecutor()],
+            schedulerState: () => SchedulerState.Ready, activeTaskCount: () => 0,
+            capabilities: new FixedPreflightCapabilities(new(true, true, true)));
+        var ready = await preflight.EvaluateAsync(new DelegationPreflightRequest("E:\\AISPace\\TestSpace\\child"));
+        Assert.Equal("READY", ready.ReasonCode);
+        Assert.Equal(profile.Id.ToString(), ready.ProfileId);
+        Assert.True(ready.DispatchReady);
+
+        var unavailable = new DelegationPreflight(new ProjectRepository(native), new ProfileRepository(profile), [new NativeWorkerExecutor()],
+            schedulerState: () => SchedulerState.Ready, activeTaskCount: () => 1,
+            capabilities: new FixedPreflightCapabilities(new(true, true, true)));
+        Assert.Equal("WORKER_SLOT_UNAVAILABLE", (await unavailable.EvaluateAsync(new DelegationPreflightRequest("E:\\AISPace\\TestSpace"))).ReasonCode);
+    }
+
+    [Fact]
+    public async Task Delegation_preflight_is_exposed_over_scheduler_ipc()
+    {
+        var pipeName = $"CAS-preflight-{Guid.NewGuid():N}";
+        var project = Project("deepseek-default");
+        var guard = new AppliedProjectWorkerGuard(new ProjectRepository(project));
+        var preflight = new DelegationPreflight(new ProjectRepository(project), new ProfileRepository(ProfileFor(project)), [new EchoExecutor()], guard,
+            schedulerState: () => SchedulerState.Ready, activeTaskCount: () => 0);
+        await using var scheduler = new WorkerScheduler([new EchoExecutor()], new MemoryRepository(), new FixedClock(), preflight: preflight);
+        await scheduler.StartAsync();
+        await using var server = new SchedulerIpcServer(scheduler, pipeName);
+        await server.StartAsync();
+        var response = await SendRequestAsync(pipeName, "{\"method\":\"delegationPreflight\",\"payload\":{\"workingDirectory\":\"E:\\\\AISPace\\\\TestSpace\\\\child\"}}");
+        Assert.Contains("project-1", response, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CAPABILITY_MISSING", response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Delegation_preflight_covers_mapping_profile_worker_and_native_failure_codes()
+    {
+        var root = "E:\\AISPace\\TestSpace";
+        var parent = Project("outer", workingDirectory: root, projectId: "outer");
+        var child = Project("inner", workingDirectory: root + "\\nested", projectId: "inner");
+        var ambiguous = new AppliedProjectWorkerGuard(new ProjectRepository(parent with { WorkingDirectory = root + "\\same" }, child with { WorkingDirectory = root + "\\same" }));
+        var ambiguousResolution = await ambiguous.ResolveProjectAsync(root + "\\same\\child", null);
+        Assert.Equal("AMBIGUOUS_PROJECT_MAPPING", ambiguousResolution.Source);
+        Assert.Equal(["outer", "inner"], ambiguousResolution.CandidateProjectIds);
+        Assert.All(ambiguousResolution.Candidates, candidate => Assert.StartsWith("E:\\", candidate.NormalizedRoot, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("PROJECT_ID_MISMATCH", (await ambiguous.ResolveProjectAsync(root + "\\other", "inner")).Source);
+
+        var noProfile = parent with { NativeCodexAdaptation = null };
+        var missing = new DelegationPreflight(new ProjectRepository(noProfile), new ProfileRepository(ProfileFor(parent)), [new EchoExecutor()]);
+        Assert.Equal("PROFILE_NOT_APPLIED", (await missing.EvaluateAsync(new DelegationPreflightRequest(root))).ReasonCode);
+
+        var nativeSnapshot = parent.NativeCodexAdaptation!.AppliedSnapshot! with { WorkerKind = nameof(EffectiveWorkerKind.NativeAgent), WorkerRole = null, ProviderId = null };
+        var nativeProject = parent with { NativeCodexAdaptation = parent.NativeCodexAdaptation! with { AppliedSnapshot = nativeSnapshot } };
+        var roleMissing = new DelegationPreflight(new ProjectRepository(nativeProject), new ProfileRepository(ProfileFor(parent)), [new NativeWorkerExecutor()]);
+        Assert.Equal("WORKER_ROLE_MISSING", (await roleMissing.EvaluateAsync(new DelegationPreflightRequest(root))).ReasonCode);
+
+        var unavailableProject = nativeProject with { NativeCodexAdaptation = nativeProject.NativeCodexAdaptation! with { AppliedSnapshot = nativeSnapshot with { WorkerRole = "cas_luna_worker" } } };
+        var unavailable = new DelegationPreflight(new ProjectRepository(unavailableProject), new ProfileRepository(ProfileFor(parent)), []);
+        Assert.Equal("WORKER_REGISTRATION_FAILED", (await unavailable.EvaluateAsync(new DelegationPreflightRequest(root))).ReasonCode);
+        Assert.DoesNotContain("WORKER_CAPABILITY_MISSING", (await unavailable.EvaluateAsync(new DelegationPreflightRequest(root))).Reasons);
+
+        var unsupportedProject = unavailableProject with { NativeCodexAdaptation = unavailableProject.NativeCodexAdaptation! with { AppliedSnapshot = unavailableProject.NativeCodexAdaptation!.AppliedSnapshot! with { ValidationStatus = "Unsupported" } } };
+        var unsupported = new DelegationPreflight(new ProjectRepository(unsupportedProject), new ProfileRepository(ProfileFor(parent)), [new NativeWorkerExecutor()]);
+        Assert.Equal("NATIVE_AGENT_UNAVAILABLE", (await unsupported.EvaluateAsync(new DelegationPreflightRequest(root))).ReasonCode);
+
+        var noFingerprint = unsupportedProject with { NativeCodexAdaptation = unsupportedProject.NativeCodexAdaptation! with { AppliedSnapshot = unsupportedProject.NativeCodexAdaptation!.AppliedSnapshot! with { ValidationStatus = "Supported", ConfigurationFingerprint = "" } } };
+        var spawnFailed = new DelegationPreflight(new ProjectRepository(noFingerprint), new ProfileRepository(ProfileFor(parent)), [new NativeWorkerExecutor()]);
+        Assert.Equal("NATIVE_SPAWN_FAILED", (await spawnFailed.EvaluateAsync(new DelegationPreflightRequest(root))).ReasonCode);
+
+        var disabledProject = parent with { NativeCodexAdaptation = parent.NativeCodexAdaptation! with { AppliedSnapshot = parent.NativeCodexAdaptation!.AppliedSnapshot! with { WorkerKind = nameof(EffectiveWorkerKind.None), WorkerRole = null, ProviderId = null } } };
+        var disabled = new DelegationPreflight(new ProjectRepository(disabledProject), new ProfileRepository(ProfileFor(parent)), [new EchoExecutor()]);
+        Assert.Equal("WORKER_DISABLED", (await disabled.EvaluateAsync(new DelegationPreflightRequest(root))).ReasonCode);
+    }
+
+    [Fact]
+    public async Task External_git_worktree_resolves_registered_canonical_project()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT");
+        if (string.IsNullOrWhiteSpace(testRoot) || !Path.GetFullPath(testRoot).StartsWith("E:\\", StringComparison.OrdinalIgnoreCase)) return;
+        var temp = Path.Combine(testRoot, "cas-git-preflight-" + Guid.NewGuid().ToString("N"));
+        var canonical = Path.Combine(temp, "canonical");
+        var worktree = Path.Combine(temp, "worktree");
+        Directory.CreateDirectory(Path.Combine(canonical, ".git"));
+        Directory.CreateDirectory(Path.Combine(canonical, ".git", "worktrees", "fixture"));
+        Directory.CreateDirectory(worktree);
+        await File.WriteAllTextAsync(Path.Combine(worktree, ".git"), $"gitdir: {Path.Combine(canonical, ".git", "worktrees", "fixture")}");
+        await File.WriteAllTextAsync(Path.Combine(canonical, ".git", "worktrees", "fixture", "commondir"), "../..");
+        try
+        {
+            var resolved = await new AppliedProjectWorkerGuard(new ProjectRepository(Project("deepseek-default", workingDirectory: canonical))).ResolveProjectAsync(Path.Combine(worktree, "src"), null);
+            Assert.Equal("git-worktree", resolved.Source);
+            Assert.Equal("project-1", resolved.Project?.Id);
+        }
+        finally { if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+    }
+
+    [Fact]
     public async Task Applied_external_worker_is_resolved_when_codex_tool_omits_worker_id()
     {
         var pipeName = $"CAS-test-{Guid.NewGuid():N}";
@@ -93,7 +214,7 @@ public sealed class SchedulerIpcServerTests
     }
 
     [Fact]
-    public async Task Most_specific_registered_project_wins_for_nested_working_directory()
+    public async Task Multiple_registered_ancestry_projects_are_ambiguous()
     {
         var projects = new ProjectRepository(
             Project("outer-worker", workingDirectory: "E:\\AISPace\\TestSpace", projectId: "outer"),
@@ -103,9 +224,8 @@ public sealed class SchedulerIpcServerTests
             "task-inner", string.Empty, "E:\\AISPace\\TestSpace\\nested\\fixture", string.Empty,
             "Implement fixture", ["src"], ["src"], ["src"], ["tests pass"], [], "Return result");
 
-        var resolved = await resolver.ResolveAsync(packet);
-
-        Assert.Equal("inner-worker", resolved.WorkerId);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.ResolveAsync(packet));
+        Assert.Equal("PROJECT_MAPPING_AMBIGUOUS", exception.Message);
     }
 
     [Fact]
@@ -118,7 +238,7 @@ public sealed class SchedulerIpcServerTests
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.ResolveAsync(packet));
 
-        Assert.Contains("未能从项目已应用方案解析 Worker", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("PROJECT_NOT_RESOLVED", exception.Message);
     }
 
     [Fact]
@@ -240,6 +360,20 @@ public sealed class SchedulerIpcServerTests
             ReceivedWorkerId = packet.WorkerId;
             return Task.FromResult(new WorkerResultPacket(packet.TaskId, DelegationState.ResultReceived, packet.Goal, [], [], [], []));
         }
+    }
+
+    private static Profile ProfileFor(AgentProject project)
+    {
+        var id = project.NativeCodexAdaptation?.AppliedSnapshot?.ProfileId ?? Guid.NewGuid();
+        var now = new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero);
+        return new Profile(id, "fixture", new AgentSelection("model", "medium"),
+            new WorkerPolicy(true, WorkerSource.ExternalProvider, "deepseek-default", null, 1, RoutingMode.Economic, FallbackAction.StopDelegation),
+            new BudgetLimits(null, null, null, null, null, "CNY"), true, now, now, null);
+    }
+
+    private sealed class FixedPreflightCapabilities(DelegationPreflightCapabilities value) : IDelegationPreflightCapabilities
+    {
+        public DelegationPreflightCapabilities Current => value;
     }
 
     private static AgentProject Project(

@@ -19,7 +19,8 @@ public sealed class WorkerScheduler(
     IWorkPackageLeaseRepository? leaseRepository = null,
     MainCostGuard? mainCostGuard = null,
     IUsageSource? usageSource = null,
-    MainCostGuardCoordinator? guardCoordinator = null) : IWorkerScheduler
+    MainCostGuardCoordinator? guardCoordinator = null,
+    IDelegationPreflight? preflight = null) : IWorkerScheduler
 {
     private readonly IReadOnlyList<IWorkerExecutor> executors = executors.ToArray();
     private readonly IReadOnlyList<ITaskPacketResolver> resolvers = resolvers?.ToArray() ?? [];
@@ -29,6 +30,7 @@ public sealed class WorkerScheduler(
     private readonly IUsageSource? usageSource = usageSource;
     private readonly MainCostGuardCoordinator guardCoordinator = guardCoordinator
         ?? new MainCostGuardCoordinator(initialGuard: mainCostGuard);
+    private readonly IDelegationPreflight? preflight = preflight;
     private readonly Channel<QueuedWork> queue = Channel.CreateUnbounded<QueuedWork>(new UnboundedChannelOptions
     {
         SingleReader = true,
@@ -188,6 +190,31 @@ public sealed class WorkerScheduler(
         var completion = new TaskCompletionSource<WorkerResultPacket>(TaskCreationOptions.RunContinuationsAsynchronously);
         await queue.Writer.WriteAsync(new QueuedWork(packet, executor, completion), cancellationToken);
         return await completion.Task.WaitAsync(cancellationToken);
+    }
+
+    public Task<DelegationPreflightResult> DelegationPreflightAsync(
+        DelegationPreflightRequest request,
+        CancellationToken cancellationToken = default) =>
+        preflight is DelegationPreflight concrete
+            ? PreflightWithSchedulerAsync(concrete, request, cancellationToken)
+            : preflight is null
+            ? Task.FromResult(new DelegationPreflightResult(
+                state is SchedulerState.Ready or SchedulerState.Working,
+                false, false, false, false, false, false, false, false, false, false,
+                null, null, null, null, "PREFLIGHT_UNAVAILABLE", ["PREFLIGHT_UNAVAILABLE"]))
+            : preflight.EvaluateAsync(request, cancellationToken);
+
+    public Task<DelegationPreflightResult> PreflightAsync(
+        DelegationPreflightRequest request,
+        CancellationToken cancellationToken = default) => DelegationPreflightAsync(request, cancellationToken);
+
+    private Task<DelegationPreflightResult> PreflightWithSchedulerAsync(
+        DelegationPreflight concrete,
+        DelegationPreflightRequest request,
+        CancellationToken cancellationToken)
+    {
+        concrete.AttachScheduler(() => state, ActiveCount);
+        return concrete.EvaluateAsync(request, cancellationToken);
     }
 
     public async Task<WorkerResultPacket> ReportNativeResultAsync(WorkerResultPacket result, CancellationToken cancellationToken = default)

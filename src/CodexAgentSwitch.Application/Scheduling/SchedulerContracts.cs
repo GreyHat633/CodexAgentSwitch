@@ -89,6 +89,13 @@ public interface ITaskPacketResolver
     Task<TaskPacket> ResolveAsync(TaskPacket packet, CancellationToken cancellationToken = default);
 }
 
+public interface IDelegationPreflight
+{
+    Task<DelegationPreflightResult> EvaluateAsync(
+        DelegationPreflightRequest request,
+        CancellationToken cancellationToken = default);
+}
+
 public interface ISchedulerResultObserver
 {
     Task OnResultAsync(ScheduledDelegation task, CancellationToken cancellationToken = default);
@@ -103,6 +110,13 @@ public interface IWorkerScheduler : IAsyncDisposable
     Task ResumeAsync(CancellationToken cancellationToken = default);
     Task StopAsync(bool force, CancellationToken cancellationToken = default);
     Task<WorkerResultPacket> DispatchAsync(TaskPacket packet, CancellationToken cancellationToken = default);
+    Task<DelegationPreflightResult> DelegationPreflightAsync(
+        DelegationPreflightRequest request,
+        CancellationToken cancellationToken = default) =>
+        Task.FromException<DelegationPreflightResult>(new NotSupportedException("Delegation preflight is not available on this scheduler."));
+    Task<DelegationPreflightResult> PreflightAsync(
+        DelegationPreflightRequest request,
+        CancellationToken cancellationToken = default) => DelegationPreflightAsync(request, cancellationToken);
     Task<WorkerResultPacket> ReportNativeResultAsync(WorkerResultPacket result, CancellationToken cancellationToken = default);
     Task<WorkerResultPacket> MarkReviewingAsync(string taskId, CancellationToken cancellationToken = default);
     Task<WorkerResultPacket> MarkAdoptedAsync(string taskId, string summary, CancellationToken cancellationToken = default);

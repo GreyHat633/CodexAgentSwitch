@@ -188,15 +188,28 @@ public sealed class ExternalWorkerExecutor(
         """;
 }
 
-public sealed class AppliedProjectWorkerGuard(IProjectRepository projects) : ITaskPacketResolver, IDelegationPolicyGuard
+public sealed class AppliedProjectWorkerGuard(IProjectRepository projects, IProfileRepository? profiles = null) : ITaskPacketResolver, IDelegationPolicyGuard
 {
     public async Task<TaskPacket> ResolveAsync(TaskPacket packet, CancellationToken cancellationToken = default)
     {
-        var project = await FindProjectAsync(packet, cancellationToken);
+        var resolution = await ResolveProjectAsync(packet.WorkingDirectory, packet.ProjectId, cancellationToken);
+        var project = resolution.Project;
+        if (project is null)
+            throw new InvalidOperationException(resolution.Source switch
+            {
+                "PROJECT_NOT_FOUND" => "PROJECT_NOT_RESOLVED",
+                "AMBIGUOUS_PROJECT_MAPPING" => "PROJECT_MAPPING_AMBIGUOUS",
+                _ => resolution.Source,
+            });
+        if (profiles is not null && project.NativeCodexAdaptation?.AppliedSnapshot is { } applied
+            && await profiles.GetAsync(applied.ProfileId, cancellationToken) is null)
+            throw new InvalidOperationException("PROFILE_NOT_APPLIED");
         var expected = GetAppliedWorker(project);
         if (!string.IsNullOrWhiteSpace(packet.WorkerId))
         {
-            return packet;
+            return string.Equals(packet.ProjectId, project.Id, StringComparison.Ordinal)
+                ? packet
+                : packet with { ProjectId = project.Id };
         }
 
         if (string.IsNullOrWhiteSpace(expected))
@@ -204,12 +217,23 @@ public sealed class AppliedProjectWorkerGuard(IProjectRepository projects) : ITa
             throw new InvalidOperationException("未能从项目已应用方案解析 Worker；请先应用包含 Worker 的 Profile，或显式提交与已应用 Worker 完全一致的 WorkerId。");
         }
 
-        return packet with { WorkerId = expected };
+        return packet with { ProjectId = project.Id, WorkerId = expected };
     }
 
     public async Task ValidateAsync(TaskPacket packet, CancellationToken cancellationToken = default)
     {
-        var project = await FindProjectAsync(packet, cancellationToken);
+        var resolution = await ResolveProjectAsync(packet.WorkingDirectory, packet.ProjectId, cancellationToken);
+        var project = resolution.Project;
+        if (project is null)
+            throw new InvalidOperationException(resolution.Source switch
+            {
+                "PROJECT_NOT_FOUND" => "PROJECT_NOT_RESOLVED",
+                "AMBIGUOUS_PROJECT_MAPPING" => "PROJECT_MAPPING_AMBIGUOUS",
+                _ => resolution.Source,
+            });
+        if (profiles is not null && project.NativeCodexAdaptation?.AppliedSnapshot is { } applied
+            && await profiles.GetAsync(applied.ProfileId, cancellationToken) is null)
+            throw new InvalidOperationException("PROFILE_NOT_APPLIED");
         var expected = GetAppliedWorker(project);
         if (string.IsNullOrWhiteSpace(expected))
         {
@@ -222,20 +246,64 @@ public sealed class AppliedProjectWorkerGuard(IProjectRepository projects) : ITa
         }
     }
 
-    private async Task<AgentProject?> FindProjectAsync(TaskPacket packet, CancellationToken cancellationToken)
+    public async Task<ProjectResolution> ResolveProjectAsync(string workingDirectory, string? projectId, CancellationToken cancellationToken = default)
     {
-        if (!string.IsNullOrWhiteSpace(packet.ProjectId))
+        if (string.IsNullOrWhiteSpace(workingDirectory))
         {
-            return await projects.GetAsync(packet.ProjectId, cancellationToken);
+            return new(null, null, "MISSING_WORKING_DIRECTORY", []);
         }
 
-        var workingDirectory = NormalizePath(packet.WorkingDirectory);
-        return (await projects.ListAsync(cancellationToken))
+        var normalized = NormalizePath(workingDirectory);
+        var all = await projects.ListAsync(cancellationToken);
+        if (!string.IsNullOrWhiteSpace(projectId))
+        {
+            var explicitProject = await projects.GetAsync(projectId, cancellationToken);
+            if (explicitProject is null) return new(null, null, "PROJECT_NOT_FOUND", []);
+            var explicitRoot = NormalizePath(explicitProject.WorkingDirectory);
+            if (Contains(explicitRoot, normalized)) return new(explicitProject, explicitRoot, "registered-root", []);
+            var gitRoot = GitWorktreeMetadata.TryResolveCanonicalRoot(normalized);
+            if (gitRoot is not null && Contains(explicitRoot, gitRoot)) return new(explicitProject, gitRoot, "git-worktree", []);
+            var candidates = all.Where(item => Contains(NormalizePath(item.WorkingDirectory), normalized)).ToArray();
+            if (candidates.Length == 0 && gitRoot is not null)
+            {
+                candidates = all.Where(item =>
+                {
+                    var root = NormalizePath(item.WorkingDirectory);
+                    return Contains(root, gitRoot) || Contains(gitRoot, root);
+                }).ToArray();
+            }
+            return new(null, null, "PROJECT_ID_MISMATCH", candidates.Select(Candidate).ToArray());
+        }
+
+        var direct = all
             .Select(project => new { Project = project, Root = NormalizePath(project.WorkingDirectory) })
-            .Where(candidate => Contains(candidate.Root, workingDirectory))
+            .Where(candidate => Contains(candidate.Root, normalized))
             .OrderByDescending(candidate => candidate.Root.Length)
-            .Select(candidate => candidate.Project)
-            .FirstOrDefault();
+            .ToArray();
+        if (direct.Length > 0)
+        {
+            return direct.Length == 1
+                ? new(direct[0].Project, direct[0].Root, "registered-root", [])
+                : new(null, null, "AMBIGUOUS_PROJECT_MAPPING", direct.Select(item => Candidate(item.Project)).ToArray());
+        }
+
+        var canonical = GitWorktreeMetadata.TryResolveCanonicalRoot(normalized);
+        if (canonical is not null)
+        {
+            var matches = all
+                .Select(project => new { Project = project, Root = NormalizePath(project.WorkingDirectory) })
+                .Where(candidate => Contains(candidate.Root, canonical) || Contains(canonical, candidate.Root))
+                .OrderByDescending(candidate => candidate.Root.Length)
+                .ToArray();
+            if (matches.Length > 0)
+            {
+                return matches.Length == 1
+                    ? new(matches[0].Project, canonical, "git-worktree", [])
+                    : new(null, null, "AMBIGUOUS_PROJECT_MAPPING", matches.Select(item => Candidate(item.Project)).ToArray());
+            }
+        }
+
+        return new(null, null, "PROJECT_NOT_FOUND", []);
     }
 
     private static string NormalizePath(string path) =>
@@ -254,5 +322,48 @@ public sealed class AppliedProjectWorkerGuard(IProjectRepository projects) : ITa
             : string.Equals(snapshot.WorkerKind, nameof(EffectiveWorkerKind.NativeAgent), StringComparison.Ordinal)
                 ? snapshot.WorkerRole
                 : snapshot.ProviderId;
+    }
+
+    private static DelegationProjectCandidate Candidate(AgentProject project) =>
+        new(project.Id, project.Name, NormalizePath(project.WorkingDirectory));
+}
+
+public sealed record ProjectResolution(
+    AgentProject? Project,
+    string? MatchedRoot,
+    string Source,
+    IReadOnlyList<DelegationProjectCandidate> Candidates)
+{
+    public IReadOnlyList<string> CandidateProjectIds => Candidates.Select(candidate => candidate.ProjectId).ToArray();
+}
+
+internal static class GitWorktreeMetadata
+{
+    public static string? TryResolveCanonicalRoot(string path)
+    {
+        try
+        {
+            var current = new DirectoryInfo(path);
+            while (current is not null)
+            {
+                var gitPath = Path.Combine(current.FullName, ".git");
+                if (File.Exists(gitPath))
+                {
+                    var line = File.ReadLines(gitPath).FirstOrDefault(item => item.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase));
+                    if (line is null) return null;
+                    var metadata = line["gitdir:".Length..].Trim();
+                    metadata = Path.GetFullPath(Path.IsPathRooted(metadata) ? metadata : Path.Combine(current.FullName, metadata));
+                    var common = Path.Combine(metadata, "commondir");
+                    if (!File.Exists(common)) return null;
+                    var commonValue = File.ReadAllText(common).Trim();
+                    var commonGit = Path.GetFullPath(Path.IsPathRooted(commonValue) ? commonValue : Path.Combine(metadata, commonValue));
+                    return Directory.GetParent(commonGit)?.FullName;
+                }
+                current = current.Parent;
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        return null;
     }
 }

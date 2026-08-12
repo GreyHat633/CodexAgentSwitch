@@ -97,6 +97,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<AppliedProjectWorkerGuard>();
         services.AddSingleton<ITaskPacketResolver>(provider => provider.GetRequiredService<AppliedProjectWorkerGuard>());
         services.AddSingleton<IDelegationPolicyGuard>(provider => provider.GetRequiredService<AppliedProjectWorkerGuard>());
+        services.AddSingleton<IDelegationPreflight, DelegationPreflight>();
         services.AddSingleton<ISchedulerResultObserver, SchedulerUsageRecorder>();
         services.AddSingleton<IWorkerScheduler, WorkerScheduler>();
         #if DEBUG
