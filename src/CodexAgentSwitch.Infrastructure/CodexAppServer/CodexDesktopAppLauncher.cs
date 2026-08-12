@@ -599,9 +599,16 @@ public sealed class CodexDesktopAppLauncher(
         {
             if (IsManagedHookGroup(preToolUse[index])) preToolUse.RemoveAt(index);
         }
+        var stop = hooks["Stop"] as JsonArray ?? new JsonArray();
+        hooks["Stop"] = stop;
+        for (var index = stop.Count - 1; index >= 0; index--)
+        {
+            if (IsManagedHookGroup(stop[index])) stop.RemoveAt(index);
+        }
         if (!enabled)
         {
             if (preToolUse.Count == 0) hooks.Remove("PreToolUse");
+            if (stop.Count == 0) hooks.Remove("Stop");
             if (hooks.Count == 0) root.Remove("hooks");
             return root.Count == 0 ? null : root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         }
@@ -620,18 +627,34 @@ public sealed class CodexDesktopAppLauncher(
             },
         };
         preToolUse.Add(managed);
+        stop.Add(new JsonObject
+        {
+            ["hooks"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["type"] = "command",
+                    ["commandWindows"] = $"\"{command}\" --hook stop --pipe {SchedulerEndpoint.PipeName}",
+                },
+            },
+        });
 
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
     private static bool IsManagedHookGroup(JsonNode? node)
     {
-        if (node is JsonObject direct && direct["commandWindows"]?.GetValue<string>()?.Contains("--hook pre-tool-use", StringComparison.OrdinalIgnoreCase) == true)
+        if (node is JsonObject direct && IsManagedHookCommand(direct["commandWindows"]?.GetValue<string>()))
             return true;
         if (node is not JsonObject group || group["hooks"] is not JsonArray handlers) return false;
         return handlers.OfType<JsonObject>().Any(handler =>
-            handler["commandWindows"]?.GetValue<string>()?.Contains("--hook pre-tool-use", StringComparison.OrdinalIgnoreCase) == true);
+            IsManagedHookCommand(handler["commandWindows"]?.GetValue<string>()));
     }
+
+    private static bool IsManagedHookCommand(string? command) =>
+        command?.Contains("CodexAgentSwitch.ToolHost", StringComparison.OrdinalIgnoreCase) == true
+        && (command.Contains("--hook pre-tool-use", StringComparison.OrdinalIgnoreCase)
+            || command.Contains("--hook stop", StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyDictionary<string, string>? BuildValidationProjectFiles(
         EffectiveWorkerDefinition worker,

@@ -27,8 +27,11 @@ public sealed class ControlledTaskService
     private readonly IWorkerUsageCollector usageCollector;
     private readonly IClock clock;
     private readonly IProjectRepository? projectRepository;
+    // Retained only for manual/backward-compatible recovery helpers. The
+    // 0.2.5 execution path does not call the legacy age/cost budget rollover.
     private readonly SessionContextBudget contextBudget;
     private readonly MainCostGuardCoordinator mainCostGuards;
+    private readonly IMainContextEconomyCoordinator? contextEconomy;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> active = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, MainContextEpoch> contextEpochs = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim updateGate = new(1, 1);
@@ -45,7 +48,8 @@ public sealed class ControlledTaskService
         IClock clock,
         IProjectRepository? projectRepository = null,
         SessionContextBudget? contextBudget = null,
-        MainCostGuardCoordinator? mainCostGuards = null)
+        MainCostGuardCoordinator? mainCostGuards = null,
+        IMainContextEconomyCoordinator? contextEconomy = null)
     {
         this.tasks = tasks;
         this.profiles = profiles;
@@ -59,6 +63,7 @@ public sealed class ControlledTaskService
         this.projectRepository = projectRepository;
         this.contextBudget = contextBudget ?? new SessionContextBudget();
         this.mainCostGuards = mainCostGuards ?? new MainCostGuardCoordinator();
+        this.contextEconomy = contextEconomy;
     }
 
     public event Func<ControlledTaskSession, Task>? TaskChanged;
@@ -304,6 +309,8 @@ public sealed class ControlledTaskService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input);
         var session = await RequireAsync(taskId, cancellationToken);
+        if (!IsRunning(session.Status) && active.TryRemove(taskId, out var completedRun))
+            completedRun.Dispose();
         if (active.ContainsKey(taskId) || IsRunning(session.Status))
         {
             throw new InvalidOperationException("该任务仍在运行，请等待完成或先取消。");
@@ -530,7 +537,6 @@ public sealed class ControlledTaskService
         await runtime.EnsureStartedAsync(cancellationToken);
         var session = await RequireAsync(taskId, cancellationToken);
         var mainThreadId = session.MainThreadId;
-        var existingMainThread = mainThreadId is not null;
         if (mainThreadId is null)
         {
             mainThreadId = await runtime.MainAgent.CreateThreadAsync(
@@ -540,7 +546,6 @@ public sealed class ControlledTaskService
                 cancellationToken);
             session = session with { MainThreadId = mainThreadId, UpdatedAt = clock.UtcNow };
             await SaveAndPublishAsync(session, cancellationToken);
-            contextEpochs[session.Id] = new MainContextEpoch(mainThreadId, session.CreatedAt, 0, 0m, false);
         }
         else
         {
@@ -553,16 +558,8 @@ public sealed class ControlledTaskService
         }
 
         var ledger = await EnsureLedgerAsync(session, cancellationToken);
-        if (existingMainThread)
-        {
-            (session, mainThreadId, ledger) = await PrepareMainContextAsync(
-                session,
-                localTurnId,
-                mainThreadId!,
-                snapshot,
-                ledger,
-                cancellationToken);
-        }
+        if (contextEconomy is not null)
+            await contextEconomy.BindThreadAsync(mainThreadId, runtime.MainAgent, cancellationToken);
 
         var effectiveDecision = decision;
         if (decision.Kind == DelegationDecisionKind.InvokeWorker && !decision.Forced)
@@ -672,6 +669,14 @@ public sealed class ControlledTaskService
             new WorkerResult(localTurnId, ToWorkerStatus(mainResult.Status), mainResult.FinalText, mainResult.RawTurn, [], []),
             new WorkerUsageContext("native-codex", snapshot.MainAgent.ModelId, snapshot.Budget.Currency, null));
         await usageLedger.AppendUsageAsync(mainUsage, cancellationToken);
+        if (contextEconomy is not null && mainUsage.InputTokens.Value is > 0)
+        {
+            await contextEconomy.ObserveTurnAsync(
+                mainThreadId,
+                new ContextTurnSample(mainUsage.InputTokens.Value.Value, 0, CapturedAt: mainUsage.CapturedAt),
+                safeBoundary: true,
+                cancellationToken);
+        }
         ledger = ledger with { CompletedAt = clock.UtcNow, UpdatedAt = clock.UtcNow };
         await usageLedger.UpsertTaskGroupAsync(ledger, cancellationToken);
     }

@@ -10,7 +10,7 @@ public sealed class ContextEconomyCoreTests
     [InlineData(0.40, ContextPressureBand.Observe, ContextEconomyAction.Observe)]
     [InlineData(0.55, ContextPressureBand.Candidate, ContextEconomyAction.MarkCandidate)]
     [InlineData(0.65, ContextPressureBand.Pending, ContextEconomyAction.RequireCompaction)]
-    [InlineData(0.80, ContextPressureBand.HardProtection, ContextEconomyAction.HardProtect)]
+    [InlineData(0.75, ContextPressureBand.HardProtection, ContextEconomyAction.HardProtect)]
     public void Pressure_thresholds_have_exact_initial_behavior(
         double pressure,
         ContextPressureBand expectedBand,
@@ -34,6 +34,22 @@ public sealed class ContextEconomyCoreTests
         var estimated = estimator.Estimate(new ContextTurnSample(55, 40, null, 100));
         Assert.Equal(0.55m, estimated.Pressure);
         Assert.Equal(ContextPressureSource.EstimatedFromInput, estimated.Source);
+    }
+
+    [Fact]
+    public void Native_jsonl_input_and_window_have_priority_over_estimates()
+    {
+        var telemetry = new ContextPressureEstimator().Estimate(
+            new ContextTurnSample(
+                218_856,
+                180_000,
+                RenderedContextTokens: null,
+                ContextWindowTokens: 258_400,
+                NativeInputTokens: 218_856));
+
+        Assert.Equal(ContextPressureSource.NativeInputTokens, telemetry.Source);
+        Assert.Equal(218_856m / 258_400m, telemetry.Pressure);
+        Assert.Equal(ContextPressureBand.HardProtection, new ContextEconomyPolicy().Evaluate(telemetry).Band);
     }
 
     [Fact]
@@ -70,7 +86,7 @@ public sealed class ContextEconomyCoreTests
         Assert.True(candidate.CooldownSuppressed);
         Assert.Equal(ContextEconomyAction.None, candidate.Action);
 
-        var hard = policy.Evaluate(Telemetry(0.80m), 8);
+        var hard = policy.Evaluate(Telemetry(0.75m), 8);
         Assert.False(hard.CooldownSuppressed);
         Assert.Equal(ContextEconomyAction.HardProtect, hard.Action);
     }

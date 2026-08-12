@@ -13,7 +13,12 @@ public sealed class ContextPressureEstimator(ContextEconomyOptions? options = nu
     {
         decimal? pressure = null;
         var source = ContextPressureSource.Unavailable;
-        if (current.RenderedContextTokens is > 0 && current.ContextWindowTokens is > 0)
+        if (current.NativeInputTokens is > 0 && current.ContextWindowTokens is > 0)
+        {
+            pressure = Ratio(current.NativeInputTokens.Value, current.ContextWindowTokens.Value);
+            source = ContextPressureSource.NativeInputTokens;
+        }
+        else if (current.RenderedContextTokens is > 0 && current.ContextWindowTokens is > 0)
         {
             pressure = Ratio(current.RenderedContextTokens.Value, current.ContextWindowTokens.Value);
             source = ContextPressureSource.NativeRenderedTokens;

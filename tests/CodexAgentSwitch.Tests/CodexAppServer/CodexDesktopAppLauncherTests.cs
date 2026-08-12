@@ -50,6 +50,8 @@ public sealed class CodexDesktopAppLauncherTests
             var hooks = await File.ReadAllTextAsync(Path.Combine(project, ".codex", "hooks.json"));
             Assert.Contains("\"matcher\": \"Bash|apply_patch|Edit|Write\"", hooks, StringComparison.Ordinal);
             Assert.Contains("\"commandWindows\"", hooks, StringComparison.Ordinal);
+            Assert.Contains("\"Stop\"", hooks, StringComparison.Ordinal);
+            Assert.Contains("--hook stop", hooks, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("agents.default_subagent", config, StringComparison.OrdinalIgnoreCase);
             var projectInstructions = await File.ReadAllTextAsync(Path.Combine(project, "AGENTS.md"));
             Assert.Contains("Codex Agent Switch managed native worker routing", projectInstructions, StringComparison.Ordinal);
@@ -149,7 +151,7 @@ public sealed class CodexDesktopAppLauncherTests
         var projectDirectory = Path.Combine(root, "project");
         Directory.CreateDirectory(Path.Combine(projectDirectory, ".codex"));
         var hooksPath = Path.Combine(projectDirectory, ".codex", "hooks.json");
-        await File.WriteAllTextAsync(hooksPath, "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Other\",\"hooks\":[{\"type\":\"command\",\"commandWindows\":\"other.exe\"}]}]}}");
+        await File.WriteAllTextAsync(hooksPath, "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Other\",\"hooks\":[{\"type\":\"command\",\"commandWindows\":\"other.exe\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"commandWindows\":\"other-stop.exe\"}]},{\"hooks\":[{\"type\":\"command\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook stop\"}]}]}}");
         try
         {
             var launcher = CreateLauncher(new AppDataPaths(Path.Combine(root, "app-data")), new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"), new RecordingDesktopStarter(), new PassThroughConfigurationValidator());
@@ -160,7 +162,9 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.True(Assert.Single(result).Succeeded);
             var hooks = await File.ReadAllTextAsync(hooksPath);
             Assert.Contains("other.exe", hooks, StringComparison.Ordinal);
+            Assert.Contains("other-stop.exe", hooks, StringComparison.Ordinal);
             Assert.DoesNotContain("--hook pre-tool-use", hooks, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("--hook stop", hooks, StringComparison.OrdinalIgnoreCase);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

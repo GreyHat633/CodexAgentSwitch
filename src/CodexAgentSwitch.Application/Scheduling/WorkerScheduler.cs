@@ -6,6 +6,8 @@ using CodexAgentSwitch.Domain.Scheduling;
 using CodexAgentSwitch.Domain.Usage;
 using CodexAgentSwitch.Application.Orchestration;
 using CodexAgentSwitch.Application.Usage;
+using CodexAgentSwitch.Application.Tasks;
+using CodexAgentSwitch.Domain.Tasks;
 
 namespace CodexAgentSwitch.Application.Scheduling;
 
@@ -20,7 +22,9 @@ public sealed class WorkerScheduler(
     MainCostGuard? mainCostGuard = null,
     IUsageSource? usageSource = null,
     MainCostGuardCoordinator? guardCoordinator = null,
-    IDelegationPreflight? preflight = null) : IWorkerScheduler
+    IDelegationPreflight? preflight = null,
+    IControlledTaskRuntime? contextRuntime = null,
+    IMainContextEconomyCoordinator? contextEconomy = null) : IWorkerScheduler
 {
     private readonly IReadOnlyList<IWorkerExecutor> executors = executors.ToArray();
     private readonly IReadOnlyList<ITaskPacketResolver> resolvers = resolvers?.ToArray() ?? [];
@@ -31,6 +35,8 @@ public sealed class WorkerScheduler(
     private readonly MainCostGuardCoordinator guardCoordinator = guardCoordinator
         ?? new MainCostGuardCoordinator(initialGuard: mainCostGuard);
     private readonly IDelegationPreflight? preflight = preflight;
+    private readonly IControlledTaskRuntime? contextRuntime = contextRuntime;
+    private readonly IMainContextEconomyCoordinator? contextEconomy = contextEconomy;
     private readonly Channel<QueuedWork> queue = Channel.CreateUnbounded<QueuedWork>(new UnboundedChannelOptions
     {
         SingleReader = true,
@@ -44,6 +50,7 @@ public sealed class WorkerScheduler(
     private Task? workerLoop;
     private SchedulerState state = SchedulerState.Stopped;
     private string? faultMessage;
+    private ContextEconomyRuntimeDiagnostics? lastContextEconomy;
 
     public event EventHandler<SchedulerSnapshot>? SnapshotChanged;
 
@@ -428,6 +435,109 @@ public sealed class WorkerScheduler(
         return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), decision.Allowed, false, decision.Message);
     }
 
+    public async Task<MainContextBoundaryResult> ObserveMainContextBoundaryAsync(
+        MainContextBoundaryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (contextRuntime is null || contextEconomy is null || usageSource is null)
+            return BoundaryFailure(request.ThreadId, "Context economy runtime is unavailable.");
+        if (string.IsNullOrWhiteSpace(request.ThreadId)
+            || !string.Equals(request.ThreadId, request.SessionId, StringComparison.Ordinal)
+            || !string.Equals(request.Source, "vscode", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(request.Boundary, "stop", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(request.WorkingDirectory))
+            return BoundaryFailure(request.ThreadId, "The explicit source=vscode Stop binding is missing or inconsistent.");
+        if (tasks.Values.Any(item => item.State is DelegationState.ResultReceived or DelegationState.Reviewing))
+            return BoundaryFailure(request.ThreadId, "A Worker terminal result still requires Main review; compaction boundary deferred.");
+
+        var cwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
+        var usage = usageSource.Read(cancellationToken)
+            .Where(item => string.Equals(item.SessionId, request.SessionId, StringComparison.Ordinal)
+                && string.Equals(item.SessionSource, "vscode", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(NormalizeOptional(item.Cwd), cwd, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(item => item.EndedAt ?? item.StartedAt)
+            .FirstOrDefault();
+        if (usage?.LatestInputTokens is null)
+            return new(request.ThreadId, false, false, ContextEconomyState.Idle, false, false,
+                "No exact source=vscode usage sample is available for this thread and cwd.");
+
+        try
+        {
+            await contextRuntime.EnsureStartedAsync(cancellationToken);
+            await contextRuntime.MainAgent.BindExistingThreadAsync(
+                request.ThreadId,
+                request.SessionId,
+                "vscode",
+                request.WorkingDirectory,
+                cancellationToken);
+            await contextEconomy.BindThreadAsync(request.ThreadId, contextRuntime.MainAgent, cancellationToken);
+            if (usage.LastStructuredCompactedAt is { } compactedAt)
+            {
+                var snapshot = await contextEconomy.GetSnapshotAsync(request.ThreadId, cancellationToken);
+                if (snapshot?.StructuredCompactedAt is null || compactedAt > snapshot.StructuredCompactedAt)
+                {
+                    await contextEconomy.ObserveStructuredCompactionAsync(
+                        request.ThreadId,
+                        CompactionTrigger.HostAutomatic,
+                        compactedAt,
+                        BuildPreCompactionSamples(usage, compactedAt),
+                        cancellationToken);
+                }
+            }
+            var observation = await contextEconomy.ObserveTurnAsync(
+                request.ThreadId,
+                new ContextTurnSample(
+                    usage.LatestInputTokens.Value,
+                    usage.LatestCachedInputTokens ?? 0,
+                    null,
+                    usage.ContextWindowTokens,
+                    CapturedAt: usage.EndedAt ?? usage.StartedAt,
+                    NativeInputTokens: usage.LatestInputTokens.Value),
+                safeBoundary: true,
+                cancellationToken);
+            var current = await contextEconomy.GetSnapshotAsync(request.ThreadId, cancellationToken);
+            if (current is not null)
+            {
+                lastContextEconomy = new(
+                    current.ThreadId, current.State, current.LastCompactionTrigger,
+                    current.PreCompactionPressure, current.PreCompactionInput,
+                    current.PostCompactionPressure, current.PostCompactionInput,
+                    current.StructuredCompactedAt, current.LastEffectiveness?.Classification,
+                    current.CooldownRemaining, current.LastReason ?? observation.Decision.Reason);
+            }
+            return new(
+                request.ThreadId,
+                true,
+                true,
+                observation.State,
+                observation.CompactionRequested,
+                observation.Compaction?.Succeeded == true,
+                observation.Compaction?.Reason ?? observation.Decision.Reason);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return BoundaryFailure(request.ThreadId, exception.Message);
+        }
+    }
+
+    private static MainContextBoundaryResult BoundaryFailure(string threadId, string reason) =>
+        new(threadId ?? string.Empty, false, false, ContextEconomyState.ContextProtectionBlocked, false, false, reason);
+
+    private static IReadOnlyList<ContextTurnSample>? BuildPreCompactionSamples(NativeUsageRecord usage, DateTimeOffset compactedAt)
+    {
+        var inputs = usage.PreCompactionInputSamples;
+        if (inputs is null or { Count: 0 })
+            inputs = usage.PreCompactionInputTokens is > 0 ? [usage.PreCompactionInputTokens.Value] : null;
+        if (inputs is null) return null;
+        var cached = usage.PreCompactionCachedInputSamples;
+        return inputs.Select((input, index) => new ContextTurnSample(
+            input,
+            cached is not null && index < cached.Count ? cached[index] : 0,
+            ContextWindowTokens: usage.ContextWindowTokens,
+            CapturedAt: compactedAt,
+            NativeInputTokens: input)).ToArray();
+    }
+
     public async Task<WorkPackageLease?> CompletePackageAsync(string packageId, string workingDirectory, CancellationToken cancellationToken = default)
     {
         if (leaseRepository is null) return null;
@@ -462,7 +572,8 @@ public sealed class WorkerScheduler(
             : guardCoordinator.ResolveForWorkingDirectory(lease.WorkingDirectory).Telemetry;
         return new SchedulerRuntimeDiagnostics(economy, lease?.Status, lease?.PackageId,
             active?.Packet.WorkerId ?? telemetry?.WorkerIdentity,
-            lease?.InvalidReason ?? economy.LastReason?.ToString() ?? telemetry?.Reason.ToString(), economy.GuardHitCount);
+            lease?.InvalidReason ?? economy.LastReason?.ToString() ?? telemetry?.Reason.ToString(), economy.GuardHitCount,
+            lastContextEconomy);
     }
 
     private static string NormalizeOptional(string? path) => string.IsNullOrWhiteSpace(path)

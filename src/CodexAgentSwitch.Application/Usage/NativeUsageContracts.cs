@@ -17,7 +17,16 @@ public sealed record NativeUsageRecord(
     DateTimeOffset? StartedAt,
     DateTimeOffset? EndedAt,
     string SourcePath,
-    string Attribution);
+    string Attribution,
+    long? LatestInputTokens = null,
+    long? LatestCachedInputTokens = null,
+    long? ContextWindowTokens = null,
+    string? SessionSource = null,
+    DateTimeOffset? LastStructuredCompactedAt = null,
+    long? PreCompactionInputTokens = null,
+    long? PreCompactionCachedInputTokens = null,
+    IReadOnlyList<long>? PreCompactionInputSamples = null,
+    IReadOnlyList<long>? PreCompactionCachedInputSamples = null);
 
 public interface IUsageSource
 {

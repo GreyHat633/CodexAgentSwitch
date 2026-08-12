@@ -69,6 +69,9 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<IWorkerUsageCollector, WorkerUsageCollector>();
         services.AddSingleton<IUsageSource, CodexSessionUsageSource>();
         services.AddSingleton<MainCostGuardCoordinator>();
+        services.AddSingleton(new ContextEconomyOptions());
+        services.AddSingleton<IMainContextEconomyStateStore, SqliteMainContextEconomyStateStore>();
+        services.AddSingleton<IMainContextEconomyCoordinator, MainContextEconomyCoordinator>();
         services.AddSingleton<SafeWorkerDeletionCoordinator>();
         services.AddSingleton<ProfileValidator>();
         services.AddSingleton<ProfileService>();

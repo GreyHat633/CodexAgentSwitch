@@ -1,7 +1,9 @@
 using CodexAgentSwitch.Domain.Scheduling;
 using CodexAgentSwitch.Domain.Orchestration;
 using CodexAgentSwitch.Domain.Usage;
+using CodexAgentSwitch.Domain.Tasks;
 using CodexAgentSwitch.Application.Usage;
+using CodexAgentSwitch.Application.Tasks;
 
 namespace CodexAgentSwitch.Application.Scheduling;
 
@@ -50,13 +52,43 @@ public sealed record PreToolUseResult(
     bool RequiresSafetyPolicy,
     string Reason);
 
+public sealed record MainContextBoundaryRequest(
+    string SessionId,
+    string ThreadId,
+    string WorkingDirectory,
+    string Source,
+    string Boundary);
+
+public sealed record MainContextBoundaryResult(
+    string ThreadId,
+    bool BindingAccepted,
+    bool TelemetryAvailable,
+    ContextEconomyState State,
+    bool CompactionRequested,
+    bool CompactionSucceeded,
+    string Reason);
+
 public sealed record SchedulerRuntimeDiagnostics(
     MainCostGuardTelemetry Economy,
     WorkPackageLeaseStatus? Ownership,
     string? PackageId,
     string? WorkerIdentity,
     string? LastReason,
-    int GuardHits);
+    int GuardHits,
+    ContextEconomyRuntimeDiagnostics? ContextEconomy = null);
+
+public sealed record ContextEconomyRuntimeDiagnostics(
+    string ThreadId,
+    ContextEconomyState State,
+    CompactionTrigger Trigger,
+    decimal? PrePressure,
+    long? PreInput,
+    decimal? PostPressure,
+    long? PostInput,
+    DateTimeOffset? StructuredCompactedAt,
+    CompactionEffectiveness? Effectiveness,
+    int CooldownRemaining,
+    string Reason);
 
 public interface ISchedulerTaskRepository
 {
@@ -148,6 +180,10 @@ public interface IWorkerScheduler : IAsyncDisposable
         Task.FromException<IReadOnlyList<RepartitionTelemetry>>(new NotSupportedException("Repartition telemetry is not available on this scheduler."));
     Task<PreToolUseResult> EvaluatePreToolUseAsync(PreToolUseRequest request, CancellationToken cancellationToken = default) =>
         Task.FromException<PreToolUseResult>(new NotSupportedException("PreToolUse is not available on this scheduler."));
+    Task<MainContextBoundaryResult> ObserveMainContextBoundaryAsync(
+        MainContextBoundaryRequest request,
+        CancellationToken cancellationToken = default) =>
+        Task.FromException<MainContextBoundaryResult>(new NotSupportedException("Main context economy is not available on this scheduler."));
     Task<WorkPackageLease?> CompletePackageAsync(string packageId, string workingDirectory, CancellationToken cancellationToken = default) =>
         Task.FromException<WorkPackageLease?>(new NotSupportedException("Package leases are not available on this scheduler."));
     Task<SchedulerRuntimeDiagnostics> GetRuntimeDiagnosticsAsync(CancellationToken cancellationToken = default) =>

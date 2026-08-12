@@ -8,10 +8,14 @@ Console.InputEncoding = Encoding.UTF8;
 Console.OutputEncoding = new UTF8Encoding(false);
 
 var pipeName = ReadArgument(args, "--pipe") ?? SchedulerEndpoint.PipeName;
-var hookMode = string.Equals(ReadArgument(args, "--hook"), "pre-tool-use", StringComparison.OrdinalIgnoreCase);
-if (hookMode)
+var hook = ReadArgument(args, "--hook");
+if (string.Equals(hook, "pre-tool-use", StringComparison.OrdinalIgnoreCase))
 {
     await RunPreToolUseHookAsync(pipeName);
+}
+else if (string.Equals(hook, "stop", StringComparison.OrdinalIgnoreCase))
+{
+    await RunStopHookAsync(pipeName);
 }
 else
 {
@@ -63,6 +67,34 @@ while (await Console.In.ReadLineAsync() is { } line)
         });
     }
 }
+}
+
+static async Task RunStopHookAsync(string pipeName)
+{
+    var line = await Console.In.ReadLineAsync();
+    if (string.IsNullOrWhiteSpace(line)) return;
+    try
+    {
+        using var document = JsonDocument.Parse(line);
+        var root = document.RootElement;
+        var sessionId = ReadJsonString(root, "session_id") ?? ReadJsonString(root, "sessionId") ?? string.Empty;
+        var cwd = ReadJsonString(root, "cwd") ?? ReadJsonString(root, "workingDirectory") ?? Environment.CurrentDirectory;
+        await SendAsync(pipeName, "mainContextBoundary", new
+        {
+            sessionId,
+            threadId = sessionId,
+            workingDirectory = cwd,
+            source = "vscode",
+            boundary = "stop",
+        });
+    }
+    catch
+    {
+        // Context economy is protective telemetry. A failed Stop hook must not
+        // trap the completed Main turn or cause a recursive stop loop.
+    }
+
+    await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = "Stop" } });
 }
 
 static async Task RunPreToolUseHookAsync(string pipeName)

@@ -126,6 +126,13 @@ public sealed class SqliteDatabase(string databasePath)
             );
             CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_projects_name
                 ON agent_projects(name COLLATE NOCASE);
+
+            CREATE TABLE IF NOT EXISTS main_context_economy (
+                thread_id TEXT PRIMARY KEY,
+                state INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
         // Keep upgrades idempotent for databases created before lease metadata

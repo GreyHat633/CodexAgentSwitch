@@ -29,6 +29,15 @@ public sealed record MainAgentTurnHandle(string ThreadId, string TurnId);
 
 public sealed record MainAgentCompactionHandle(string ThreadId, bool RequestAccepted, JsonElement RawResponse);
 
+public sealed record MainThreadBindingResult(
+    string ThreadId,
+    string SessionId,
+    string Source,
+    string WorkingDirectory,
+    string Status,
+    bool Resumed,
+    JsonElement RawThread);
+
 public sealed record MainAgentRolloverResult(string PreviousThreadId, string NewThreadId, CompactCheckpoint Checkpoint, MainAgentTurnHandle? FirstTurn);
 
 public sealed record MainAgentTurnResult(
@@ -85,6 +94,18 @@ public interface IMainAgentSession
         string turnId,
         bool approve,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Validates and, when necessary, resumes an already persisted thread.
+    /// Implementations must never create a replacement thread.
+    /// </summary>
+    Task<MainThreadBindingResult> BindExistingThreadAsync(
+        string threadId,
+        string expectedSessionId,
+        string expectedSource,
+        string workingDirectory,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Existing-thread binding is not available for this session.");
 
     /// <summary>Starts native compaction. Completion is reported through EventReceived.</summary>
     Task<MainAgentCompactionHandle> CompactThreadAsync(

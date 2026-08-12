@@ -15,7 +15,7 @@ namespace CodexAgentSwitch.Tests.Tasks;
 public sealed class ControlledTaskContextEconomyIntegrationTests
 {
     [Fact]
-    public async Task Rollover_replays_checkpoint_persists_new_thread_and_runs_pending_turn_on_new_thread()
+    public async Task Legacy_rollover_budget_no_longer_creates_a_second_main_thread()
     {
         var now = DateTimeOffset.UtcNow;
         var main = new RecordingMainAgent();
@@ -30,24 +30,18 @@ public sealed class ControlledTaskContextEconomyIntegrationTests
         await harness.Service.ContinueAsync(first.Id, "second", useWorker: false);
         var completed = await WaitForTerminalAsync(harness.Tasks, first.Id, minimumTurns: 2);
 
-        Assert.Equal("thread-new", completed.MainThreadId);
-        Assert.Single(main.RolloverCalls);
-        Assert.Equal("thread-old", main.RolloverCalls[0].PreviousThreadId);
-        Assert.Equal(first.Id, main.RolloverCalls[0].Checkpoint.SourceTaskId);
-        Assert.Equal("thread-old", main.RolloverCalls[0].Checkpoint.SourceThreadId);
-        Assert.Contains(main.StartedTurns, turn => turn.ThreadId == "thread-new" && turn.Prompt == main.RolloverCalls[0].Checkpoint.RenderReplayText());
-        Assert.Contains(main.StartedTurns, turn => turn.ThreadId == "thread-new" && turn.Prompt.Contains("second", StringComparison.Ordinal));
-        Assert.DoesNotContain(main.StartedTurns, turn => turn.ThreadId == "thread-old" && turn.Prompt.Contains("second", StringComparison.Ordinal));
+        Assert.Equal("thread-old", completed.MainThreadId);
+        Assert.Empty(main.RolloverCalls);
+        Assert.Contains(main.StartedTurns, turn => turn.ThreadId == "thread-old" && turn.Prompt.Contains("second", StringComparison.Ordinal));
 
         await harness.Service.ContinueAsync(completed.Id, "third", useWorker: false);
         await WaitForTerminalAsync(harness.Tasks, completed.Id, minimumTurns: 3);
-        Assert.Single(main.RolloverCalls);
-        Assert.Contains(main.StartedTurns, turn => turn.ThreadId == "thread-new" && turn.Prompt.Contains("third", StringComparison.Ordinal));
-        Assert.DoesNotContain(main.StartedTurns, turn => turn.ThreadId == "thread-old" && turn.Prompt.Contains("third", StringComparison.Ordinal));
+        Assert.Empty(main.RolloverCalls);
+        Assert.Contains(main.StartedTurns, turn => turn.ThreadId == "thread-old" && turn.Prompt.Contains("third", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task Compact_calls_only_compact_on_the_existing_thread_before_pending_turn()
+    public async Task Legacy_turn_budget_no_longer_triggers_automatic_compaction()
     {
         var main = new RecordingMainAgent();
         var budget = new SessionContextBudget(new SessionContextBudgetOptions(
@@ -58,13 +52,12 @@ public sealed class ControlledTaskContextEconomyIntegrationTests
         var first = await WaitForTerminalAsync(harness.Tasks, started.Id);
         await harness.Service.ContinueAsync(first.Id, "second", useWorker: false);
         await WaitForTerminalAsync(harness.Tasks, first.Id, minimumTurns: 2);
-        Assert.Single(main.CompactedThreads);
-        Assert.Equal("thread-old", main.CompactedThreads[0]);
+        Assert.Empty(main.CompactedThreads);
         Assert.Empty(main.RolloverCalls);
         Assert.Contains(main.StartedTurns, turn => turn.ThreadId == "thread-old" && turn.Prompt.Contains("second", StringComparison.Ordinal));
         await harness.Service.ContinueAsync(first.Id, "third", useWorker: false);
         await WaitForTerminalAsync(harness.Tasks, first.Id, minimumTurns: 3);
-        Assert.Single(main.CompactedThreads);
+        Assert.Empty(main.CompactedThreads);
     }
 
     [Fact]

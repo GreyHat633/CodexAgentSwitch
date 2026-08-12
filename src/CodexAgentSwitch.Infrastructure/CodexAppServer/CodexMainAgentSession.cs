@@ -39,6 +39,57 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         return new MainAgentCompactionHandle(threadId, true, response.Clone());
     }
 
+    public async Task<MainThreadBindingResult> BindExistingThreadAsync(
+        string threadId,
+        string expectedSessionId,
+        string expectedSource,
+        string workingDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedSource);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        var response = await request("thread/read", new { threadId, includeTurns = false }, cancellationToken);
+        var thread = RequireBoundThread(response, threadId, expectedSessionId, expectedSource, workingDirectory);
+        var status = ReadStatus(thread) ?? "unknown";
+        var resumed = false;
+        if (string.Equals(status, "active", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The requested Main thread is active; this is not a safe compaction boundary.");
+        if (string.Equals(status, "notLoaded", StringComparison.OrdinalIgnoreCase))
+        {
+            response = await request("thread/resume", new { threadId, cwd = workingDirectory, excludeTurns = true }, cancellationToken);
+            thread = RequireBoundThread(response, threadId, expectedSessionId, expectedSource, workingDirectory);
+            status = ReadStatus(thread) ?? "unknown";
+            resumed = true;
+        }
+        if (!string.Equals(status, "idle", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"The requested Main thread is not idle after binding (status={status}).");
+        return new(threadId, expectedSessionId, expectedSource, Path.GetFullPath(workingDirectory), status, resumed, thread.Clone());
+    }
+
+    private static JsonElement RequireBoundThread(
+        JsonElement response,
+        string threadId,
+        string expectedSessionId,
+        string expectedSource,
+        string workingDirectory)
+    {
+        if (!response.TryGetProperty("thread", out var thread) || thread.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("The App Server did not return thread metadata.");
+        var actualId = ReadString(thread, "id");
+        var sessionId = ReadString(thread, "sessionId");
+        var source = ReadString(thread, "source");
+        var cwd = ReadString(thread, "cwd");
+        if (!string.Equals(actualId, threadId, StringComparison.Ordinal)
+            || !string.Equals(sessionId, expectedSessionId, StringComparison.Ordinal)
+            || !string.Equals(source, expectedSource, StringComparison.OrdinalIgnoreCase)
+            || cwd is null
+            || !string.Equals(Path.GetFullPath(cwd), Path.GetFullPath(workingDirectory), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The App Server thread metadata does not match the explicit Main binding.");
+        return thread;
+    }
+
     public async Task<MainAgentRolloverResult> RolloverThreadAsync(
         string previousThreadId,
         CompactCheckpoint checkpoint,

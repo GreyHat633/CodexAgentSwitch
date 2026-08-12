@@ -122,6 +122,7 @@ public sealed class SessionContextBudgetOptions
 public enum ContextPressureSource
 {
     Unavailable,
+    NativeInputTokens,
     NativeRenderedTokens,
     EstimatedFromInput,
     TrendOnly,
@@ -168,6 +169,14 @@ public enum CompactionEffectiveness
     Deferred,
 }
 
+public enum CompactionTrigger
+{
+    Unknown,
+    AgentSwitch,
+    HostAutomatic,
+    ManualUser,
+}
+
 public enum ContextEconomyTransition
 {
     CandidateDetected,
@@ -191,7 +200,7 @@ public sealed class ContextEconomyOptions
     public decimal ObservePressure { get; init; } = 0.40m;
     public decimal CandidatePressure { get; init; } = 0.55m;
     public decimal MandatoryPressure { get; init; } = 0.65m;
-    public decimal HardProtectionPressure { get; init; } = 0.80m;
+    public decimal HardProtectionPressure { get; init; } = 0.75m;
     public decimal GrowthRatioThreshold { get; init; } = 1.80m;
     public int GrowthConsecutiveTurns { get; init; } = 3;
     public int BaselineTurns { get; init; } = 3;
@@ -228,7 +237,8 @@ public sealed record ContextTurnSample(
     long? ContextWindowTokens = null,
     bool IsNormalMainTurn = true,
     bool IsLargeNewContext = false,
-    DateTimeOffset? CapturedAt = null);
+    DateTimeOffset? CapturedAt = null,
+    long? NativeInputTokens = null);
 
 public sealed record ContextPressureTelemetry(
     decimal? Pressure,
@@ -253,4 +263,60 @@ public sealed record CompactionEffectivenessResult(
     decimal? PostInputMedian,
     decimal? PreCachedMedian,
     decimal? PostCachedMedian,
+    string Reason);
+
+/// <summary>Durable per-thread context-economy state. Samples are retained to make a restart safe.</summary>
+public sealed record ContextEconomySnapshot(
+    string ThreadId,
+    ContextEconomyState State,
+    int Attempts,
+    int CooldownRemaining,
+    IReadOnlyList<ContextTurnSample> Samples,
+    IReadOnlyList<ContextTurnSample> PreCompactionSamples,
+    string? LastReason = null,
+    IReadOnlyList<ContextTurnSample>? PostCompactionSamples = null,
+    DateTimeOffset? UpdatedAt = null,
+    CompactionTrigger LastCompactionTrigger = CompactionTrigger.Unknown,
+    DateTimeOffset? StructuredCompactedAt = null,
+    decimal? PreCompactionPressure = null,
+    long? PreCompactionInput = null,
+    decimal? PostCompactionPressure = null,
+    long? PostCompactionInput = null,
+    CompactionEffectivenessResult? LastEffectiveness = null)
+{
+    public ContextEconomySnapshot Normalize()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ThreadId);
+        return this with
+        {
+            Samples = Samples?.ToArray() ?? Array.Empty<ContextTurnSample>(),
+            PreCompactionSamples = PreCompactionSamples?.ToArray() ?? Array.Empty<ContextTurnSample>(),
+            PostCompactionSamples = PostCompactionSamples?.ToArray() ?? Array.Empty<ContextTurnSample>(),
+            Attempts = Math.Max(0, Attempts),
+            CooldownRemaining = Math.Max(0, CooldownRemaining),
+        };
+    }
+}
+
+public sealed record ContextEconomyObservationResult(
+    ContextEconomyDecision Decision,
+    ContextEconomyState State,
+    bool CompactionRequested,
+    ContextEconomyCompactionResult? Compaction = null);
+
+public sealed record ContextEconomyCompactionResult(
+    bool Succeeded,
+    bool RequestAcknowledged,
+    bool TerminalLifecycleObserved,
+    int Attempt,
+    ContextEconomyState State,
+    CompactionEffectivenessResult? Effectiveness,
+    string Reason);
+
+public sealed record StructuredCompactionObservation(
+    string ThreadId,
+    CompactionTrigger Trigger,
+    DateTimeOffset CompactedAt,
+    ContextEconomyState State,
+    bool DuplicateSuppressed,
     string Reason);

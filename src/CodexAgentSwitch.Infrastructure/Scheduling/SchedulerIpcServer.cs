@@ -93,6 +93,10 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
                         payload.TryGetProperty("toolInput", out var toolInput)
                             ? toolInput.ValueKind == JsonValueKind.String ? toolInput.GetString() : toolInput.GetRawText()
                             : null), cancellationToken),
+                    "mainContextBoundary" => await scheduler.ObserveMainContextBoundaryAsync(
+                        payload.Deserialize<MainContextBoundaryRequest>(JsonOptions)
+                            ?? throw new InvalidDataException("MainContextBoundaryRequest invalid."),
+                        cancellationToken),
                     "completePackage" => await scheduler.CompletePackageAsync(
                         payload.GetProperty("packageId").GetString() ?? string.Empty,
                         payload.GetProperty("workingDirectory").GetString() ?? string.Empty,

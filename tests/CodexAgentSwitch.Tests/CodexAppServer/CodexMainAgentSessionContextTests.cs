@@ -59,6 +59,39 @@ public sealed class CodexMainAgentSessionContextTests
         await Assert.ThrowsAsync<ArgumentException>(() => session.RolloverThreadAsync("thread-old", mismatched, "model", "medium", "E:\\work", ExecutionApprovalMode.Safe));
     }
 
+    [Fact]
+    public async Task Existing_vscode_binding_resumes_only_the_same_thread_and_rejects_identity_mismatch()
+    {
+        var calls = new List<string>();
+        var client = new CodexAppServerClient(CodexCommand.Direct("unused"));
+        var status = "notLoaded";
+        var session = new CodexMainAgentSession(client, request: (method, parameters, _) =>
+        {
+            calls.Add(method);
+            if (method == "thread/resume") status = "idle";
+            return Task.FromResult(JsonSerializer.SerializeToElement(new
+            {
+                thread = new
+                {
+                    id = "thread-vscode",
+                    sessionId = "thread-vscode",
+                    source = "vscode",
+                    cwd = "E:\\work",
+                    status = new { type = status },
+                },
+            }));
+        });
+
+        var binding = await session.BindExistingThreadAsync("thread-vscode", "thread-vscode", "vscode", "E:\\work");
+
+        Assert.True(binding.Resumed);
+        Assert.Equal("idle", binding.Status);
+        Assert.Equal(["thread/read", "thread/resume"], calls);
+        Assert.DoesNotContain("thread/start", calls);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            session.BindExistingThreadAsync("thread-vscode", "different-session", "vscode", "E:\\work"));
+    }
+
     private static async Task InvokeNotification(CodexMainAgentSession session, string method, object parameters)
     {
         var callback = typeof(CodexMainAgentSession).GetMethod("OnNotificationAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
