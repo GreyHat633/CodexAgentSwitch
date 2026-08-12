@@ -13,6 +13,7 @@ TestResults/
 .packages/
 .tools/
 .tmp/
+.test-root/
 
 # User data, credentials, and generated protocol cache
 data/
