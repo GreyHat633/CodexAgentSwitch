@@ -46,6 +46,11 @@ public sealed class WorkerScheduler(
     private readonly ConcurrentDictionary<string, ScheduledDelegation> tasks = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private readonly SemaphoreSlim repartitionTelemetryLock = new(1, 1);
+    // Main-reported lifecycle triggers may arrive before the next ownership
+    // boundary. Keep them coalesced by task group (and cwd for the mutation
+    // gate) while retaining each event in append-only telemetry.
+    private readonly ConcurrentDictionary<string, PendingRepartition> pendingRepartitions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pendingByWorkingDirectory = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? workerCancellation;
     private Task? workerLoop;
     private SchedulerState state = SchedulerState.Stopped;
@@ -271,6 +276,25 @@ public sealed class WorkerScheduler(
         RecordRepartitionAsync(taskGroupId, trigger, decision, reason, workSummary, workerIdentity, result,
             null, null, null, null, null, cancellationToken);
 
+    public async Task<RepartitionTelemetry> EnqueueRepartitionTriggerAsync(string taskGroupId, IReadOnlyList<RepartitionTrigger> triggers, string workSummary, string workingDirectory, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskGroupId) || triggers is null || triggers.Count == 0 || string.IsNullOrWhiteSpace(workSummary) || string.IsNullOrWhiteSpace(workingDirectory))
+            throw new ArgumentException("Task group, summary, and working directory are required.");
+        await repartitionTelemetryLock.WaitAsync(cancellationToken);
+        try
+        {
+            var key = $"{taskGroupId}|{WorkPackageLease.NormalizePath(workingDirectory)}";
+            var pending = pendingRepartitions.GetOrAdd(key, _ => new PendingRepartition());
+            foreach (var trigger in triggers) pending.Add(trigger);
+            var groups = pendingByWorkingDirectory.GetOrAdd(WorkPackageLease.NormalizePath(workingDirectory), _ => new());
+            groups[key] = 0;
+            return new RepartitionTelemetry(taskGroupId, 0, clock.UtcNow.ToUniversalTime(), triggers[^1], WorkOwner.Main,
+                RepartitionReasonCode.REVIEW_REQUIRED, workSummary, null, null, WorkingDirectory: workingDirectory,
+                PendingTriggerCount: pending.Count, CoalescedTriggers: pending.Triggers.ToArray());
+        }
+        finally { repartitionTelemetryLock.Release(); }
+    }
+
     public async Task<RepartitionTelemetry> RecordRepartitionAsync(
         string taskGroupId,
         RepartitionTrigger trigger,
@@ -309,6 +333,9 @@ public sealed class WorkerScheduler(
         var record = new RepartitionRecord(0, trigger, decision, reason, workSummary, workerIdentity, result);
         record.Validate();
 
+        var hasCompleteMetadata = packageId is not null && workingDirectory is not null
+            && packageKind is not null && declaredScopes is not null;
+
         await repartitionTelemetryLock.WaitAsync(cancellationToken);
         try
         {
@@ -330,6 +357,10 @@ public sealed class WorkerScheduler(
                 packageGuard.RecordCheckpoint(trigger, decision, reason);
             }
             var derivedCostWindowIndex = packageGuard?.BackoffStage ?? costWindowIndex ?? 0;
+            var clearedPending = 0;
+            IReadOnlyList<RepartitionTrigger>? coalescedTriggers = null;
+            var hardGateDenials = 0;
+            var leaseActive = false;
             var telemetry = new RepartitionTelemetry(
                 taskGroupId,
                 sequence,
@@ -344,10 +375,28 @@ public sealed class WorkerScheduler(
                 workingDirectory,
                 packageKind,
                 declaredScopes,
-                derivedCostWindowIndex);
-            await repository.AppendRepartitionAsync(telemetry, cancellationToken);
-            if (leaseRepository is not null && packageId is not null && workingDirectory is not null
-                && packageKind is not null && declaredScopes is not null)
+                derivedCostWindowIndex,
+                0);
+            var pendingKey = hasCompleteMetadata && workingDirectory is not null
+                ? $"{taskGroupId}|{WorkPackageLease.NormalizePath(workingDirectory)}" : taskGroupId;
+            if (!hasCompleteMetadata)
+            {
+                var legacyPending = pendingRepartitions.GetOrAdd(pendingKey, _ => new PendingRepartition());
+                legacyPending.Add(trigger);
+            }
+            if (hasCompleteMetadata && pendingRepartitions.TryRemove(pendingKey, out var pending))
+            {
+                clearedPending = pending.Count;
+                coalescedTriggers = pending.Triggers.ToArray();
+                hardGateDenials = pending.HardGateDenials;
+                if (workingDirectory is not null
+                    && pendingByWorkingDirectory.TryGetValue(WorkPackageLease.NormalizePath(workingDirectory), out var groups))
+                {
+                    groups.TryRemove(pendingKey, out _);
+                    if (groups.IsEmpty) pendingByWorkingDirectory.TryRemove(WorkPackageLease.NormalizePath(workingDirectory), out _);
+                }
+            }
+            if (leaseRepository is not null && hasCompleteMetadata)
             {
                 if (prior is not null)
                 {
@@ -356,11 +405,21 @@ public sealed class WorkerScheduler(
                 }
 
                 var lease = new WorkPackageLease(
-                    packageId, taskGroupId, workingDirectory, decision, packageKind, reason, trigger,
-                    telemetry.RecordedAt, derivedCostWindowIndex, declaredScopes,
+                    packageId!, taskGroupId, workingDirectory!, decision, packageKind!, reason, trigger,
+                    telemetry.RecordedAt, derivedCostWindowIndex, declaredScopes!,
                     decision == WorkOwner.Main ? WorkPackageLeaseStatus.MAIN_OWNED : WorkPackageLeaseStatus.WORKER_OWNED);
                 await leaseRepository.SaveAsync(lease, cancellationToken);
+                leaseActive = true;
             }
+            if (!hasCompleteMetadata && workingDirectory is not null)
+            {
+                var groups = pendingByWorkingDirectory.GetOrAdd(WorkPackageLease.NormalizePath(workingDirectory), _ => new());
+                groups[pendingKey] = 0;
+            }
+            telemetry = telemetry with { PendingTriggersCleared = clearedPending, PendingTriggerCount = 0,
+                CoalescedTriggers = coalescedTriggers, OwnershipDecisionCount = 1,
+                HardGateDenials = hardGateDenials, LeaseActive = leaseActive };
+            await repository.AppendRepartitionAsync(telemetry, cancellationToken);
             return telemetry;
         }
         finally
@@ -397,6 +456,13 @@ public sealed class WorkerScheduler(
             return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), true, true, "Unknown operation was not classified; existing safety policy must decide.");
         }
         var lease = leaseRepository is null ? null : await leaseRepository.GetActiveForWorkingDirectoryAsync(request.WorkingDirectory, cancellationToken);
+        var normalizedWorkingDirectory = WorkPackageLease.NormalizePath(request.WorkingDirectory);
+        if (pendingByWorkingDirectory.TryGetValue(normalizedWorkingDirectory, out var pendingGroups) && !pendingGroups.IsEmpty)
+        {
+            foreach (var key in pendingGroups.Keys) if (pendingRepartitions.TryGetValue(key, out var pendingState)) pendingState.RecordHardGateDenial();
+            return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), false, false,
+                "Mutation denied: a repartition decision is pending; require MAIN/WORKER ownership resolution.");
+        }
         if (lease?.Status == WorkPackageLeaseStatus.WORKER_OWNED)
         {
             return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), false, false,
@@ -674,7 +740,7 @@ public sealed class WorkerScheduler(
         await repository.UpsertAsync(updated, cancellationToken);
         if (target == DelegationState.Adopted)
         {
-            await TransitionLeaseAsync(taskId, WorkPackageLifecycleEvent.WorkerReviewComplete, cancellationToken);
+            await CompleteAdoptedPackageWhenDeterministicAsync(updated, cancellationToken);
         }
         Publish();
         return result;
@@ -708,5 +774,38 @@ public sealed class WorkerScheduler(
         await leaseRepository.SaveAsync(lease, cancellationToken);
     }
 
+    private async Task CompleteAdoptedPackageWhenDeterministicAsync(ScheduledDelegation adopted, CancellationToken cancellationToken)
+    {
+        if (leaseRepository is null) return;
+        var exact = await leaseRepository.GetActiveAsync(adopted.Packet.TaskId, adopted.Packet.WorkingDirectory, cancellationToken);
+        var cwd = WorkPackageLease.NormalizePath(adopted.Packet.WorkingDirectory);
+        var hasPending = pendingByWorkingDirectory.TryGetValue(cwd, out var pendingGroups) && !pendingGroups.IsEmpty;
+        var hasUnresolvedResult = tasks.Values.Any(item =>
+            !string.Equals(item.Packet.TaskId, adopted.Packet.TaskId, StringComparison.Ordinal)
+            && string.Equals(WorkPackageLease.NormalizePath(item.Packet.WorkingDirectory), cwd, StringComparison.OrdinalIgnoreCase)
+            && item.State is DelegationState.ResultReceived or DelegationState.Reviewing);
+        if (exact?.Status == WorkPackageLeaseStatus.REVIEW && !hasPending && !hasUnresolvedResult)
+        {
+            exact.OnPackageComplete();
+            await leaseRepository.SaveAsync(exact, cancellationToken);
+            return;
+        }
+
+        // Ambiguous package identity or remaining review state keeps the
+        // conservative lifecycle: completion still requires semantic intent.
+        await TransitionLeaseAsync(adopted.Packet.TaskId, WorkPackageLifecycleEvent.WorkerReviewComplete, cancellationToken);
+    }
+
     private sealed record QueuedWork(TaskPacket Packet, IWorkerExecutor Executor, TaskCompletionSource<WorkerResultPacket> Completion);
+
+    private sealed class PendingRepartition
+    {
+        private readonly List<RepartitionTrigger> triggers = [];
+        public int Count => triggers.Count;
+        public IReadOnlyList<RepartitionTrigger> Triggers => triggers;
+        private int hardGateDenials;
+        public int HardGateDenials => Volatile.Read(ref hardGateDenials);
+        public void Add(RepartitionTrigger trigger) => triggers.Add(trigger);
+        public void RecordHardGateDenial() => Interlocked.Increment(ref hardGateDenials);
+    }
 }

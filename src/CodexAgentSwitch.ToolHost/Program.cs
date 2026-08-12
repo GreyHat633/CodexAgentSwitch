@@ -9,6 +9,11 @@ Console.OutputEncoding = new UTF8Encoding(false);
 
 var pipeName = ReadArgument(args, "--pipe") ?? SchedulerEndpoint.PipeName;
 var hook = ReadArgument(args, "--hook");
+// Tool registration is immutable for one ToolHost process. MCP advertises
+// listChanged=false, so one session cache is safe and a process/version change
+// mechanically invalidates it.
+var cachedToolDefinitions = ToolDefinitions();
+var toolDiscoveryCount = 0;
 if (string.Equals(hook, "pre-tool-use", StringComparison.OrdinalIgnoreCase))
 {
     await RunPreToolUseHookAsync(pipeName);
@@ -51,7 +56,7 @@ while (await Console.In.ReadLineAsync() is { } line)
                 serverInfo = new { name = "codex-agent-switch", version = "0.2.5.1" },
             },
             "ping" => new { },
-            "tools/list" => new { tools = ToolDefinitions() },
+            "tools/list" => ListTools(),
             "tools/call" => await CallToolAsync(request.GetProperty("params"), pipeName),
             _ => throw new InvalidOperationException($"Unsupported MCP method: {method}"),
         };
@@ -67,6 +72,16 @@ while (await Console.In.ReadLineAsync() is { } line)
         });
     }
 }
+}
+
+object ListTools()
+{
+    toolDiscoveryCount++;
+    return new
+    {
+        tools = cachedToolDefinitions,
+        discovery = new { count = toolDiscoveryCount, cacheHit = toolDiscoveryCount > 1 },
+    };
 }
 
 static async Task RunStopHookAsync(string pipeName)
@@ -160,11 +175,49 @@ static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
         "adopt_worker_result" => ("adopt", new { taskId = Required(arguments, "taskId"), summary = Optional(arguments, "summary") }),
         "complete_package" => ("completePackage", new { packageId = Required(arguments, "packageId"), workingDirectory = Required(arguments, "workingDirectory") }),
         "record_repartition" => ("recordRepartition", ReadRepartition(arguments)),
+        "queue_repartition" => ("queueRepartition", new { taskGroupId = Required(arguments, "taskGroupId"), workingDirectory = Required(arguments, "workingDirectory"), workSummary = Required(arguments, "workSummary"), triggers = RequiredStrings(arguments, "triggers") }),
         "list_repartitions" => ("listRepartitions", new { taskGroupId = Required(arguments, "taskGroupId") }),
         "scheduler_status" => ("status", new { }),
         _ => throw new InvalidOperationException($"Unknown tool: {name}"),
     };
     var schedulerResult = await SendAsync(pipeName, method, payload);
+    if (string.Equals(name, "delegation_preflight", StringComparison.Ordinal)
+        && schedulerResult.TryGetProperty("dispatchReady", out var dispatchReady)
+        && dispatchReady.GetBoolean())
+    {
+        var worker = schedulerResult.TryGetProperty("workerId", out var workerId) ? workerId.GetString() : null;
+        schedulerResult = JsonSerializer.SerializeToElement(new
+        {
+            DispatchReady = true,
+            Backend = worker?.StartsWith("cas_", StringComparison.Ordinal) == true
+                || worker?.StartsWith("native-", StringComparison.Ordinal) == true ? "Native" : "External",
+            Worker = worker,
+        });
+    }
+    else if (string.Equals(name, "record_repartition", StringComparison.Ordinal))
+    {
+        // Successful repartition responses are intentionally compact; callers
+        // already supplied the full package and summary payload.
+        schedulerResult = JsonSerializer.SerializeToElement(new
+        {
+            RepartitionRecorded = true,
+            Decision = schedulerResult.TryGetProperty("decision", out var decision)
+                ? decision.ValueKind == JsonValueKind.Number
+                    ? (decision.GetInt32() == 1 ? "WORKER" : "MAIN")
+                    : decision.GetString()
+                : null,
+            PendingTriggersCleared = schedulerResult.TryGetProperty("pendingTriggersCleared", out var cleared) ? cleared.GetInt32() : 0,
+            Lease = schedulerResult.TryGetProperty("leaseActive", out var leaseActive) && leaseActive.GetBoolean() ? "ACTIVE" : "NONE",
+        });
+    }
+    else if (string.Equals(name, "queue_repartition", StringComparison.Ordinal))
+    {
+        schedulerResult = JsonSerializer.SerializeToElement(new
+        {
+            RepartitionQueued = true,
+            PendingTriggerCount = schedulerResult.GetProperty("pendingTriggerCount").GetInt32(),
+        });
+    }
     return new
     {
         content = new[] { new { type = "text", text = schedulerResult.GetRawText() } },
@@ -350,6 +403,12 @@ static object[] ToolDefinitions() =>
     },
     new
     {
+        name = "queue_repartition",
+        description = "Queue one or more Main-reported semantic triggers without creating an ownership lease.",
+        inputSchema = new { type = "object", properties = new Dictionary<string, object> { ["taskGroupId"] = StringSchema("Task group."), ["workingDirectory"] = StringSchema("Working directory."), ["workSummary"] = StringSchema("Summary."), ["triggers"] = EnumArraySchema<RepartitionTrigger>() }, required = new[] { "taskGroupId", "workingDirectory", "workSummary", "triggers" }, additionalProperties = false },
+    },
+    new
+    {
         name = "list_repartitions",
         description = "Read persisted repartition decisions for one task group in sequence order.",
         inputSchema = new
@@ -383,6 +442,7 @@ static object ResultSchema() => new
 static object TaskIdSchema() => new { type = "object", properties = new { taskId = StringSchema("Task id.") }, required = new[] { "taskId" }, additionalProperties = false };
 static object StringSchema(string description) => new { type = "string", description };
 static object EnumSchema<T>(string description) where T : struct, Enum => new { type = "string", description, @enum = Enum.GetNames<T>() };
+static object EnumArraySchema<T>() where T : struct, Enum => new { type = "array", items = new { type = "string", @enum = Enum.GetNames<T>() } };
 static object StringArraySchema(string description) => new { type = "array", items = new { type = "string" }, description };
 static string Required(JsonElement element, string name) => element.TryGetProperty(name, out var value) && !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString()! : throw new InvalidDataException($"{name} is required.");
 static string Optional(JsonElement element, string name) => element.TryGetProperty(name, out var value) ? value.GetString() ?? string.Empty : string.Empty;

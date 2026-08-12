@@ -86,6 +86,11 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
                         payload.TryGetProperty("summary", out var summary) ? summary.GetString() ?? string.Empty : string.Empty,
                         cancellationToken),
                     "recordRepartition" => await RecordRepartitionAsync(payload, cancellationToken),
+                    "queueRepartition" => await scheduler.EnqueueRepartitionTriggerAsync(
+                        payload.GetProperty("taskGroupId").GetString() ?? string.Empty,
+                        payload.GetProperty("triggers").EnumerateArray().Select(x => Enum.Parse<RepartitionTrigger>(x.GetString() ?? string.Empty)).ToArray(),
+                        payload.GetProperty("workSummary").GetString() ?? string.Empty,
+                        payload.GetProperty("workingDirectory").GetString() ?? string.Empty, cancellationToken),
                     "preToolUse" => await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest(
                         payload.GetProperty("sessionId").GetString() ?? string.Empty,
                         payload.GetProperty("workingDirectory").GetString() ?? string.Empty,

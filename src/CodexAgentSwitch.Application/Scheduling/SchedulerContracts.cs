@@ -21,7 +21,13 @@ public sealed record RepartitionTelemetry(
     string? WorkingDirectory = null,
     string? PackageKind = null,
     IReadOnlyList<string>? DeclaredScopes = null,
-    int? CostWindowIndex = null)
+    int? CostWindowIndex = null,
+    int PendingTriggersCleared = 0,
+    int PendingTriggerCount = 0,
+    IReadOnlyList<RepartitionTrigger>? CoalescedTriggers = null,
+    int OwnershipDecisionCount = 0,
+    int HardGateDenials = 0,
+    bool LeaseActive = false)
 {
     public RepartitionRecord Record => new(
         Sequence,
@@ -161,6 +167,9 @@ public interface IWorkerScheduler : IAsyncDisposable
         string workSummary,
         string? workerIdentity = null,
         string? result = null,
+        CancellationToken cancellationToken = default) => Task.FromException<RepartitionTelemetry>(new NotSupportedException("Repartition telemetry is not available on this scheduler."));
+    Task<RepartitionTelemetry> EnqueueRepartitionTriggerAsync(
+        string taskGroupId, IReadOnlyList<RepartitionTrigger> triggers, string workSummary, string workingDirectory,
         CancellationToken cancellationToken = default) => Task.FromException<RepartitionTelemetry>(new NotSupportedException("Repartition telemetry is not available on this scheduler."));
     Task<RepartitionTelemetry> RecordRepartitionAsync(
         string taskGroupId,

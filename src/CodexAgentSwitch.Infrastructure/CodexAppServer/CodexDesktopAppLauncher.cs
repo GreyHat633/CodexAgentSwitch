@@ -553,8 +553,7 @@ public sealed class CodexDesktopAppLauncher(
         }
         else if (worker.Kind == EffectiveWorkerKind.ExternalAgent)
         {
-            builder.AppendLine($"developer_instructions = {Toml(BuildExternalDelegationInstructions())}")
-                .AppendLine($"# Native external collaboration remains gated: {worker.CapabilityMessage}");
+            builder.AppendLine($"# Native external collaboration remains gated: {worker.CapabilityMessage}");
         }
 
         if (profile.WorkerPolicy.Enabled && profile.WorkerPolicy.Source != WorkerSource.Disabled)
@@ -701,35 +700,15 @@ public sealed class CodexDesktopAppLauncher(
     private static string BuildNativeDelegationInstructions(EffectiveWorkerDefinition worker) =>
         $"For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket. When invoking the configured Native Custom Worker, you MUST call spawn_agent with both actual tool arguments: agent_type=\"{worker.AgentRole}\" and fork_turns=\"none\". fork_turns is mandatory for this managed custom role: never omit it, never use fork_turns=\"all\", and never create a full-history fork. While the task is DELEGATED or RUNNING, do not duplicate its work. Report the result through report_worker_result, then perform only bounded review.";
 
-    private static string BuildExternalDelegationInstructions() => $"""
-        {BuildProactiveDelegationPolicy()}
-
-        {BuildExternalWorkerRoutingInstructions()}
-        """;
-
     private static string BuildExternalWorkerRoutingInstructions() =>
-        "For bounded delegation, call the codex_agent_switch delegate_worker tool with a complete plaintext TaskPacket and omit workerId. Agent Switch resolves the External Worker from this project's applied snapshot and executes it through ExternalWorkerExecutor; never choose a Provider Worker identity freely. Do not invoke Codex Native Agents for this backend. While the task is DELEGATED or RUNNING, do not duplicate its work; review and adopt only the returned ResultPacket.";
+        "For a WORKER decision, call codex_agent_switch delegate_worker with the bounded TaskPacket and omit workerId; Agent Switch resolves and runs the applied External Worker. Do not invoke a Native Agent for this backend.";
 
     private static string BuildProactiveDelegationPolicy() => """
-        For every non-trivial, multi-step, or clearly separable development request, complete a Delegation Capability Preflight after the minimum localization needed to identify concrete work and before the first substantive large implementation. Confirm or load the currently available Agent Switch scheduling tools, especially delayed-loaded delegate_worker and Worker orchestration capability; do not assume that a capability exists merely because it is documented.
+        For non-trivial development, run one Delegation Capability Preflight after minimal localization, then make the Initial Delegation Check before substantive implementation. Tiny or read-only work and user-forbidden delegation are exempt. Prefer WORKER for a clear, bounded, stable, verifiable, non-overlapping package; MAIN owns unresolved architecture or investigation, cross-module decisions, required review, and final integration.
 
-        If the scheduling tools are available, require the Initial Delegation Check immediately after the preflight and before beginning large implementation. If the tools are unavailable, record a short reason such as WORKER_CAPABILITY_MISSING and continue with MAIN without deadlocking; an unavailable preflight is not permission to skip the check silently.
+        Main supplies semantic lifecycle changes; Agent Switch owns mechanical state and enforcement. Queue relevant triggers—INITIAL_LOCALIZATION_COMPLETE, ARCHITECTURE_RESOLVED, WORKER_RESULT_RECEIVED, WORKER_REVIEW_COMPLETE, PHASE_CHANGE, BUILD_TEST_BOUNDED_FIXES, MODULE_COMPLETE, WORK_CONVERGED—and resolve MAIN vs WORKER once at the next natural reasoning boundary. A pending decision must be resolved before substantive mutation; the Hard Gate remains the backstop.
 
-        Exempt one-line changes, clearly tiny configuration edits, read-only questions, user-forbidden Worker use, and micro tasks whose delegation overhead exceeds their value. Do not wrap every shell command in a delegation decision.
-
-        Do not wait for the user to mention workers and do not generate a long plan merely to satisfy this check.
-
-        The Delegation Capability Preflight is a gate before the Initial Delegation Check, not a ninth RepartitionTrigger.
-
-        Re-evaluate ownership before the next substantive work whenever any of these eight distinct triggers occurs: INITIAL_LOCALIZATION_COMPLETE, ARCHITECTURE_RESOLVED, WORKER_RESULT_RECEIVED, WORKER_REVIEW_COMPLETE, PHASE_CHANGE, BUILD_TEST_BOUNDED_FIXES, MODULE_COMPLETE, or WORK_CONVERGED. WORKER_RESULT_RECEIVED enters bounded review; WORKER_REVIEW_COMPLETE is a separate later trigger that must reconsider all remaining work.
-
-        Prefer WORKER when the current package is clear, bounded, based on stable interfaces, supported by the configured worker, independently verifiable, non-overlapping, and large enough to justify delegation. Risk belongs to the current package and must be re-evaluated when vague or high-risk work converges; do not inherit the original task risk forever. MAIN owns unresolved architecture, cross-module decisions, unresolved investigation, required review, and final integration.
-
-        Every ownership decision must keep a compact work state: current work, known remaining work, owner, trigger, and one short reason. MAIN reasons are ARCHITECTURE_UNRESOLVED, CROSS_MODULE_DECISION, INVESTIGATION_UNRESOLVED, WORKER_CAPABILITY_MISSING, TOO_SMALL_TO_DELEGATE, REVIEW_REQUIRED, or FINAL_INTEGRATION. WORKER reasons are BOUNDED_IMPLEMENTATION, BOUNDED_FIX, BOUNDED_UI, BOUNDED_TESTING, or REPETITIVE_WORK. A MAIN decision without one of these reasons is invalid. At each trigger, call codex_agent_switch record_repartition before beginning the next substantive package; use list_repartitions when resuming or checking prior decisions. The Main Agent reports semantic triggers—the Agent Switch host only validates and stores them and must not pretend to understand project semantics.
-
-        The default active-worker limit is concurrency-only, not a lifetime limit. After Worker A reaches a terminal result and its bounded review completes, a later trigger may dispatch Worker B or C serially. Never increase worker calls merely as a metric, never delegate a trivial package whose overhead is higher than direct work, and never duplicate a DELEGATED or RUNNING package. Review only to the risk-appropriate budget; necessary verification is not full reimplementation.
-
-        Every record_repartition call for a durable package must include packageId, workingDirectory, packageKind, and declaredScopes together; incomplete lease metadata is rejected. The host derives the cost window index from the current runtime guard. Before mutation, PreToolUse classifies the operation, permits read-only work, denies Worker-owned leases, charges only the exact SessionId with an explicit Sol/Main role, invalidates a MAIN lease at CostCheckpoint when the threshold is reached, then applies the normal ownership gate.
+        Never duplicate DELEGATED or RUNNING Worker work. Review returned work to the package risk, adopt or reject it before relying on it, then reconsider remaining ownership after WORKER_REVIEW_COMPLETE.
         """;
 
     private static string? ReplaceManagedProjectInstructions(string? existing, string? block)

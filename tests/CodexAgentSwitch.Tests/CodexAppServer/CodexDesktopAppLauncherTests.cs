@@ -61,12 +61,6 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("never omit it", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("never use fork_turns=\"all\"", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("Delegation Capability Preflight", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("delayed-loaded delegate_worker", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("If the scheduling tools are available", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("If the tools are unavailable", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("continue with MAIN without deadlocking", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("Exempt one-line changes", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("not a ninth RepartitionTrigger", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("Initial Delegation Check", projectInstructions, StringComparison.Ordinal);
             Assert.True(
                 projectInstructions.IndexOf("Delegation Capability Preflight", StringComparison.Ordinal)
@@ -75,11 +69,17 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("WORKER_RESULT_RECEIVED", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("WORKER_REVIEW_COMPLETE", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("BUILD_TEST_BOUNDED_FIXES", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("A MAIN decision without one of these reasons is invalid", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("record_repartition", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("list_repartitions", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("must not pretend to understand project semantics", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("concurrency-only, not a lifetime limit", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("Queue relevant triggers", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("Hard Gate remains the backstop", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("Never duplicate DELEGATED or RUNNING Worker work", projectInstructions, StringComparison.Ordinal);
+            Assert.DoesNotContain("cost-window", projectInstructions, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("lease metadata", projectInstructions, StringComparison.OrdinalIgnoreCase);
+            var managedStart = projectInstructions.IndexOf("<!-- >>> Codex Agent Switch managed", StringComparison.Ordinal);
+            var managedEnd = projectInstructions.IndexOf("<!-- <<< Codex Agent Switch managed", StringComparison.Ordinal);
+            Assert.True(managedStart >= 0 && managedEnd > managedStart);
+            var managedBlock = projectInstructions[managedStart..];
+            Assert.True(managedBlock.Length < 4_657, $"Managed block was not reduced from the audited 4,657 characters: {managedBlock.Length}.");
+            Assert.True(managedBlock.Split('\n').Length < 25, "Managed block line count was not reduced from the audited 25 lines.");
             var workerPath = Path.Combine(project, ".codex", "agents", "cas-luna-worker.toml");
             var worker = await File.ReadAllTextAsync(workerPath);
             Assert.Contains("name = \"cas_luna_worker\"", worker, StringComparison.Ordinal);
@@ -189,7 +189,6 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("Codex Agent Switch managed external worker routing", externalInstructions, StringComparison.Ordinal);
             Assert.Contains("Delegation Capability Preflight", externalInstructions, StringComparison.Ordinal);
             Assert.Contains("Initial Delegation Check", externalInstructions, StringComparison.Ordinal);
-            Assert.Contains("record_repartition", externalInstructions, StringComparison.Ordinal);
             Assert.Contains("delegate_worker", externalInstructions, StringComparison.Ordinal);
             Assert.DoesNotContain("spawn_agent", externalInstructions, StringComparison.Ordinal);
             Assert.DoesNotContain("cas_luna_worker", externalInstructions, StringComparison.Ordinal);
@@ -429,21 +428,7 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("agents.enabled = false", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("Native external collaboration remains gated", projectConfiguration, StringComparison.Ordinal);
             Assert.Contains("[mcp_servers.codex_agent_switch]", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("Do not invoke Codex Native Agents for this backend", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("omit workerId", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("Initial Delegation Check", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("Delegation Capability Preflight", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("If the scheduling tools are available", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("If the tools are unavailable", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("Exempt one-line changes", projectConfiguration, StringComparison.Ordinal);
-            Assert.True(
-                projectConfiguration.IndexOf("Delegation Capability Preflight", StringComparison.Ordinal)
-                    < projectConfiguration.IndexOf("Initial Delegation Check", StringComparison.Ordinal));
-            Assert.Contains("WORKER_REVIEW_COMPLETE", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("Risk belongs to the current package", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("record_repartition", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("list_repartitions", projectConfiguration, StringComparison.Ordinal);
-            Assert.Contains("concurrency-only, not a lifetime limit", projectConfiguration, StringComparison.Ordinal);
+            Assert.DoesNotContain("developer_instructions", projectConfiguration, StringComparison.Ordinal);
             Assert.DoesNotContain("workerId='deepseek-default'", projectConfiguration, StringComparison.Ordinal);
             Assert.DoesNotContain("model_provider", projectConfiguration, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("model_providers", projectConfiguration, StringComparison.OrdinalIgnoreCase);
@@ -452,9 +437,8 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("Codex Agent Switch managed external worker routing", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("Delegation Capability Preflight", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("Initial Delegation Check", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("record_repartition", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("delegate_worker", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("ExternalWorkerExecutor", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("omit workerId", projectInstructions, StringComparison.Ordinal);
             Assert.DoesNotContain("spawn_agent", projectInstructions, StringComparison.Ordinal);
             Assert.DoesNotContain("cas_luna_worker", projectInstructions, StringComparison.Ordinal);
         }

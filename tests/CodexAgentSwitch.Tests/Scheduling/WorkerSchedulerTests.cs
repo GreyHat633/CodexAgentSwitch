@@ -119,6 +119,35 @@ public sealed class WorkerSchedulerTests
     }
 
     [Fact]
+    public async Task Adopted_exact_worker_package_closes_mechanically_but_ambiguous_package_does_not()
+    {
+        var leases = new LeaseMemoryRepository();
+        await using var scheduler = new WorkerScheduler([new NativeWorkerExecutor()], new MemoryRepository(), new AdvancingClock(), leaseRepository: leases);
+        await scheduler.StartAsync();
+        var exact = Packet("CAS-EXACT-COMPLETE-026", "cas_luna_worker");
+        await scheduler.RecordRepartitionAsync(exact.TaskId, RepartitionTrigger.INITIAL_LOCALIZATION_COMPLETE,
+            WorkOwner.Worker, RepartitionReasonCode.BOUNDED_IMPLEMENTATION, "exact", "cas_luna_worker", null,
+            exact.TaskId, exact.WorkingDirectory, "Implementation", exact.Scope, null);
+        await scheduler.DispatchAsync(exact);
+        await scheduler.ReportNativeResultAsync(new WorkerResultPacket(exact.TaskId, DelegationState.ResultReceived, "done", [], [], [], []));
+        await scheduler.MarkReviewingAsync(exact.TaskId);
+        await scheduler.MarkAdoptedAsync(exact.TaskId, "adopted");
+        Assert.Equal(WorkPackageLeaseStatus.COMPLETED,
+            Assert.Single(await leases.ListAsync(), item => item.PackageId == exact.TaskId).Status);
+
+        var ambiguous = Packet("CAS-AMBIGUOUS-COMPLETE-026", "cas_luna_worker");
+        await scheduler.RecordRepartitionAsync(ambiguous.TaskId, RepartitionTrigger.PHASE_CHANGE,
+            WorkOwner.Worker, RepartitionReasonCode.BOUNDED_IMPLEMENTATION, "ambiguous", "cas_luna_worker", null,
+            "different-package-id", ambiguous.WorkingDirectory, "Implementation", ambiguous.Scope, null);
+        await scheduler.DispatchAsync(ambiguous);
+        await scheduler.ReportNativeResultAsync(new WorkerResultPacket(ambiguous.TaskId, DelegationState.ResultReceived, "done", [], [], [], []));
+        await scheduler.MarkReviewingAsync(ambiguous.TaskId);
+        await scheduler.MarkAdoptedAsync(ambiguous.TaskId, "adopted");
+        Assert.NotEqual(WorkPackageLeaseStatus.COMPLETED,
+            Assert.Single(await leases.ListAsync(), item => item.PackageId == "different-package-id").Status);
+    }
+
+    [Fact]
     public async Task Repartition_telemetry_is_sequenced_timestamped_and_read_in_order()
     {
         var clock = new AdvancingClock();
@@ -291,6 +320,67 @@ public sealed class WorkerSchedulerTests
     }
 
     [Fact]
+    public async Task Pending_repartition_blocks_mutation_until_one_valid_ownership_resolution()
+    {
+        const string root = "E:\\AISPace\\PendingRepartition";
+        var leases = new LeaseMemoryRepository();
+        await using var scheduler = new WorkerScheduler([], new MemoryRepository(), new AdvancingClock(), leaseRepository: leases);
+
+        await scheduler.RecordRepartitionAsync("group-other", RepartitionTrigger.PHASE_CHANGE,
+            WorkOwner.Main, RepartitionReasonCode.FINAL_INTEGRATION, "other", null, null,
+            "pkg-other", root + "-other", "Implementation", [root + "-other"], null);
+
+        await scheduler.EnqueueRepartitionTriggerAsync("group-pending", [RepartitionTrigger.PHASE_CHANGE], "phase changed", root);
+        await scheduler.EnqueueRepartitionTriggerAsync("group-pending", [RepartitionTrigger.MODULE_COMPLETE], "module complete", root);
+
+        var unrelated = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root + "-other", "apply_patch", "patch"));
+        Assert.True(unrelated.Allowed);
+
+        var blocked = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
+        Assert.False(blocked.Allowed);
+        Assert.Contains("pending", blocked.Reason, StringComparison.OrdinalIgnoreCase);
+
+        var resolved = await scheduler.RecordRepartitionAsync("group-pending", RepartitionTrigger.WORK_CONVERGED,
+            WorkOwner.Main, RepartitionReasonCode.FINAL_INTEGRATION, "resolved", null, null,
+            "pkg", root, "Implementation", [root], null);
+        Assert.Equal(2, resolved.PendingTriggersCleared);
+        Assert.Equal([RepartitionTrigger.PHASE_CHANGE, RepartitionTrigger.MODULE_COMPLETE], resolved.CoalescedTriggers);
+        Assert.Equal(1, resolved.OwnershipDecisionCount);
+        Assert.Equal(1, resolved.HardGateDenials);
+        Assert.True(resolved.LeaseActive);
+
+        var allowed = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
+        Assert.True(allowed.Allowed);
+
+        await scheduler.EnqueueRepartitionTriggerAsync("group-worker", [RepartitionTrigger.PHASE_CHANGE], "worker phase", root);
+        var worker = await scheduler.RecordRepartitionAsync("group-worker", RepartitionTrigger.WORK_CONVERGED,
+            WorkOwner.Worker, RepartitionReasonCode.BOUNDED_IMPLEMENTATION, "worker resolved", "worker", null,
+            "pkg-worker", root, "Implementation", [root], null);
+        Assert.Equal(1, worker.PendingTriggersCleared);
+        var workerBlocked = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
+        Assert.False(workerBlocked.Allowed);
+        Assert.Contains("Worker", workerBlocked.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Resolving_one_pending_group_keeps_other_group_for_same_working_directory_gated()
+    {
+        const string root = "E:\\AISPace\\PendingRepartitionGroups";
+        var leases = new LeaseMemoryRepository();
+        await using var scheduler = new WorkerScheduler([], new MemoryRepository(), new AdvancingClock(), leaseRepository: leases);
+        await scheduler.EnqueueRepartitionTriggerAsync("group-a", [RepartitionTrigger.PHASE_CHANGE], "a", root);
+        await scheduler.EnqueueRepartitionTriggerAsync("group-b", [RepartitionTrigger.MODULE_COMPLETE], "b", root);
+
+        await scheduler.RecordRepartitionAsync("group-a", RepartitionTrigger.WORK_CONVERGED,
+            WorkOwner.Main, RepartitionReasonCode.FINAL_INTEGRATION, "a resolved", null, null,
+            "pkg-a", root, "Implementation", [root], null);
+
+        var blocked = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
+        Assert.False(blocked.Allowed);
+        Assert.Contains("pending", blocked.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Main_usage_from_unrelated_cwd_is_not_charged_as_a_fallback()
     {
         const string root = "E:\\AISPace\\Phase6Cwd";
@@ -374,6 +464,14 @@ public sealed class WorkerSchedulerTests
         var source = File.ReadAllText(path);
 
         Assert.Contains("required = new[] { \"taskGroupId\", \"trigger\", \"decision\", \"reason\", \"workSummary\", \"packageId\", \"workingDirectory\", \"packageKind\", \"declaredScopes\" }", source, StringComparison.Ordinal);
+        Assert.Contains("name = \"queue_repartition\"", source, StringComparison.Ordinal);
+        Assert.Contains("EnumArraySchema<RepartitionTrigger>()", source, StringComparison.Ordinal);
+        Assert.Contains("decision.ValueKind == JsonValueKind.Number", source, StringComparison.Ordinal);
+        Assert.Contains("leaseActive.GetBoolean()", source, StringComparison.Ordinal);
+        Assert.Contains("dispatchReady.GetBoolean()", source, StringComparison.Ordinal);
+        Assert.Contains("DispatchReady = true", source, StringComparison.Ordinal);
+        Assert.Contains("cachedToolDefinitions", source, StringComparison.Ordinal);
+        Assert.Contains("listChanged = false", source, StringComparison.Ordinal);
         Assert.DoesNotContain("costWindowIndex", source, StringComparison.Ordinal);
     }
 
