@@ -102,7 +102,16 @@ public sealed record ControlledWorkerRun(
     string? RequestUri = null,
     string? ResponseModelId = null,
     ProviderUsage? Usage = null,
-    string? FailureKind = null);
+    string? FailureKind = null,
+    int? ProviderTurnsUsed = null,
+    int? ToolCallsUsed = null,
+    int? LeaseExtensionCount = null,
+    string? HardLimitReason = null,
+    BudgetLimits? ConfiguredTaskBudgetSnapshot = null,
+    bool? CostVerified = null,
+    bool? FinalizationAttempted = null,
+    bool? FinalizationSucceeded = null,
+    IReadOnlyList<string>? ChangedFiles = null);
 
 public sealed record ControlledTaskTurn(
     string Id,

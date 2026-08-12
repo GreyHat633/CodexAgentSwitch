@@ -997,7 +997,7 @@ public sealed class ControlledTaskService
             AllowedReadScope = [session.WorkingDirectory],
             AllowedWriteScope = [],
             ExternalWorkerPermission = snapshot.ExternalWorkerPermission,
-            BudgetSnapshot = snapshot.Budget,
+            BudgetSnapshot = snapshot.WorkerPolicy.Source == WorkerSource.ExternalProvider ? snapshot.Budget : null,
         };
 
         var execution = await workerOrchestrator.ExecuteAsync(
@@ -1140,6 +1140,15 @@ public sealed class ControlledTaskService
                             ResponseModelId = result.ResponseModelId,
                             Usage = result.Usage,
                             FailureKind = result.FailureKind,
+                            ProviderTurnsUsed = result.ProviderTurns,
+                            ToolCallsUsed = result.ToolCalls,
+                            LeaseExtensionCount = result.LeaseExtensionCount,
+                            HardLimitReason = result.HardLimitReason,
+                            ConfiguredTaskBudgetSnapshot = result.BudgetSnapshot,
+                            CostVerified = result.CostVerified,
+                            FinalizationAttempted = result.FinalizationAttempted,
+                            FinalizationSucceeded = result.FinalizationSucceeded,
+                            ChangedFiles = result.ChangedFiles,
                         }
                         : worker).ToArray(),
                     Messages = string.IsNullOrWhiteSpace(result.Summary)

@@ -139,7 +139,7 @@ public sealed partial class NativeProjectAdapterPage : Page
             ? $"Worker：{workerText} · 最大 {profile.WorkerPolicy.MaxWorkers} 个 · {(definition.Kind == EffectiveWorkerKind.ExternalAgent ? "Scheduler 执行" : $"原生状态：{definition.Capability}")}"
             : "Worker：未启用";
         ProfileRoutingText.Text = $"路由：{RoutingText(profile.WorkerPolicy.RoutingMode)} · 回退：{FallbackText(profile.WorkerPolicy.FallbackAction)}";
-        ProfileVersionText.Text = $"应用版本：{typeof(App).Assembly.GetName().Version?.ToString(4) ?? "0.2.5.0"}";
+        ProfileVersionText.Text = $"应用版本：{typeof(App).Assembly.GetName().Version?.ToString(4) ?? "0.2.6.0"}";
     }
 
     private void UpdateSelectionSummary()

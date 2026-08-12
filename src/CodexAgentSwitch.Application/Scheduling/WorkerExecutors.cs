@@ -152,7 +152,13 @@ public sealed class ExternalWorkerExecutor(
             ToolCalls: execution.Result.ToolCalls,
             FailedToolCalls: execution.Result.FailedToolCalls,
             DeniedToolCalls: execution.Result.DeniedToolCalls,
-            DurationMilliseconds: execution.Result.Duration?.TotalMilliseconds);
+            DurationMilliseconds: execution.Result.Duration?.TotalMilliseconds,
+            LeaseExtensionCount: execution.Result.LeaseExtensionCount,
+            HardLimitReason: execution.Result.HardLimitReason,
+            ConfiguredTaskBudgetSnapshot: execution.Result.BudgetSnapshot,
+            CostVerified: execution.Result.CostVerified,
+            FinalizationAttempted: execution.Result.FinalizationAttempted,
+            FinalizationSucceeded: execution.Result.FinalizationSucceeded);
     }
 
     private async Task<BudgetConsumption> ConsumptionAsync(CancellationToken cancellationToken)

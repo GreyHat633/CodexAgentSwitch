@@ -1,4 +1,5 @@
 using CodexAgentSwitch.Domain.Providers;
+using CodexAgentSwitch.Domain.Profiles;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -98,7 +99,13 @@ public sealed record WorkerResultPacket(
     int? ToolCalls = null,
     int? FailedToolCalls = null,
     int? DeniedToolCalls = null,
-    double? DurationMilliseconds = null);
+    double? DurationMilliseconds = null,
+    int? LeaseExtensionCount = null,
+    string? HardLimitReason = null,
+    BudgetLimits? ConfiguredTaskBudgetSnapshot = null,
+    bool? CostVerified = null,
+    bool? FinalizationAttempted = null,
+    bool? FinalizationSucceeded = null);
 
 public sealed record ScheduledDelegation(
     TaskPacket Packet,

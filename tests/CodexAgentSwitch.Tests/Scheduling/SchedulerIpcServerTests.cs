@@ -336,7 +336,7 @@ public sealed class SchedulerIpcServerTests
             [executor], new MemoryRepository(), new FixedClock(), resolvers: [resolver], guards: [resolver]);
         await scheduler.StartAsync();
 
-        await scheduler.DispatchAsync(new TaskPacket(
+        var result = await scheduler.DispatchAsync(new TaskPacket(
             "task-external-adapter", "project-1", "E:\\AISPace\\TestSpace", string.Empty,
             "CAS-DS-013-WORKER-RESOLVE-381527", ["src/Foo.cs"], ["src/Foo.cs"], [],
             ["return nonce"], ["no session scan"], "Return exact nonce"));
@@ -346,6 +346,15 @@ public sealed class SchedulerIpcServerTests
         Assert.Equal(DeepSeekV4Catalog.FlashModelId, adapter.LastTask.ModelId);
         Assert.Equal([ScopeOperation.Read, ScopeOperation.Search], adapter.LastTask.Scope.Operations);
         Assert.Empty(adapter.LastTask.AllowedWriteScope);
+        Assert.Equal(profile.Budget, adapter.LastTask.BudgetSnapshot);
+        Assert.Equal(2, result.ProviderTurns);
+        Assert.Equal(1, result.ToolCalls);
+        Assert.Equal(1, result.LeaseExtensionCount);
+        Assert.Equal("provider-turn-limit", result.HardLimitReason);
+        Assert.Equal(profile.Budget, result.ConfiguredTaskBudgetSnapshot);
+        Assert.True(result.CostVerified);
+        Assert.True(result.FinalizationAttempted);
+        Assert.True(result.FinalizationSucceeded);
     }
 
     private sealed class EchoExecutor : IWorkerExecutor
@@ -456,7 +465,17 @@ public sealed class SchedulerIpcServerTests
             return Task.FromResult(new WorkerJob(AdapterId, "job", "thread", "turn", task.TaskId, WorkerJobStatus.Completed, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "completed"));
         }
         public Task<WorkerJob> ReadStatusAsync(string jobId, CancellationToken cancellationToken = default) => Task.FromResult(new WorkerJob(AdapterId, jobId, "thread", "turn", LastTask!.TaskId, WorkerJobStatus.Completed, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "completed"));
-        public Task<WorkerResult?> WaitAsync(string jobId, TimeSpan wait, CancellationToken cancellationToken = default) => Task.FromResult<WorkerResult?>(new WorkerResult(LastTask!.TaskId, WorkerJobStatus.Completed, "done", null, [], [], "deepseek-default", "DeepSeek", new Uri("https://api.deepseek.com/chat/completions"), DeepSeekV4Catalog.FlashModelId, new ProviderUsage(1, 1, 2)));
+        public Task<WorkerResult?> WaitAsync(string jobId, TimeSpan wait, CancellationToken cancellationToken = default) => Task.FromResult<WorkerResult?>(new WorkerResult(LastTask!.TaskId, WorkerJobStatus.Completed, "done", null, [], [], "deepseek-default", "DeepSeek", new Uri("https://api.deepseek.com/chat/completions"), DeepSeekV4Catalog.FlashModelId, new ProviderUsage(1, 1, 2))
+        {
+            ProviderTurns = 2,
+            ToolCalls = 1,
+            LeaseExtensionCount = 1,
+            HardLimitReason = "provider-turn-limit",
+            BudgetSnapshot = LastTask.BudgetSnapshot,
+            CostVerified = true,
+            FinalizationAttempted = true,
+            FinalizationSucceeded = true,
+        });
         public Task SteerAsync(string jobId, WorkerSteerRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task CancelAsync(string jobId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task DeleteAsync(string jobId, CancellationToken cancellationToken = default) => Task.CompletedTask;
