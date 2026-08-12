@@ -12,6 +12,7 @@ using CodexAgentSwitch.Application.Scheduling;
 using CodexAgentSwitch.Application.Presentation;
 using CodexAgentSwitch.App.ViewModels;
 using CodexAgentSwitch.Domain.Providers;
+using CodexAgentSwitch.Domain.Tasks;
 using CodexAgentSwitch.Infrastructure.Common;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Credentials;
