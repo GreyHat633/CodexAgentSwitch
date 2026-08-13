@@ -305,7 +305,8 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         {
             "turn/started" => new(MainAgentEventKind.TurnStarted, threadId, turnId, null, "running", parameters.Clone()),
             "item/agentMessage/delta" => new(MainAgentEventKind.OutputDelta, threadId, turnId, ReadDelta(parameters), null, parameters.Clone()),
-            "item/completed" => CreateTraceEvent(threadId, turnId, parameters),
+            "item/started" => CreateTraceEvent(threadId, turnId, parameters, started: true),
+            "item/completed" => CreateTraceEvent(threadId, turnId, parameters, started: false),
             "thread/status/changed" => new(MainAgentEventKind.StatusChanged, threadId, turnId, null, ReadStatus(parameters), parameters.Clone()),
             "turn/completed" => new(MainAgentEventKind.TurnCompleted, threadId, turnId, ExtractAgentText(turn), ReadStatus(turn), parameters.Clone()),
             _ => null,
@@ -346,7 +347,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
     private static string? ReadDelta(JsonElement parameters) =>
         parameters.TryGetProperty("delta", out var delta) ? delta.GetString() : null;
 
-    private static MainAgentEvent? CreateTraceEvent(string threadId, string turnId, JsonElement parameters)
+    private static MainAgentEvent? CreateTraceEvent(string threadId, string turnId, JsonElement parameters, bool started)
     {
         if (!parameters.TryGetProperty("item", out var item) || item.ValueKind != JsonValueKind.Object)
         {
@@ -354,7 +355,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         }
 
         var type = item.TryGetProperty("type", out var typeElement) ? typeElement.GetString() : null;
-        if (type == "agentMessage")
+        if (type is "agentMessage" or "contextCompaction")
         {
             return null;
         }
@@ -375,7 +376,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
             _ => $"{type} 已完成",
         };
         return new MainAgentEvent(
-            MainAgentEventKind.TraceItem,
+            started ? MainAgentEventKind.TraceItemStarted : MainAgentEventKind.TraceItem,
             threadId,
             turnId,
             summary,

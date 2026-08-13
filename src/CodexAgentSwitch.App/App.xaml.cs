@@ -68,6 +68,9 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<CostCalculator>();
         services.AddSingleton<EconomicReportService>();
         services.AddSingleton<IWorkerUsageCollector, WorkerUsageCollector>();
+        services.AddSingleton<JsonlContinuationCorrelationSink>();
+        services.AddSingleton<IContinuationCorrelationSink>(provider => provider.GetRequiredService<JsonlContinuationCorrelationSink>());
+        services.AddSingleton<ContinuationCorrelationTracker>();
         services.AddSingleton<IUsageSource, CodexSessionUsageSource>();
         services.AddSingleton<MainCostGuardCoordinator>();
         services.AddSingleton(new ContextEconomyOptions());

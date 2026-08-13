@@ -158,7 +158,9 @@ public sealed class ExternalWorkerExecutor(
             ConfiguredTaskBudgetSnapshot: execution.Result.BudgetSnapshot,
             CostVerified: execution.Result.CostVerified,
             FinalizationAttempted: execution.Result.FinalizationAttempted,
-            FinalizationSucceeded: execution.Result.FinalizationSucceeded);
+            FinalizationSucceeded: execution.Result.FinalizationSucceeded,
+            Pricing: execution.Pricing,
+            Currency: snapshot.Budget.Currency);
     }
 
     private async Task<BudgetConsumption> ConsumptionAsync(CancellationToken cancellationToken)
@@ -166,21 +168,49 @@ public sealed class ExternalWorkerExecutor(
         var now = DateTimeOffset.Now;
         decimal daily = 0;
         decimal monthly = 0;
+        var dailyCostUnknown = false;
+        var monthlyCostUnknown = false;
         long tokens = 0;
         var requests = 0;
         foreach (var group in await usage.ListTaskGroupsAsync(cancellationToken))
         {
             foreach (var item in await usage.ListUsageAsync(group.Id, cancellationToken))
             {
-                if (item.CapturedAt.ToLocalTime().Date == now.Date) daily += item.Cost.Value ?? 0;
                 var local = item.CapturedAt.ToLocalTime();
-                if (local.Year == now.Year && local.Month == now.Month) monthly += item.Cost.Value ?? 0;
+                var inDailyWindow = local.Date == now.Date;
+                var inMonthlyWindow = local.Year == now.Year && local.Month == now.Month;
+                if (inDailyWindow)
+                {
+                    if (item.Cost.Evidence != EvidenceKind.Unavailable && item.Cost.Value is { } dailyCost)
+                    {
+                        daily += dailyCost;
+                    }
+                    else
+                    {
+                        dailyCostUnknown = true;
+                    }
+                }
+
+                if (inMonthlyWindow)
+                {
+                    if (item.Cost.Evidence != EvidenceKind.Unavailable && item.Cost.Value is { } monthlyCost)
+                    {
+                        monthly += monthlyCost;
+                    }
+                    else
+                    {
+                        monthlyCostUnknown = true;
+                    }
+                }
+
                 tokens += item.TotalTokens.Value ?? 0;
                 requests += (int)(item.Requests.Value ?? 0);
             }
         }
 
-        return new BudgetConsumption(0, daily, monthly, tokens, requests);
+        return new BudgetConsumption(0, daily, monthly, tokens, requests,
+            DailyCostUnknown: dailyCostUnknown,
+            MonthlyCostUnknown: monthlyCostUnknown);
     }
 
     private static string BuildPrompt(TaskPacket packet) => $$"""

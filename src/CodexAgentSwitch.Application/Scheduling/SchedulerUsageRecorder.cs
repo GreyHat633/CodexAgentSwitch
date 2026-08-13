@@ -1,14 +1,20 @@
 using CodexAgentSwitch.Application.Abstractions;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Domain.Orchestration;
+using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Domain.Scheduling;
 using CodexAgentSwitch.Domain.Usage;
 using CodexAgentSwitch.Domain.Workers;
 
 namespace CodexAgentSwitch.Application.Scheduling;
 
-public sealed class SchedulerUsageRecorder(IUsageLedgerRepository usage, IClock clock) : ISchedulerResultObserver
+public sealed class SchedulerUsageRecorder(
+    IUsageLedgerRepository usage,
+    IClock clock,
+    CostCalculator? costCalculator = null) : ISchedulerResultObserver
 {
+    private readonly CostCalculator costCalculator = costCalculator ?? new CostCalculator();
+
     public async Task OnResultAsync(ScheduledDelegation task, CancellationToken cancellationToken = default)
     {
         var result = task.Result;
@@ -46,6 +52,13 @@ public sealed class SchedulerUsageRecorder(IUsageLedgerRepository usage, IClock 
 
         var providerUsage = result.Usage;
         var evidence = providerUsage is null ? EvidenceKind.Unavailable : EvidenceKind.Actual;
+        var currency = result.Currency ?? result.Pricing?.Currency ?? "unavailable";
+        var cost = CalculateCost(result, providerUsage, currency);
+        IReadOnlyList<string> notes = providerUsage is null
+            ? ["Worker result did not expose token usage; cost remains unavailable."]
+            : cost.Evidence == EvidenceKind.Unavailable
+                ? ["Provider usage was returned, but pricing or currency was not verified; cost remains unavailable."]
+                : ["Provider usage returned; cost calculated from configured provider pricing."];
         await usage.AppendUsageAsync(new UsageSnapshot(
             Guid.NewGuid(),
             task.Packet.TaskId,
@@ -57,9 +70,23 @@ public sealed class SchedulerUsageRecorder(IUsageLedgerRepository usage, IClock 
             new MeasuredLong(providerUsage?.OutputTokens, evidence),
             new MeasuredLong(providerUsage?.TotalTokens, evidence),
             new MeasuredLong(task.Transport == WorkerTransport.ExternalProvider ? 1 : null, task.Transport == WorkerTransport.ExternalProvider ? EvidenceKind.Actual : EvidenceKind.Unavailable),
-            new MeasuredDecimal(null, EvidenceKind.Unavailable),
-            "CNY",
+            cost,
+            currency,
             null,
-            providerUsage is null ? ["当前 Transport 未提供可靠 Usage；未伪造数值。"] : ["Provider 返回的实际 token Usage。"]), cancellationToken);
+            notes), cancellationToken);
+    }
+
+    private MeasuredDecimal CalculateCost(WorkerResultPacket result, ProviderUsage? providerUsage, string currency)
+    {
+        if (result.CostVerified != true
+            || result.Pricing is null
+            || providerUsage?.InputTokens is null
+            || providerUsage.OutputTokens is null
+            || !string.Equals(result.Pricing.Currency, currency, StringComparison.OrdinalIgnoreCase))
+        {
+            return new MeasuredDecimal(null, EvidenceKind.Unavailable);
+        }
+
+        return costCalculator.Calculate(result.Pricing, providerUsage.InputTokens, providerUsage.OutputTokens);
     }
 }

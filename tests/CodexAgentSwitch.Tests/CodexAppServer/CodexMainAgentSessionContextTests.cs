@@ -92,6 +92,35 @@ public sealed class CodexMainAgentSessionContextTests
             session.BindExistingThreadAsync("thread-vscode", "different-session", "vscode", "E:\\work"));
     }
 
+    [Fact]
+    public async Task Command_execution_exposes_started_and_completed_observable_boundaries()
+    {
+        var client = new CodexAppServerClient(CodexCommand.Direct("unused"));
+        var session = new CodexMainAgentSession(client, new TestResolver(), (method, _, _) =>
+            Task.FromResult(method == "turn/start"
+                ? JsonSerializer.SerializeToElement(new { turn = new { id = "turn-exec" } })
+                : JsonSerializer.SerializeToElement(new { accepted = true })));
+        var events = new List<MainAgentEvent>();
+        session.EventReceived += value => { events.Add(value); return Task.CompletedTask; };
+        await session.StartTurnAsync("thread-exec", "continue", "model", "medium", "E:\\work", ExecutionApprovalMode.Safe);
+
+        await InvokeNotification(session, "item/started", new
+        {
+            threadId = "thread-exec",
+            turnId = "turn-exec",
+            item = new { id = "exec-1", type = "commandExecution", command = "dotnet test", status = "running" },
+        });
+        await InvokeNotification(session, "item/completed", new
+        {
+            threadId = "thread-exec",
+            turnId = "turn-exec",
+            item = new { id = "exec-1", type = "commandExecution", command = "dotnet test", status = "completed" },
+        });
+
+        Assert.Equal([MainAgentEventKind.TraceItemStarted, MainAgentEventKind.TraceItem], events.Select(value => value.Kind));
+        Assert.All(events, value => Assert.Equal(TaskMessageKind.ToolCall, value.MessageKind));
+    }
+
     private static async Task InvokeNotification(CodexMainAgentSession session, string method, object parameters)
     {
         var callback = typeof(CodexMainAgentSession).GetMethod("OnNotificationAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;

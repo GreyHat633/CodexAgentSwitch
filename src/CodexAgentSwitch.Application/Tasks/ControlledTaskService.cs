@@ -32,6 +32,7 @@ public sealed class ControlledTaskService
     private readonly SessionContextBudget contextBudget;
     private readonly MainCostGuardCoordinator mainCostGuards;
     private readonly IMainContextEconomyCoordinator? contextEconomy;
+    private readonly ContinuationCorrelationTracker? continuationCorrelation;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> active = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, MainContextEpoch> contextEpochs = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim updateGate = new(1, 1);
@@ -49,7 +50,8 @@ public sealed class ControlledTaskService
         IProjectRepository? projectRepository = null,
         SessionContextBudget? contextBudget = null,
         MainCostGuardCoordinator? mainCostGuards = null,
-        IMainContextEconomyCoordinator? contextEconomy = null)
+        IMainContextEconomyCoordinator? contextEconomy = null,
+        ContinuationCorrelationTracker? continuationCorrelation = null)
     {
         this.tasks = tasks;
         this.profiles = profiles;
@@ -64,6 +66,7 @@ public sealed class ControlledTaskService
         this.contextBudget = contextBudget ?? new SessionContextBudget();
         this.mainCostGuards = mainCostGuards ?? new MainCostGuardCoordinator();
         this.contextEconomy = contextEconomy;
+        this.continuationCorrelation = continuationCorrelation;
     }
 
     public event Func<ControlledTaskSession, Task>? TaskChanged;
@@ -614,6 +617,8 @@ public sealed class ControlledTaskService
         session = await RequireAsync(taskId, cancellationToken);
         var userInput = session.Turns.Single(turn => turn.Id == localTurnId).UserInput;
         var prompt = BuildMainPrompt(userInput, snapshot, workerSummary);
+        if (workerSummary is not null)
+            continuationCorrelation?.WorkerResultInjected(taskId, localTurnId);
         var handle = await runtime.MainAgent.StartTurnAsync(
             mainThreadId,
             prompt,
@@ -622,6 +627,7 @@ public sealed class ControlledTaskService
             session.WorkingDirectory,
             snapshot.ApprovalMode,
             cancellationToken);
+        continuationCorrelation?.MainContinuationStarted(taskId, localTurnId, mainThreadId, handle.TurnId);
         await SetServerTurnAsync(taskId, localTurnId, handle.TurnId, cancellationToken);
 
         async Task Handler(MainAgentEvent activity)
@@ -630,6 +636,8 @@ public sealed class ControlledTaskService
             {
                 return;
             }
+
+            continuationCorrelation?.Observe(taskId, localTurnId, activity);
 
             if (activity.Kind == MainAgentEventKind.OutputDelta && !string.IsNullOrEmpty(activity.Text))
             {

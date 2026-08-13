@@ -105,7 +105,9 @@ public sealed record WorkerResultPacket(
     BudgetLimits? ConfiguredTaskBudgetSnapshot = null,
     bool? CostVerified = null,
     bool? FinalizationAttempted = null,
-    bool? FinalizationSucceeded = null);
+    bool? FinalizationSucceeded = null,
+    ProviderPricing? Pricing = null,
+    string? Currency = null);
 
 public sealed record ScheduledDelegation(
     TaskPacket Packet,

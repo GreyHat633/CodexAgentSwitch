@@ -1,10 +1,12 @@
 using System.Text.Json;
 using CodexAgentSwitch.Application.Abstractions;
+using CodexAgentSwitch.Application.Scheduling;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Application.Workers;
 using CodexAgentSwitch.Domain.Orchestration;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
+using CodexAgentSwitch.Domain.Scheduling;
 using CodexAgentSwitch.Domain.Usage;
 using CodexAgentSwitch.Domain.Workers;
 using CodexAgentSwitch.Infrastructure.Persistence;
@@ -40,6 +42,32 @@ public sealed class UsageBudgetTests
         Assert.Equal(EvidenceKind.Estimated, estimated.Evidence);
         Assert.Equal(0.4m, estimated.Value);
         Assert.Equal(EvidenceKind.Unavailable, calculator.Calculate(null, 100, 50).Evidence);
+    }
+
+    [Fact]
+    public void Unknown_window_cost_blocks_configured_monetary_budget_without_becoming_zero()
+    {
+        var limits = new BudgetLimits(null, 10m, 20m, null, null, "CNY");
+        var result = new BudgetPolicy().Evaluate(
+            limits,
+            new BudgetConsumption(0m, 0m, 0m, 0, 0, DailyCostUnknown: true, MonthlyCostUnknown: true));
+
+        Assert.False(result.AllowNewRequests);
+        Assert.Contains(result.Reasons, reason => reason.Contains("未知", StringComparison.Ordinal));
+        Assert.Equal(1m, result.HighestRatio);
+    }
+
+    [Fact]
+    public void Known_window_cost_keeps_per_task_budget_behavior_unchanged()
+    {
+        var limits = new BudgetLimits(1m, 10m, 20m, null, null, "CNY");
+        var result = new BudgetPolicy().Evaluate(
+            limits,
+            new BudgetConsumption(1m / 2m, 2m, 4m, 0, 0));
+
+        Assert.True(result.AllowNewRequests);
+        Assert.Equal(1m / 2m, result.HighestRatio);
+        Assert.DoesNotContain(BudgetCheckpoint.Percent100, result.ReachedCheckpoints);
     }
 
     [Fact]
@@ -88,6 +116,85 @@ public sealed class UsageBudgetTests
             Assert.Equal(15, storedUsage[0].TotalTokens.Value);
             Assert.Equal(EvidenceKind.Actual, storedUsage[0].TotalTokens.Evidence);
             Assert.Equal(EvidenceKind.Estimated, storedUsage[0].Cost.Evidence);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Scheduler_result_persists_estimated_cost_only_with_verified_pricing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cas-scheduler-usage-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var database = new SqliteDatabase(Path.Combine(root, "state.db"));
+            await database.InitializeAsync();
+            var repository = new SqliteUsageLedgerRepository(database);
+            var now = DateTimeOffset.UtcNow;
+            var packet = new TaskPacket(
+                "scheduler-task", "project", root, "deepseek-default", "goal", ["src"], ["src"], [], ["cost"], [], "summary");
+            var result = new WorkerResultPacket(
+                packet.TaskId,
+                DelegationState.ResultReceived,
+                "done",
+                [], [], [], [],
+                ProviderId: "deepseek-default",
+                ModelId: "deepseek-chat",
+                Usage: new ProviderUsage(100_000, 50_000, 150_000),
+                CostVerified: true,
+                Pricing: new ProviderPricing(2m, 4m, "CNY", null),
+                Currency: "CNY");
+            var task = new ScheduledDelegation(packet, WorkerTransport.ExternalProvider, DelegationState.ResultReceived, now, now, now, now, result, null);
+
+            await new SchedulerUsageRecorder(repository, new FakeClock()).OnResultAsync(task);
+
+            var stored = await repository.ListUsageAsync(packet.TaskId);
+            Assert.Single(stored);
+            Assert.Equal(0.4m, stored[0].Cost.Value);
+            Assert.Equal(EvidenceKind.Estimated, stored[0].Cost.Evidence);
+            Assert.Equal("CNY", stored[0].Currency);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Scheduler_result_keeps_unverified_cost_unknown()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cas-scheduler-usage-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var database = new SqliteDatabase(Path.Combine(root, "state.db"));
+            await database.InitializeAsync();
+            var repository = new SqliteUsageLedgerRepository(database);
+            var now = DateTimeOffset.UtcNow;
+            var packet = new TaskPacket(
+                "scheduler-task-unknown", "project", root, "deepseek-default", "goal", ["src"], ["src"], [], ["cost"], [], "summary");
+            var result = new WorkerResultPacket(
+                packet.TaskId,
+                DelegationState.ResultReceived,
+                "done",
+                [], [], [], [],
+                ProviderId: "deepseek-default",
+                ModelId: "deepseek-chat",
+                Usage: new ProviderUsage(100_000, 50_000, 150_000),
+                CostVerified: false,
+                Pricing: new ProviderPricing(2m, 4m, "CNY", null),
+                Currency: "CNY");
+            var task = new ScheduledDelegation(packet, WorkerTransport.ExternalProvider, DelegationState.ResultReceived, now, now, now, now, result, null);
+
+            await new SchedulerUsageRecorder(repository, new FakeClock()).OnResultAsync(task);
+
+            var stored = await repository.ListUsageAsync(packet.TaskId);
+            Assert.Single(stored);
+            Assert.Null(stored[0].Cost.Value);
+            Assert.Equal(EvidenceKind.Unavailable, stored[0].Cost.Evidence);
         }
         finally
         {

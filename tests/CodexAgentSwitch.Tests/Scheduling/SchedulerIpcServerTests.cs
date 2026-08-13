@@ -357,6 +357,82 @@ public sealed class SchedulerIpcServerTests
         Assert.True(result.FinalizationSucceeded);
     }
 
+    [Fact]
+    public async Task External_executor_sums_known_daily_and_monthly_costs_and_honors_limits()
+    {
+        var usage = new UsageRepository();
+        var now = DateTimeOffset.Now;
+        SeedUsage(usage, now, [1m, 2m]);
+        // Unknown cost outside both windows must not poison current-window evaluation.
+        SeedUsage(usage, now.AddMonths(-1), [null]);
+
+        var allowed = CreateExternalExecutor(usage, new BudgetLimits(null, 4m, 4m, null, null, "CNY"));
+        var allowedResult = await allowed.ExecuteAsync(Packet("known-allowed"));
+        Assert.Equal(DelegationState.ResultReceived, allowedResult.State);
+
+        var blocked = CreateExternalExecutor(usage, new BudgetLimits(null, 2m, null, null, null, "CNY"));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => blocked.ExecuteAsync(Packet("known-blocked")));
+        Assert.Contains("预算", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task External_executor_blocks_configured_window_when_known_and_unknown_costs_are_mixed()
+    {
+        foreach (var budget in new[]
+        {
+            new BudgetLimits(null, 10m, null, null, null, "CNY"),
+            new BudgetLimits(null, null, 10m, null, null, "CNY"),
+        })
+        {
+            var usage = new UsageRepository();
+            var now = DateTimeOffset.Now;
+            SeedUsage(usage, now, [1m, null]);
+            var executor = CreateExternalExecutor(usage, budget);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteAsync(Packet($"unknown-{Guid.NewGuid():N}")));
+            Assert.Contains("预算", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    private static ExternalWorkerExecutor CreateExternalExecutor(UsageRepository usage, BudgetLimits budget)
+    {
+        var project = Project("deepseek-default");
+        var profile = ProfileFor(project) with { Budget = budget };
+        var now = DateTimeOffset.UtcNow;
+        var provider = new ProviderConfiguration(
+            "deepseek-default", "DeepSeek", ProviderKind.DeepSeek, new Uri("https://api.deepseek.com"),
+            "provider/deepseek-default", DeepSeekV4Catalog.FlashModelId, new Dictionary<string, string>(),
+            TimeSpan.FromSeconds(30), true, new ProviderPricing(1m, 2m, "CNY", null), now, now);
+        var adapter = new RecordingExternalAdapter();
+        var orchestrator = new WorkerOrchestrator(
+            new RecordingExternalFactory(adapter), new FakeRuntime(adapter), new ExternalProviderResolver());
+        return new ExternalWorkerExecutor(
+            new ProjectRepository(project),
+            new ProfileRepository(profile),
+            new TaskProfileSnapshotFactory(new ProviderRepository(provider), new FixedClock()),
+            orchestrator,
+            usage,
+            new BudgetPolicy());
+    }
+
+    private static TaskPacket Packet(string id) => new(
+        id, "project-1", "E:\\AISPace\\TestSpace", "deepseek-default", "goal",
+        ["src"], ["src"], [], ["return nonce"], [], "Return exact nonce");
+
+    private static void SeedUsage(UsageRepository repository, DateTimeOffset capturedAt, IReadOnlyList<decimal?> costs)
+    {
+        var groupId = $"usage-{Guid.NewGuid():N}";
+        repository.Groups.Add(new TaskGroupLedger(groupId, "main", "model", "medium", capturedAt, capturedAt, [], capturedAt));
+        repository.Usage[groupId] = costs.Select((cost, index) => new UsageSnapshot(
+            Guid.NewGuid(), groupId, $"job-{index}", "deepseek-default", "deepseek-chat", capturedAt,
+            new MeasuredLong(10, EvidenceKind.Actual),
+            new MeasuredLong(5, EvidenceKind.Actual),
+            new MeasuredLong(15, EvidenceKind.Actual),
+            new MeasuredLong(1, EvidenceKind.Actual),
+            new MeasuredDecimal(cost, cost is null ? EvidenceKind.Unavailable : EvidenceKind.Estimated),
+            "CNY", null, [])).ToList();
+    }
+
     private sealed class EchoExecutor : IWorkerExecutor
     {
         public WorkerTransport Transport => WorkerTransport.ExternalProvider;
@@ -430,11 +506,14 @@ public sealed class SchedulerIpcServerTests
 
     private sealed class UsageRepository : IUsageLedgerRepository
     {
+        public List<TaskGroupLedger> Groups { get; } = [];
+        public Dictionary<string, List<UsageSnapshot>> Usage { get; } = [];
         public Task UpsertTaskGroupAsync(TaskGroupLedger ledger, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<TaskGroupLedger?> GetTaskGroupAsync(string id, CancellationToken cancellationToken = default) => Task.FromResult<TaskGroupLedger?>(null);
-        public Task<IReadOnlyList<TaskGroupLedger>> ListTaskGroupsAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<TaskGroupLedger>>([]);
+        public Task<IReadOnlyList<TaskGroupLedger>> ListTaskGroupsAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<TaskGroupLedger>>(Groups);
         public Task AppendUsageAsync(UsageSnapshot snapshot, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<IReadOnlyList<UsageSnapshot>> ListUsageAsync(string taskGroupId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<UsageSnapshot>>([]);
+        public Task<IReadOnlyList<UsageSnapshot>> ListUsageAsync(string taskGroupId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<UsageSnapshot>>(Usage.GetValueOrDefault(taskGroupId) ?? []);
     }
 
     private sealed class FixedClock : IClock

@@ -71,7 +71,17 @@ public sealed record BudgetConsumption(
     decimal DailyCost,
     decimal MonthlyCost,
     long Tokens,
-    int Requests);
+    int Requests,
+    bool TaskCostUnknown = false,
+    bool DailyCostUnknown = false,
+    bool MonthlyCostUnknown = false)
+{
+    public bool TaskCostKnown => !TaskCostUnknown;
+    public bool DailyCostKnown => !DailyCostUnknown;
+    public bool MonthlyCostKnown => !MonthlyCostUnknown;
+    public bool HasUnknownMonetaryCost => TaskCostUnknown || DailyCostUnknown || MonthlyCostUnknown;
+    public bool HasUnknownCost => HasUnknownMonetaryCost;
+}
 
 public sealed record BudgetAssessment(
     bool AllowNewRequests,

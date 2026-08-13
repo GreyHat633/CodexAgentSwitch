@@ -9,6 +9,7 @@ public enum MainAgentEventKind
     TurnStarted,
     OutputDelta,
     StatusChanged,
+    TraceItemStarted,
     TraceItem,
     ApprovalRequested,
     TurnCompleted,
