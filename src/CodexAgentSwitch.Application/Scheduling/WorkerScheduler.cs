@@ -83,6 +83,17 @@ public sealed class WorkerScheduler(
                 }
             }
 
+            foreach (var persisted in await repository.ListPendingRepartitionsAsync(cancellationToken))
+            {
+                var normalized = WorkPackageLease.NormalizePath(persisted.WorkingDirectory);
+                var persistedKey = $"{persisted.TaskGroupId}|{normalized}";
+                var restored = new PendingRepartition(persisted.TaskGroupId, normalized,
+                    persisted.CreatedAt, persisted.UpdatedAt, persisted.HardGateDenialCount);
+                restored.Load(persisted.PendingTriggers);
+                pendingRepartitions[persistedKey] = restored;
+                pendingByWorkingDirectory.GetOrAdd(normalized, _ => new())[persistedKey] = 0;
+            }
+
             workerCancellation = new CancellationTokenSource();
             state = ActiveCount() > 0 ? SchedulerState.Working : SchedulerState.Ready;
             faultMessage = null;
@@ -283,10 +294,13 @@ public sealed class WorkerScheduler(
         await repartitionTelemetryLock.WaitAsync(cancellationToken);
         try
         {
-            var key = $"{taskGroupId}|{WorkPackageLease.NormalizePath(workingDirectory)}";
-            var pending = pendingRepartitions.GetOrAdd(key, _ => new PendingRepartition());
-            foreach (var trigger in triggers) pending.Add(trigger);
-            var groups = pendingByWorkingDirectory.GetOrAdd(WorkPackageLease.NormalizePath(workingDirectory), _ => new());
+            var normalizedWorkingDirectory = WorkPackageLease.NormalizePath(workingDirectory);
+            var key = $"{taskGroupId}|{normalizedWorkingDirectory}";
+            var pending = pendingRepartitions.GetOrAdd(key, _ => new PendingRepartition(taskGroupId, normalizedWorkingDirectory,
+                clock.UtcNow.ToUniversalTime(), clock.UtcNow.ToUniversalTime(), 0));
+            foreach (var trigger in triggers) pending.Add(trigger, clock.UtcNow.ToUniversalTime());
+            await PersistPendingAsync(pending, cancellationToken);
+            var groups = pendingByWorkingDirectory.GetOrAdd(normalizedWorkingDirectory, _ => new());
             groups[key] = 0;
             return new RepartitionTelemetry(taskGroupId, 0, clock.UtcNow.ToUniversalTime(), triggers[^1], WorkOwner.Main,
                 RepartitionReasonCode.REVIEW_REQUIRED, workSummary, null, null, WorkingDirectory: workingDirectory,
@@ -381,8 +395,9 @@ public sealed class WorkerScheduler(
                 ? $"{taskGroupId}|{WorkPackageLease.NormalizePath(workingDirectory)}" : taskGroupId;
             if (!hasCompleteMetadata)
             {
-                var legacyPending = pendingRepartitions.GetOrAdd(pendingKey, _ => new PendingRepartition());
-                legacyPending.Add(trigger);
+                var legacyPending = pendingRepartitions.GetOrAdd(pendingKey, _ => new PendingRepartition(taskGroupId, null,
+                    clock.UtcNow.ToUniversalTime(), clock.UtcNow.ToUniversalTime(), 0));
+                legacyPending.Add(trigger, clock.UtcNow.ToUniversalTime());
             }
             if (hasCompleteMetadata && pendingRepartitions.TryRemove(pendingKey, out var pending))
             {
@@ -395,7 +410,12 @@ public sealed class WorkerScheduler(
                     groups.TryRemove(pendingKey, out _);
                     if (groups.IsEmpty) pendingByWorkingDirectory.TryRemove(WorkPackageLease.NormalizePath(workingDirectory), out _);
                 }
+                if (pending.WorkingDirectory is not null)
+                {
+                    await repository.RemovePendingRepartitionAsync(pending.TaskGroupId, pending.WorkingDirectory, cancellationToken);
+                }
             }
+
             if (leaseRepository is not null && hasCompleteMetadata)
             {
                 if (prior is not null)
@@ -459,7 +479,14 @@ public sealed class WorkerScheduler(
         var normalizedWorkingDirectory = WorkPackageLease.NormalizePath(request.WorkingDirectory);
         if (pendingByWorkingDirectory.TryGetValue(normalizedWorkingDirectory, out var pendingGroups) && !pendingGroups.IsEmpty)
         {
-            foreach (var key in pendingGroups.Keys) if (pendingRepartitions.TryGetValue(key, out var pendingState)) pendingState.RecordHardGateDenial();
+            foreach (var key in pendingGroups.Keys)
+            {
+                if (pendingRepartitions.TryGetValue(key, out var pendingState))
+                {
+                    pendingState.RecordHardGateDenial(clock.UtcNow.ToUniversalTime());
+                    await PersistPendingAsync(pendingState, cancellationToken);
+                }
+            }
             return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), false, false,
                 "Mutation denied: a repartition decision is pending; require MAIN/WORKER ownership resolution.");
         }
@@ -798,14 +825,44 @@ public sealed class WorkerScheduler(
 
     private sealed record QueuedWork(TaskPacket Packet, IWorkerExecutor Executor, TaskCompletionSource<WorkerResultPacket> Completion);
 
+    private async Task PersistPendingAsync(PendingRepartition pending, CancellationToken cancellationToken)
+    {
+        if (pending.WorkingDirectory is null) return;
+        await repository.UpsertPendingRepartitionAsync(pending.ToState(), cancellationToken);
+    }
+
     private sealed class PendingRepartition
     {
         private readonly List<RepartitionTrigger> triggers = [];
+        public string TaskGroupId { get; }
+        public string? WorkingDirectory { get; }
+        public DateTimeOffset CreatedAt { get; }
+        private DateTimeOffset updatedAt;
+        public DateTimeOffset UpdatedAt => updatedAt;
+        public PendingRepartition(string taskGroupId, string? workingDirectory, DateTimeOffset createdAt,
+            DateTimeOffset updatedAt, int hardGateDenials)
+        {
+            TaskGroupId = taskGroupId;
+            WorkingDirectory = workingDirectory;
+            CreatedAt = createdAt;
+            this.updatedAt = updatedAt;
+            this.hardGateDenials = hardGateDenials;
+        }
         public int Count => triggers.Count;
         public IReadOnlyList<RepartitionTrigger> Triggers => triggers;
         private int hardGateDenials;
         public int HardGateDenials => Volatile.Read(ref hardGateDenials);
-        public void Add(RepartitionTrigger trigger) => triggers.Add(trigger);
-        public void RecordHardGateDenial() => Interlocked.Increment(ref hardGateDenials);
+        public void Add(RepartitionTrigger trigger, DateTimeOffset? changedAt = null)
+        {
+            triggers.Add(trigger);
+            updatedAt = changedAt ?? updatedAt;
+        }
+        public void Load(IEnumerable<RepartitionTrigger> persistedTriggers) => triggers.AddRange(persistedTriggers);
+        public void RecordHardGateDenial(DateTimeOffset changedAt)
+        {
+            Interlocked.Increment(ref hardGateDenials);
+            updatedAt = changedAt;
+        }
+        public PendingRepartitionState ToState() => new(TaskGroupId, WorkingDirectory!, triggers.ToArray(), CreatedAt, UpdatedAt, HardGateDenials);
     }
 }

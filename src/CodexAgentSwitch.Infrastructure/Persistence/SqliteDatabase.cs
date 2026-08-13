@@ -104,6 +104,16 @@ public sealed class SqliteDatabase(string databasePath)
             CREATE INDEX IF NOT EXISTS ix_scheduler_repartitions_group_sequence
                 ON scheduler_repartitions(task_group_id, sequence ASC);
 
+            CREATE TABLE IF NOT EXISTS scheduler_pending_repartitions (
+                task_group_id TEXT NOT NULL,
+                working_directory TEXT NOT NULL,
+                pending_triggers_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                hard_gate_denial_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(task_group_id, working_directory)
+            );
+
             CREATE TABLE IF NOT EXISTS work_package_leases (
                 lease_id TEXT PRIMARY KEY,
                 package_id TEXT NOT NULL,

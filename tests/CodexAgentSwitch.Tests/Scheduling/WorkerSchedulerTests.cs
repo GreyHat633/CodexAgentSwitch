@@ -363,6 +363,74 @@ public sealed class WorkerSchedulerTests
     }
 
     [Fact]
+    public async Task Pending_repartition_survives_scheduler_restart_and_resolution_removes_persistence()
+    {
+        var root = Path.Combine(Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? Path.GetTempPath(), "cas-pending-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var database = new SqliteDatabase(Path.Combine(root, "scheduler.db"));
+            await database.InitializeAsync();
+            var repository = new SqliteSchedulerTaskRepository(database);
+            const string workingDirectory = "E:\\AISPace\\PendingRestart";
+            PendingRepartitionState? persistedBeforeRestart = null;
+
+            await using (var first = new WorkerScheduler([], repository, new AdvancingClock()))
+            {
+                await first.StartAsync();
+                await first.EnqueueRepartitionTriggerAsync("restart-group", [RepartitionTrigger.PHASE_CHANGE], "pending", workingDirectory);
+                await first.EnqueueRepartitionTriggerAsync("restart-group", [RepartitionTrigger.MODULE_COMPLETE], "pending", workingDirectory + "\\.");
+                await first.EnqueueRepartitionTriggerAsync("other-group", [RepartitionTrigger.PHASE_CHANGE], "other", workingDirectory);
+                await first.EnqueueRepartitionTriggerAsync("restart-group", [RepartitionTrigger.PHASE_CHANGE], "isolated", workingDirectory + "-other");
+                var persisted = await repository.ListPendingRepartitionsAsync();
+                Assert.Equal(3, persisted.Count);
+                Assert.Equal(2, persisted.Single(item => item.TaskGroupId == "restart-group" &&
+                    item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase)).PendingTriggers.Count);
+                var denied = await first.EvaluatePreToolUseAsync(new PreToolUseRequest("s", workingDirectory, "apply_patch", "patch"));
+                Assert.False(denied.Allowed);
+                await first.StopAsync(force: true);
+            }
+
+            persistedBeforeRestart = (await repository.ListPendingRepartitionsAsync()).Single(item => item.TaskGroupId == "restart-group" &&
+                item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase));
+
+            var restartClock = new AdvancingClock();
+            await using (var second = new WorkerScheduler([], repository, restartClock))
+            {
+                await second.StartAsync();
+                var restored = (await repository.ListPendingRepartitionsAsync()).Single(item => item.TaskGroupId == "restart-group" &&
+                    item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase));
+                Assert.Equal(persistedBeforeRestart!.CreatedAt, restored.CreatedAt);
+                var restoredAgain = (await repository.ListPendingRepartitionsAsync()).Single(item => item.TaskGroupId == "restart-group" &&
+                    item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase));
+                Assert.Equal(restored.UpdatedAt, restoredAgain.UpdatedAt);
+                var restoredDenied = await second.EvaluatePreToolUseAsync(new PreToolUseRequest("s", workingDirectory, "apply_patch", "patch"));
+                Assert.False(restoredDenied.Allowed);
+                var afterDenial = (await repository.ListPendingRepartitionsAsync()).Single(item => item.TaskGroupId == "restart-group" &&
+                    item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase));
+                Assert.Equal(2, afterDenial.HardGateDenialCount);
+                Assert.Equal(2, (await repository.ListPendingRepartitionsAsync())
+                    .Single(item => item.TaskGroupId == "restart-group" && item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase))
+                    .HardGateDenialCount);
+                var resolved = await second.RecordRepartitionAsync("restart-group", RepartitionTrigger.WORK_CONVERGED,
+                    WorkOwner.Main, RepartitionReasonCode.FINAL_INTEGRATION, "resolved", null, null,
+                    "pkg", workingDirectory, "Implementation", [workingDirectory], null);
+                Assert.Equal(2, resolved.PendingTriggersCleared);
+            }
+
+            var remaining = await repository.ListPendingRepartitionsAsync();
+            Assert.DoesNotContain(remaining, item => item.TaskGroupId == "restart-group" &&
+                item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(2, remaining.Count);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task Resolving_one_pending_group_keeps_other_group_for_same_working_directory_gated()
     {
         const string root = "E:\\AISPace\\PendingRepartitionGroups";
@@ -565,6 +633,7 @@ public sealed class WorkerSchedulerTests
     {
         private long ticks;
         public DateTimeOffset UtcNow => new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero).AddTicks(Interlocked.Increment(ref ticks));
+        public DateTimeOffset LastUtcNow => new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero).AddTicks(Volatile.Read(ref ticks));
     }
 
     private sealed class CountingUsageSource(NativeUsageRecord? record) : IUsageSource

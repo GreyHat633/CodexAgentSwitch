@@ -39,6 +39,15 @@ public sealed record RepartitionTelemetry(
         Result);
 }
 
+/// <summary>Durable state for a repartition group awaiting an ownership decision.</summary>
+public sealed record PendingRepartitionState(
+    string TaskGroupId,
+    string WorkingDirectory,
+    IReadOnlyList<RepartitionTrigger> PendingTriggers,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    int HardGateDenialCount = 0);
+
 public interface IWorkPackageLeaseRepository
 {
     Task<WorkPackageLease?> GetActiveAsync(string packageId, string workingDirectory, CancellationToken cancellationToken = default);
@@ -103,6 +112,16 @@ public interface ISchedulerTaskRepository
     Task UpsertAsync(ScheduledDelegation task, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<RepartitionTelemetry>> ListRepartitionsAsync(string taskGroupId, CancellationToken cancellationToken = default);
     Task AppendRepartitionAsync(RepartitionTelemetry telemetry, CancellationToken cancellationToken = default);
+
+    // Optional for repositories that predate durable pending repartition state.
+    // SQLite provides the durable implementation; lightweight test repositories
+    // can retain the existing no-op behavior.
+    Task<IReadOnlyList<PendingRepartitionState>> ListPendingRepartitionsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<PendingRepartitionState>>([]);
+    Task UpsertPendingRepartitionAsync(PendingRepartitionState state, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+    Task RemovePendingRepartitionAsync(string taskGroupId, string workingDirectory, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
 }
 
 public interface IWorkerExecutor

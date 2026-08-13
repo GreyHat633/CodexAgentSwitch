@@ -131,6 +131,64 @@ public sealed class SqliteSchedulerTaskRepository(SqliteDatabase database) : ISc
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<PendingRepartitionState>> ListPendingRepartitionsAsync(CancellationToken cancellationToken = default)
+    {
+        var result = new List<PendingRepartitionState>();
+        await using var connection = new SqliteConnection(database.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT task_group_id, working_directory, pending_triggers_json, created_at, updated_at, hard_gate_denial_count
+            FROM scheduler_pending_repartitions
+            ORDER BY updated_at ASC
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var triggers = JsonSerializer.Deserialize<RepartitionTrigger[]>(reader.GetString(2), JsonOptions) ?? [];
+            result.Add(new PendingRepartitionState(
+                reader.GetString(0), reader.GetString(1), triggers,
+                DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                reader.GetInt32(5)));
+        }
+        return result;
+    }
+
+    public async Task UpsertPendingRepartitionAsync(PendingRepartitionState state, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(database.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO scheduler_pending_repartitions(
+                task_group_id, working_directory, pending_triggers_json, created_at, updated_at, hard_gate_denial_count)
+            VALUES($task_group_id, $working_directory, $pending_triggers_json, $created_at, $updated_at, $hard_gate_denial_count)
+            ON CONFLICT(task_group_id, working_directory) DO UPDATE SET
+                pending_triggers_json = excluded.pending_triggers_json,
+                updated_at = excluded.updated_at,
+                hard_gate_denial_count = excluded.hard_gate_denial_count
+            """;
+        command.Parameters.AddWithValue("$task_group_id", state.TaskGroupId);
+        command.Parameters.AddWithValue("$working_directory", WorkPackageLease.NormalizePath(state.WorkingDirectory));
+        command.Parameters.AddWithValue("$pending_triggers_json", JsonSerializer.Serialize(state.PendingTriggers, JsonOptions));
+        command.Parameters.AddWithValue("$created_at", state.CreatedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$updated_at", state.UpdatedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$hard_gate_denial_count", state.HardGateDenialCount);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task RemovePendingRepartitionAsync(string taskGroupId, string workingDirectory, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(database.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM scheduler_pending_repartitions WHERE task_group_id = $task_group_id AND working_directory = $working_directory";
+        command.Parameters.AddWithValue("$task_group_id", taskGroupId);
+        command.Parameters.AddWithValue("$working_directory", WorkPackageLease.NormalizePath(workingDirectory));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static ScheduledDelegation Deserialize(string json) =>
         JsonSerializer.Deserialize<ScheduledDelegation>(json, JsonOptions)
         ?? throw new InvalidDataException("Stored scheduler task JSON is invalid.");
