@@ -78,6 +78,9 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
                         ?? throw new InvalidDataException("DelegationPreflightRequest invalid."), cancellationToken),
                     "dispatch" => await scheduler.DispatchAsync(payload.Deserialize<TaskPacket>(JsonOptions)
                         ?? throw new InvalidDataException("TaskPacket 无效。"), cancellationToken),
+                    "consumeResult" => await scheduler.ConsumeResultAsync(
+                        payload.GetProperty("taskId").GetString() ?? string.Empty,
+                        cancellationToken),
                     "reportResult" => await scheduler.ReportNativeResultAsync(payload.Deserialize<WorkerResultPacket>(JsonOptions)
                         ?? throw new InvalidDataException("WorkerResultPacket 无效。"), cancellationToken),
                     "review" => await scheduler.MarkReviewingAsync(payload.GetProperty("taskId").GetString() ?? string.Empty, cancellationToken),

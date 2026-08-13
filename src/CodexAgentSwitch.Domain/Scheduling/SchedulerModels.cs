@@ -24,6 +24,8 @@ public enum DelegationState
     Adopted,
     Failed,
     Cancelled,
+    ResultPending,
+    Blocked,
 }
 
 public enum WorkerTransport
@@ -107,7 +109,11 @@ public sealed record WorkerResultPacket(
     bool? FinalizationAttempted = null,
     bool? FinalizationSucceeded = null,
     ProviderPricing? Pricing = null,
-    string? Currency = null);
+    string? Currency = null,
+    bool? RecoveryAttempted = null,
+    bool? RetryAttempted = null,
+    string? RecentFailureSummary = null,
+    IReadOnlyList<string>? Scope = null);
 
 public sealed record ScheduledDelegation(
     TaskPacket Packet,
@@ -118,7 +124,8 @@ public sealed record ScheduledDelegation(
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
     WorkerResultPacket? Result,
-    string? FailureReason);
+    string? FailureReason,
+    DateTimeOffset? ResultDeliveredAt = null);
 
 public sealed record SchedulerSnapshot(
     SchedulerState State,

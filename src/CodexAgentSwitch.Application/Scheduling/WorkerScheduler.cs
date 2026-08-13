@@ -45,6 +45,7 @@ public sealed class WorkerScheduler(
     });
     private readonly ConcurrentDictionary<string, ScheduledDelegation> tasks = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim lifecycle = new(1, 1);
+    private readonly SemaphoreSlim resultLifecycle = new(1, 1);
     private readonly SemaphoreSlim repartitionTelemetryLock = new(1, 1);
     // Main-reported lifecycle triggers may arrive before the next ownership
     // boundary. Keep them coalesced by task group (and cwd for the mutation
@@ -184,7 +185,9 @@ public sealed class WorkerScheduler(
         }
 
         if (tasks.TryGetValue(packet.TaskId, out var duplicate)
-            && duplicate.State is DelegationState.Created or DelegationState.Delegated or DelegationState.Running or DelegationState.ResultReceived or DelegationState.Reviewing or DelegationState.Adopted)
+            && duplicate.State is DelegationState.Created or DelegationState.Delegated or DelegationState.Running
+                or DelegationState.ResultPending or DelegationState.ResultReceived or DelegationState.Blocked
+                or DelegationState.Reviewing or DelegationState.Adopted)
         {
             throw new InvalidOperationException($"Task {packet.TaskId} 已处于 {duplicate.State}，禁止重复 dispatch。");
         }
@@ -210,9 +213,52 @@ public sealed class WorkerScheduler(
             return instruction;
         }
 
-        var completion = new TaskCompletionSource<WorkerResultPacket>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await queue.Writer.WriteAsync(new QueuedWork(packet, executor, completion), cancellationToken);
-        return await completion.Task.WaitAsync(cancellationToken);
+        await queue.Writer.WriteAsync(new QueuedWork(packet, executor), cancellationToken);
+        return new WorkerResultPacket(
+            packet.TaskId,
+            DelegationState.Delegated,
+            "External Worker 已登记并在后台独立执行；终态将持久化，下一自然 Main 边界使用 consume_worker_result 获取一次。",
+            [], [], [], []);
+    }
+
+    public async Task<WorkerResultPacket> ConsumeResultAsync(string taskId, CancellationToken cancellationToken = default)
+    {
+        await resultLifecycle.WaitAsync(cancellationToken);
+        try
+        {
+            if (!tasks.TryGetValue(taskId, out var existing) || existing.Result is null)
+                throw new InvalidOperationException($"Task {taskId} 尚无终态结果。");
+            if (existing.Transport != WorkerTransport.ExternalProvider)
+                throw new InvalidOperationException("Native Worker 结果通过 report_worker_result 生命周期交付，不使用 consume_worker_result。");
+            if (existing.State is DelegationState.Created or DelegationState.Delegated or DelegationState.Running)
+                throw new InvalidOperationException($"Task {taskId} 仍在后台执行；不要轮询或输出等待叙述，请在下一自然 Main 边界再消费。");
+            if (existing.ResultDeliveredAt is not null)
+                throw new InvalidOperationException($"Task {taskId} 的终态结果已经交付，禁止重复注入。");
+            if (existing.State is not (DelegationState.ResultPending or DelegationState.Blocked or DelegationState.Failed or DelegationState.Cancelled))
+                throw new InvalidOperationException($"Task {taskId} 当前状态 {existing.State} 不可消费。");
+
+            var deliveredState = existing.State == DelegationState.ResultPending
+                ? DelegationState.ResultReceived
+                : existing.State;
+            var deliveredResult = existing.Result with { State = deliveredState };
+            var delivered = existing with
+            {
+                State = deliveredState,
+                Result = deliveredResult,
+                ResultDeliveredAt = clock.UtcNow,
+                UpdatedAt = clock.UtcNow,
+            };
+            tasks[taskId] = delivered;
+            await repository.UpsertAsync(delivered, cancellationToken);
+            if (deliveredState is DelegationState.ResultReceived or DelegationState.Blocked or DelegationState.Failed)
+                await TransitionLeaseAsync(taskId, WorkPackageLifecycleEvent.WorkerTerminalResult, cancellationToken);
+            Publish();
+            return deliveredResult;
+        }
+        finally
+        {
+            resultLifecycle.Release();
+        }
     }
 
     public Task<DelegationPreflightResult> DelegationPreflightAsync(
@@ -436,9 +482,15 @@ public sealed class WorkerScheduler(
                 var groups = pendingByWorkingDirectory.GetOrAdd(WorkPackageLease.NormalizePath(workingDirectory), _ => new());
                 groups[pendingKey] = 0;
             }
-            telemetry = telemetry with { PendingTriggersCleared = clearedPending, PendingTriggerCount = 0,
-                CoalescedTriggers = coalescedTriggers, OwnershipDecisionCount = 1,
-                HardGateDenials = hardGateDenials, LeaseActive = leaseActive };
+            telemetry = telemetry with
+            {
+                PendingTriggersCleared = clearedPending,
+                PendingTriggerCount = 0,
+                CoalescedTriggers = coalescedTriggers,
+                OwnershipDecisionCount = 1,
+                HardGateDenials = hardGateDenials,
+                LeaseActive = leaseActive
+            };
             await repository.AppendRepartitionAsync(telemetry, cancellationToken);
             return telemetry;
         }
@@ -540,7 +592,8 @@ public sealed class WorkerScheduler(
             || !string.Equals(request.Boundary, "stop", StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(request.WorkingDirectory))
             return BoundaryFailure(request.ThreadId, "The explicit source=vscode Stop binding is missing or inconsistent.");
-        if (tasks.Values.Any(item => item.State is DelegationState.ResultReceived or DelegationState.Reviewing))
+        if (tasks.Values.Any(item => item.State is DelegationState.ResultPending or DelegationState.ResultReceived
+            or DelegationState.Blocked or DelegationState.Reviewing))
             return BoundaryFailure(request.ThreadId, "A Worker terminal result still requires Main review; compaction boundary deferred.");
 
         var cwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
@@ -681,6 +734,7 @@ public sealed class WorkerScheduler(
         }
         workerCancellation?.Dispose();
         lifecycle.Dispose();
+        resultLifecycle.Dispose();
         repartitionTelemetryLock.Dispose();
     }
 
@@ -703,16 +757,16 @@ public sealed class WorkerScheduler(
                 try
                 {
                     var result = await item.Executor.ExecuteAsync(item.Packet, cancellationToken);
-                    var finalState = result.State == DelegationState.Failed ? DelegationState.Failed : DelegationState.ResultReceived;
+                    var finalState = result.State switch
+                    {
+                        DelegationState.Failed or DelegationState.Blocked => DelegationState.Blocked,
+                        DelegationState.Cancelled => DelegationState.Cancelled,
+                        _ => DelegationState.ResultPending,
+                    };
                     var completed = running with { State = finalState, Result = result with { State = finalState }, UpdatedAt = clock.UtcNow, CompletedAt = clock.UtcNow, FailureReason = result.FailureReason };
                     tasks[item.Packet.TaskId] = completed;
                     await repository.UpsertAsync(completed, cancellationToken);
-                    if (finalState == DelegationState.ResultReceived)
-                    {
-                        await TransitionLeaseAsync(item.Packet.TaskId, WorkPackageLifecycleEvent.WorkerTerminalResult, cancellationToken);
-                    }
                     await NotifyResultAsync(completed, cancellationToken);
-                    item.Completion.TrySetResult(completed.Result!);
                 }
                 catch (Exception exception)
                 {
@@ -721,7 +775,6 @@ public sealed class WorkerScheduler(
                     tasks[item.Packet.TaskId] = failed;
                     await repository.UpsertAsync(failed, cancellationToken);
                     await NotifyResultAsync(failed, cancellationToken);
-                    item.Completion.TrySetResult(failedResult);
                 }
                 finally
                 {
@@ -746,31 +799,54 @@ public sealed class WorkerScheduler(
 
     private async Task<WorkerResultPacket> TransitionResultAsync(string taskId, DelegationState target, string? summary, CancellationToken cancellationToken)
     {
-        if (!tasks.TryGetValue(taskId, out var existing) || existing.Result is null)
+        await resultLifecycle.WaitAsync(cancellationToken);
+        try
         {
-            throw new InvalidOperationException($"Task {taskId} 尚无可审查结果。");
-        }
+            if (!tasks.TryGetValue(taskId, out var existing) || existing.Result is null)
+            {
+                throw new InvalidOperationException($"Task {taskId} 尚无可审查结果。");
+            }
 
-        if (target == DelegationState.Reviewing && existing.State != DelegationState.ResultReceived)
-        {
-            throw new InvalidOperationException("只有 RESULT_RECEIVED 任务可以进入 REVIEWING。");
-        }
+            if (target == DelegationState.Reviewing
+                && existing.State is not (DelegationState.ResultReceived or DelegationState.Blocked or DelegationState.Failed))
+            {
+                throw new InvalidOperationException("只有 RESULT_RECEIVED、BLOCKED 或 FAILED 终态任务可以进入 REVIEWING。");
+            }
 
-        if (target == DelegationState.Adopted && existing.State != DelegationState.Reviewing)
-        {
-            throw new InvalidOperationException("只有 REVIEWING 任务可以进入 ADOPTED。");
-        }
+            if (target == DelegationState.Adopted && existing.State != DelegationState.Reviewing)
+            {
+                throw new InvalidOperationException("只有 REVIEWING 任务可以进入 ADOPTED。");
+            }
 
-        var result = existing.Result with { State = target, Summary = string.IsNullOrWhiteSpace(summary) ? existing.Result.Summary : summary };
-        var updated = existing with { State = target, Result = result, UpdatedAt = clock.UtcNow };
-        tasks[taskId] = updated;
-        await repository.UpsertAsync(updated, cancellationToken);
-        if (target == DelegationState.Adopted)
-        {
-            await CompleteAdoptedPackageWhenDeterministicAsync(updated, cancellationToken);
+            var result = existing.Result with { State = target, Summary = string.IsNullOrWhiteSpace(summary) ? existing.Result.Summary : summary };
+            var updated = existing with
+            {
+                State = target,
+                Result = result,
+                UpdatedAt = clock.UtcNow,
+                ResultDeliveredAt = target == DelegationState.Reviewing
+                    && existing.Transport == WorkerTransport.ExternalProvider
+                    && existing.ResultDeliveredAt is null
+                        ? clock.UtcNow
+                        : existing.ResultDeliveredAt,
+            };
+            tasks[taskId] = updated;
+            await repository.UpsertAsync(updated, cancellationToken);
+            if (target == DelegationState.Reviewing)
+            {
+                await TransitionLeaseAsync(taskId, WorkPackageLifecycleEvent.WorkerTerminalResult, cancellationToken);
+            }
+            if (target == DelegationState.Adopted)
+            {
+                await CompleteAdoptedPackageWhenDeterministicAsync(updated, cancellationToken);
+            }
+            Publish();
+            return result;
         }
-        Publish();
-        return result;
+        finally
+        {
+            resultLifecycle.Release();
+        }
     }
 
     private int ActiveCount() => tasks.Values.Count(item => item.State is DelegationState.Created or DelegationState.Delegated or DelegationState.Running);
@@ -810,7 +886,8 @@ public sealed class WorkerScheduler(
         var hasUnresolvedResult = tasks.Values.Any(item =>
             !string.Equals(item.Packet.TaskId, adopted.Packet.TaskId, StringComparison.Ordinal)
             && string.Equals(WorkPackageLease.NormalizePath(item.Packet.WorkingDirectory), cwd, StringComparison.OrdinalIgnoreCase)
-            && item.State is DelegationState.ResultReceived or DelegationState.Reviewing);
+            && item.State is DelegationState.ResultPending or DelegationState.ResultReceived
+                or DelegationState.Blocked or DelegationState.Reviewing);
         if (exact?.Status == WorkPackageLeaseStatus.REVIEW && !hasPending && !hasUnresolvedResult)
         {
             exact.OnPackageComplete();
@@ -823,7 +900,7 @@ public sealed class WorkerScheduler(
         await TransitionLeaseAsync(adopted.Packet.TaskId, WorkPackageLifecycleEvent.WorkerReviewComplete, cancellationToken);
     }
 
-    private sealed record QueuedWork(TaskPacket Packet, IWorkerExecutor Executor, TaskCompletionSource<WorkerResultPacket> Completion);
+    private sealed record QueuedWork(TaskPacket Packet, IWorkerExecutor Executor);
 
     private async Task PersistPendingAsync(PendingRepartition pending, CancellationToken cancellationToken)
     {

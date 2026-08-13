@@ -1157,6 +1157,9 @@ public sealed class ControlledTaskService
                             FinalizationAttempted = result.FinalizationAttempted,
                             FinalizationSucceeded = result.FinalizationSucceeded,
                             ChangedFiles = result.ChangedFiles,
+                            RecoveryAttempted = result.RecoveryAttempted,
+                            RetryAttempted = result.RetryAttempted,
+                            RecentFailureSummary = result.RecentFailureSummary,
                         }
                         : worker).ToArray(),
                     Messages = string.IsNullOrWhiteSpace(result.Summary)

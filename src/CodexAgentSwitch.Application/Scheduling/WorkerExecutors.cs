@@ -5,6 +5,7 @@ using CodexAgentSwitch.Application.Tasks;
 using CodexAgentSwitch.Application.Usage;
 using CodexAgentSwitch.Domain.Projects;
 using CodexAgentSwitch.Domain.Profiles;
+using CodexAgentSwitch.Domain.Providers;
 using CodexAgentSwitch.Domain.Scheduling;
 using CodexAgentSwitch.Domain.Workers;
 using CodexAgentSwitch.Domain.Usage;
@@ -136,13 +137,30 @@ public sealed class ExternalWorkerExecutor(
             BudgetSnapshot = snapshot.Budget,
         };
         var execution = await orchestrator.ExecuteAsync(snapshot, workerTask, cancellationToken: cancellationToken);
+        var recoveryAttempted = execution.Result.RecoveryAttempted;
+        string? firstFailureSummary = null;
+        var retryAttempted = false;
+        if (ShouldRetryFresh(execution.Result))
+        {
+            retryAttempted = true;
+            firstFailureSummary = ShortFailure(execution.Result);
+            var retryTask = workerTask with
+            {
+                Prompt = workerTask.Prompt + "\n\nMechanical fresh retry: inspect the current workspace state and the prior bounded failure note; preserve successful changes, alter strategy, stay within the original scope, and run only the smallest relevant validation. Prior failure: "
+                    + firstFailureSummary,
+            };
+            execution = await orchestrator.ExecuteAsync(snapshot, retryTask, cancellationToken: cancellationToken);
+            recoveryAttempted |= execution.Result.RecoveryAttempted;
+        }
+        var recentFailureSummary = execution.Result.RecentFailureSummary
+            ?? (execution.Result.Status == WorkerJobStatus.Completed ? firstFailureSummary : ShortFailure(execution.Result));
         return new WorkerResultPacket(
             packet.TaskId,
             execution.Result.Status == WorkerJobStatus.Completed ? DelegationState.ResultReceived : DelegationState.Failed,
             execution.Result.Summary ?? execution.FinalJob.StatusMessage ?? "External Worker 未返回摘要。",
             execution.Result.RawResult is null ? [] : [execution.Result.RawResult.Value.GetRawText()],
             execution.Result.ChangedFiles,
-            execution.Result.Status == WorkerJobStatus.Completed ? ["External Agent Runtime completed."] : [],
+            execution.Result.Status == WorkerJobStatus.Completed ? ["completed"] : ["not-completed"],
             execution.Result.Risks,
             execution.ProviderId,
             execution.Result.ResponseModelId ?? execution.ModelId,
@@ -160,7 +178,11 @@ public sealed class ExternalWorkerExecutor(
             FinalizationAttempted: execution.Result.FinalizationAttempted,
             FinalizationSucceeded: execution.Result.FinalizationSucceeded,
             Pricing: execution.Pricing,
-            Currency: snapshot.Budget.Currency);
+            Currency: snapshot.Budget.Currency,
+            RecoveryAttempted: recoveryAttempted,
+            RetryAttempted: retryAttempted,
+            RecentFailureSummary: recentFailureSummary,
+            Scope: packet.Scope);
     }
 
     private async Task<BudgetConsumption> ConsumptionAsync(CancellationToken cancellationToken)
@@ -222,7 +244,28 @@ public sealed class ExternalWorkerExecutor(
         Acceptance criteria: {{string.Join("; ", packet.AcceptanceCriteria)}}
         Constraints: {{string.Join("; ", packet.Constraints)}}
         Output contract: {{packet.OutputContract}}
+
+        Execution discipline: read each target before editing; search only enough to understand this bounded task; use the designated edit mechanism; after a failed operation change strategy instead of repeating it unchanged; remain inside declared scope; run the smallest relevant validation; if blocked, return a useful partial result before exhausting the budget.
         """;
+
+    private static bool ShouldRetryFresh(CodexAgentSwitch.Domain.Workers.WorkerResult result)
+    {
+        if (result.Status == CodexAgentSwitch.Domain.Workers.WorkerJobStatus.Completed)
+            return false;
+        if (string.Equals(result.HardLimitReason, "repeated-no-progress-tool-call", StringComparison.Ordinal)
+            || string.Equals(result.HardLimitReason, "no-progress-tool-loop", StringComparison.Ordinal))
+            return true;
+        return result.FailureKind is nameof(ProviderErrorKind.RateLimited)
+            or nameof(ProviderErrorKind.Timeout)
+            or nameof(ProviderErrorKind.ServiceUnavailable);
+    }
+
+    private static string ShortFailure(CodexAgentSwitch.Domain.Workers.WorkerResult result)
+    {
+        var reason = result.HardLimitReason ?? result.FailureKind ?? result.Status.ToString();
+        var summary = string.IsNullOrWhiteSpace(result.Summary) ? reason : result.Summary.Trim();
+        return summary.Length <= 320 ? $"{reason}: {summary}" : $"{reason}: {summary[..320]}";
+    }
 }
 
 public sealed class AppliedProjectWorkerGuard(IProjectRepository projects, IProfileRepository? profiles = null) : ITaskPacketResolver, IDelegationPolicyGuard
@@ -291,11 +334,18 @@ public sealed class AppliedProjectWorkerGuard(IProjectRepository projects, IProf
         }
 
         var normalized = NormalizePath(workingDirectory);
-        var all = await projects.ListAsync(cancellationToken);
+        // Archived projects remain persisted for unarchive/inspection, but are
+        // not eligible runtime targets.  Filter once at the resolver boundary
+        // so every resolution mode (explicit id, registered root, and
+        // git-worktree) observes the same eligibility rule.
+        var all = (await projects.ListAsync(cancellationToken))
+            .Where(item => !item.IsArchived)
+            .ToArray();
         if (!string.IsNullOrWhiteSpace(projectId))
         {
             var explicitProject = await projects.GetAsync(projectId, cancellationToken);
-            if (explicitProject is null) return new(null, null, "PROJECT_NOT_FOUND", []);
+            if (explicitProject is null || explicitProject.IsArchived)
+                return new(null, null, "PROJECT_NOT_FOUND", []);
             var explicitRoot = NormalizePath(explicitProject.WorkingDirectory);
             if (Contains(explicitRoot, normalized)) return new(explicitProject, explicitRoot, "registered-root", []);
             var gitRoot = GitWorktreeMetadata.TryResolveCanonicalRoot(normalized);

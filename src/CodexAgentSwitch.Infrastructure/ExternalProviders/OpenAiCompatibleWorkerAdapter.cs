@@ -318,6 +318,8 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                     HardLimitReason = completion.HardLimitReason,
                     FinalizationAttempted = completion.FinalizationAttempted,
                     FinalizationSucceeded = completion.FinalizationSucceeded,
+                    RecoveryAttempted = completion.RecoveryAttempted,
+                    RecentFailureSummary = completion.RecentFailureSummary,
                 });
         }
         catch (ProviderRequestException exception)
@@ -446,6 +448,8 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
             HardLimitReason = result.HardLimitReason,
             FinalizationAttempted = result.FinalizationAttempted,
             FinalizationSucceeded = result.FinalizationSucceeded,
+            RecoveryAttempted = result.RecoveryAttempted,
+            RecentFailureSummary = result.RecentFailureSummary,
         };
     }
 
@@ -468,6 +472,17 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
                 item.Denied,
                 item.TimedOut,
                 item.ExitCode,
+                item.OccurredAt,
+                item.ArgumentHash,
+                item.ArgumentSummary,
+                item.ResultHash,
+                item.Outcome,
+                item.StandardOutputSummary,
+                item.StandardErrorSummary,
+                item.Progress,
+                item.ChangedFilesDelta,
+                item.ValidationDelta,
+                item.RecoveryInstructionInjected,
                 item.ChangedFiles,
             }),
             Runtime = new
@@ -567,5 +582,9 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
         public bool FinalizationAttempted { get; init; }
 
         public bool FinalizationSucceeded { get; init; }
+
+        public bool RecoveryAttempted { get; init; }
+
+        public string? RecentFailureSummary { get; init; }
     }
 }

@@ -146,6 +146,78 @@ public sealed class SchedulerIpcServerTests
     }
 
     [Fact]
+    public async Task Archived_projects_are_excluded_before_preflight_and_dispatch()
+    {
+        var root = "E:\\AISPace\\TestSpace";
+        var archived = Project("deepseek-default", isArchived: true);
+        var projects = new ProjectRepository(archived);
+        var resolver = new AppliedProjectWorkerGuard(projects);
+
+        var explicitResolution = await resolver.ResolveProjectAsync(root, archived.Id);
+        Assert.Null(explicitResolution.Project);
+        Assert.Equal("PROJECT_NOT_FOUND", explicitResolution.Source);
+        var directResolution = await resolver.ResolveProjectAsync(root, null);
+        Assert.Null(directResolution.Project);
+        Assert.Equal("PROJECT_NOT_FOUND", directResolution.Source);
+
+        var preflight = new DelegationPreflight(projects, new ProfileRepository(ProfileFor(archived)), [new EchoExecutor()], resolver,
+            schedulerState: () => SchedulerState.Ready, activeTaskCount: () => 0);
+        var ready = await preflight.EvaluateAsync(new DelegationPreflightRequest(root, ProjectId: archived.Id));
+        Assert.False(ready.DispatchReady);
+        Assert.Equal("PROJECT_NOT_RESOLVED", ready.ReasonCode);
+
+        await using var scheduler = new WorkerScheduler([new EchoExecutor()], new MemoryRepository(), new FixedClock(),
+            resolvers: [resolver], guards: [resolver]);
+        await scheduler.StartAsync();
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => scheduler.DispatchAsync(new TaskPacket(
+            "archived-dispatch", archived.Id, root, string.Empty, "goal", ["src"], [], [], ["pass"], [], "result")));
+        Assert.Equal("PROJECT_NOT_RESOLVED", exception.Message);
+
+        var withoutSnapshot = archived with { NativeCodexAdaptation = null };
+        var noSnapshotPreflight = new DelegationPreflight(new ProjectRepository(withoutSnapshot), new ProfileRepository(ProfileFor(archived)), [new EchoExecutor()]);
+        var noSnapshot = await noSnapshotPreflight.EvaluateAsync(new DelegationPreflightRequest(root));
+        Assert.False(noSnapshot.DispatchReady);
+        Assert.Equal("PROJECT_NOT_RESOLVED", noSnapshot.ReasonCode);
+
+        // Unarchiving changes only eligibility; the persisted adaptation remains intact.
+        var restored = archived with { IsArchived = false };
+        var restoredResolution = await new AppliedProjectWorkerGuard(new ProjectRepository(restored)).ResolveProjectAsync(root, restored.Id);
+        Assert.Equal("registered-root", restoredResolution.Source);
+        Assert.Equal(restored.Id, restoredResolution.Project?.Id);
+        Assert.Equal(archived.NativeCodexAdaptation, restoredResolution.Project?.NativeCodexAdaptation);
+    }
+
+    [Fact]
+    public async Task Archived_git_worktree_is_not_runtime_resolvable_until_unarchived()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT");
+        if (string.IsNullOrWhiteSpace(testRoot) || !Path.GetFullPath(testRoot).StartsWith("E:\\", StringComparison.OrdinalIgnoreCase)) return;
+        var temp = Path.Combine(testRoot, "cas-archived-git-preflight-" + Guid.NewGuid().ToString("N"));
+        var canonical = Path.Combine(temp, "canonical");
+        var worktree = Path.Combine(temp, "worktree");
+        Directory.CreateDirectory(Path.Combine(canonical, ".git"));
+        Directory.CreateDirectory(Path.Combine(canonical, ".git", "worktrees", "fixture"));
+        Directory.CreateDirectory(worktree);
+        await File.WriteAllTextAsync(Path.Combine(worktree, ".git"), $"gitdir: {Path.Combine(canonical, ".git", "worktrees", "fixture")}");
+        await File.WriteAllTextAsync(Path.Combine(canonical, ".git", "worktrees", "fixture", "commondir"), "../..");
+        try
+        {
+            var archived = Project("deepseek-default", workingDirectory: canonical, isArchived: true);
+            var archivedResolution = await new AppliedProjectWorkerGuard(new ProjectRepository(archived))
+                .ResolveProjectAsync(Path.Combine(worktree, "src"), null);
+            Assert.Null(archivedResolution.Project);
+            Assert.Equal("PROJECT_NOT_FOUND", archivedResolution.Source);
+
+            var restored = archived with { IsArchived = false };
+            var restoredResolution = await new AppliedProjectWorkerGuard(new ProjectRepository(restored))
+                .ResolveProjectAsync(Path.Combine(worktree, "src"), null);
+            Assert.Equal("git-worktree", restoredResolution.Source);
+            Assert.Equal(restored.Id, restoredResolution.Project?.Id);
+        }
+        finally { if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+    }
+
+    [Fact]
     public async Task Applied_external_worker_is_resolved_when_codex_tool_omits_worker_id()
     {
         var pipeName = $"CAS-test-{Guid.NewGuid():N}";
@@ -173,7 +245,8 @@ public sealed class SchedulerIpcServerTests
         var response = await reader.ReadLineAsync();
 
         Assert.NotNull(response);
-        Assert.Contains("CAS-DS-013-WORKER-RESOLVE-381527", response, StringComparison.Ordinal);
+        Assert.Contains("\"state\":1", response, StringComparison.Ordinal);
+        await WaitUntilAsync(() => executor.ReceivedGoal is not null);
         Assert.Equal("CAS-DS-013-WORKER-RESOLVE-381527", executor.ReceivedGoal);
         Assert.Equal("deepseek-default", executor.ReceivedWorkerId);
     }
@@ -307,6 +380,12 @@ public sealed class SchedulerIpcServerTests
         return await reader.ReadLineAsync() ?? throw new InvalidOperationException("Scheduler IPC returned no response.");
     }
 
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (!condition()) await Task.Delay(10, timeout.Token);
+    }
+
     [Fact]
     public async Task Resolved_applied_worker_reaches_fake_external_worker_adapter_with_plaintext_nonce()
     {
@@ -336,10 +415,14 @@ public sealed class SchedulerIpcServerTests
             [executor], new MemoryRepository(), new FixedClock(), resolvers: [resolver], guards: [resolver]);
         await scheduler.StartAsync();
 
-        var result = await scheduler.DispatchAsync(new TaskPacket(
+        var acknowledgement = await scheduler.DispatchAsync(new TaskPacket(
             "task-external-adapter", "project-1", "E:\\AISPace\\TestSpace", string.Empty,
             "CAS-DS-013-WORKER-RESOLVE-381527", ["src/Foo.cs"], ["src/Foo.cs"], [],
             ["return nonce"], ["no session scan"], "Return exact nonce"));
+        Assert.Equal(DelegationState.Delegated, acknowledgement.State);
+        await WaitUntilAsync(() => adapter.LastTask is not null);
+        await WaitUntilAsync(() => scheduler.ListAsync().GetAwaiter().GetResult().Single().State == DelegationState.ResultPending);
+        var result = await scheduler.ConsumeResultAsync("task-external-adapter");
 
         Assert.NotNull(adapter.LastTask);
         Assert.Contains("CAS-DS-013-WORKER-RESOLVE-381527", adapter.LastTask!.Prompt, StringComparison.Ordinal);
@@ -373,6 +456,75 @@ public sealed class SchedulerIpcServerTests
         var blocked = CreateExternalExecutor(usage, new BudgetLimits(null, 2m, null, null, null, "CNY"));
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => blocked.ExecuteAsync(Packet("known-blocked")));
         Assert.Contains("预算", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task External_executor_allows_at_most_one_fresh_retry_for_allowlisted_mechanical_failure()
+    {
+        var now = new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero);
+        var project = Project("deepseek-default");
+        var profile = ProfileFor(project);
+        var provider = new ProviderConfiguration(
+            "deepseek-default", "External", ProviderKind.OpenAiCompatible, new Uri("https://provider.test/v1"),
+            "provider/external", "tool-model", new Dictionary<string, string>(), TimeSpan.FromSeconds(30), true,
+            new ProviderPricing(1m, 2m, "CNY", null), now, now);
+        var adapter = new RetryingExternalAdapter([
+            new WorkerResult("retry-task", WorkerJobStatus.Failed, "rate limited", null, [], [], FailureKind: nameof(ProviderErrorKind.RateLimited))
+            {
+                RecoveryAttempted = true,
+                RecentFailureSummary = "bounded in-context recovery exhausted",
+            },
+            new WorkerResult("retry-task", WorkerJobStatus.Completed, "recovered", null, [], []),
+            new WorkerResult("retry-task", WorkerJobStatus.Completed, "must not run", null, [], []),
+        ]);
+        var orchestrator = new WorkerOrchestrator(
+            new RecordingExternalFactory(adapter), new FakeRuntime(adapter), new ExternalProviderResolver());
+        var executor = new ExternalWorkerExecutor(
+            new ProjectRepository(project), new ProfileRepository(profile),
+            new TaskProfileSnapshotFactory(new ProviderRepository(provider), new FixedClock()),
+            orchestrator, new UsageRepository(), new BudgetPolicy());
+
+        var result = await executor.ExecuteAsync(Packet("retry-task"));
+
+        Assert.Equal(DelegationState.ResultReceived, result.State);
+        Assert.True(result.RetryAttempted);
+        Assert.True(result.RecoveryAttempted);
+        Assert.Equal(Packet("retry-task").Scope, result.Scope);
+        Assert.Equal(["completed"], result.Validation);
+        Assert.Contains("rate limited", result.RecentFailureSummary, StringComparison.Ordinal);
+        Assert.Equal(2, adapter.SpawnCount);
+        Assert.Equal(2, adapter.Tasks.Count);
+        Assert.Contains("Mechanical fresh retry", adapter.Tasks[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("rate limited", adapter.Tasks[1].Prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task External_executor_second_allowlisted_failure_becomes_terminal_without_third_attempt()
+    {
+        var now = new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero);
+        var project = Project("deepseek-default");
+        var profile = ProfileFor(project);
+        var provider = new ProviderConfiguration(
+            "deepseek-default", "External", ProviderKind.OpenAiCompatible, new Uri("https://provider.test/v1"),
+            "provider/external", "tool-model", new Dictionary<string, string>(), TimeSpan.FromSeconds(30), true,
+            null, now, now);
+        var failures = Enumerable.Range(0, 3).Select(_ =>
+            new WorkerResult("retry-fail", WorkerJobStatus.Failed, "service unavailable", null, [], [], FailureKind: nameof(ProviderErrorKind.ServiceUnavailable))).ToArray();
+        var adapter = new RetryingExternalAdapter(failures);
+        var executor = new ExternalWorkerExecutor(
+            new ProjectRepository(project), new ProfileRepository(profile),
+            new TaskProfileSnapshotFactory(new ProviderRepository(provider), new FixedClock()),
+            new WorkerOrchestrator(new RecordingExternalFactory(adapter), new FakeRuntime(adapter), new ExternalProviderResolver()),
+            new UsageRepository(), new BudgetPolicy());
+
+        var result = await executor.ExecuteAsync(Packet("retry-fail"));
+
+        Assert.Equal(DelegationState.Failed, result.State);
+        Assert.True(result.RetryAttempted);
+        Assert.Equal(["not-completed"], result.Validation);
+        Assert.Equal(Packet("retry-fail").Scope, result.Scope);
+        Assert.False(string.IsNullOrWhiteSpace(result.RecentFailureSummary));
+        Assert.Equal(2, adapter.SpawnCount);
     }
 
     [Fact]
@@ -465,7 +617,8 @@ public sealed class SchedulerIpcServerTests
         string workerId,
         Guid? appliedProfileId = null,
         string workingDirectory = "E:\\AISPace\\TestSpace",
-        string projectId = "project-1")
+        string projectId = "project-1",
+        bool isArchived = false)
     {
         var now = new DateTimeOffset(2026, 8, 9, 0, 0, 0, TimeSpan.Zero);
         var profileId = appliedProfileId ?? Guid.Parse("a8a9a9d4-1f72-4824-a9bd-21c26b701301");
@@ -474,7 +627,7 @@ public sealed class SchedulerIpcServerTests
             nameof(EffectiveWorkerKind.ExternalAgent), null, null, workerId, "medium", 1,
             "Economic", "SchedulerRequired", "fixture");
         return new AgentProject(
-            projectId, "TestSpace", workingDirectory, false, now, now, profileId,
+            projectId, "TestSpace", workingDirectory, isArchived, now, now, profileId,
             new NativeCodexProjectAdaptation(profileId, "Sol + DeepSeek", ".codex/config.toml", null, now, "fixture", false, snapshot));
     }
 
@@ -528,9 +681,39 @@ public sealed class SchedulerIpcServerTests
         public IWorkerAdapter NativeWorker => native;
     }
 
-    private sealed class RecordingExternalFactory(RecordingExternalAdapter adapter) : IExternalWorkerAdapterFactory
+    private sealed class RecordingExternalFactory(IWorkerAdapter adapter) : IExternalWorkerAdapterFactory
     {
         public IWorkerAdapter Create(ProviderConfiguration provider) => adapter;
+    }
+
+    private sealed class RetryingExternalAdapter(IReadOnlyList<WorkerResult> results) : IWorkerAdapter
+    {
+        private int resultIndex;
+        private WorkerResult? current;
+        public int SpawnCount { get; private set; }
+        public List<WorkerTask> Tasks { get; } = [];
+        public string AdapterId => "external:retry-fixture";
+        public Task<WorkerCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkerCapabilities(AdapterId, true, [], 1, []));
+        public Task<WorkerJob> SpawnAsync(WorkerTask task, CancellationToken cancellationToken = default)
+        {
+            SpawnCount++;
+            Tasks.Add(task);
+            current = null;
+            return Task.FromResult(new WorkerJob(AdapterId, $"job-{SpawnCount}", "thread", "turn", task.TaskId,
+                WorkerJobStatus.Running, DateTimeOffset.UtcNow, null, "running"));
+        }
+        public Task<WorkerResult?> WaitAsync(string jobId, TimeSpan wait, CancellationToken cancellationToken = default)
+        {
+            current = results[Math.Min(resultIndex++, results.Count - 1)];
+            return Task.FromResult<WorkerResult?>(current);
+        }
+        public Task<WorkerJob> ReadStatusAsync(string jobId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkerJob(AdapterId, jobId, "thread", "turn", Tasks[^1].TaskId,
+                current?.Status ?? WorkerJobStatus.Running, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, current?.Summary));
+        public Task SteerAsync(string jobId, WorkerSteerRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task CancelAsync(string jobId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteAsync(string jobId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class RecordingExternalAdapter : IWorkerAdapter

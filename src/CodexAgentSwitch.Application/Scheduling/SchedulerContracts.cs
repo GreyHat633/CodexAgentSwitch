@@ -167,6 +167,8 @@ public interface IWorkerScheduler : IAsyncDisposable
     Task ResumeAsync(CancellationToken cancellationToken = default);
     Task StopAsync(bool force, CancellationToken cancellationToken = default);
     Task<WorkerResultPacket> DispatchAsync(TaskPacket packet, CancellationToken cancellationToken = default);
+    Task<WorkerResultPacket> ConsumeResultAsync(string taskId, CancellationToken cancellationToken = default) =>
+        Task.FromException<WorkerResultPacket>(new NotSupportedException("External terminal result consumption is not available on this scheduler."));
     Task<DelegationPreflightResult> DelegationPreflightAsync(
         DelegationPreflightRequest request,
         CancellationToken cancellationToken = default) =>

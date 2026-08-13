@@ -190,6 +190,8 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("Delegation Capability Preflight", externalInstructions, StringComparison.Ordinal);
             Assert.Contains("Initial Delegation Check", externalInstructions, StringComparison.Ordinal);
             Assert.Contains("delegate_worker", externalInstructions, StringComparison.Ordinal);
+            Assert.Contains("consume_worker_result", externalInstructions, StringComparison.Ordinal);
+            Assert.Contains("do not poll", externalInstructions, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("spawn_agent", externalInstructions, StringComparison.Ordinal);
             Assert.DoesNotContain("cas_luna_worker", externalInstructions, StringComparison.Ordinal);
 
@@ -438,6 +440,8 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("Delegation Capability Preflight", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("Initial Delegation Check", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("delegate_worker", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("consume_worker_result", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("do not poll", projectInstructions, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("omit workerId", projectInstructions, StringComparison.Ordinal);
             Assert.DoesNotContain("spawn_agent", projectInstructions, StringComparison.Ordinal);
             Assert.DoesNotContain("cas_luna_worker", projectInstructions, StringComparison.Ordinal);

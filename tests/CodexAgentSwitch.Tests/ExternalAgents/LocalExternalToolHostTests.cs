@@ -799,8 +799,99 @@ public sealed class LocalExternalToolHostTests
 
         Assert.Equal(ExternalAgentRuntimeState.Blocked, result.State);
         Assert.Equal(3, result.ProviderTurns);
-        Assert.Equal(2, result.ToolCalls);
+        Assert.Equal(3, result.ToolCalls);
+        Assert.Equal(3, result.Activity.Count);
+        Assert.Contains(result.Activity, item => item.RecoveryInstructionInjected);
+        Assert.True(result.RecoveryAttempted);
+        Assert.Equal("repeated-no-progress-tool-call", result.HardLimitReason);
+        Assert.False(string.IsNullOrWhiteSpace(result.RecentFailureSummary));
+        Assert.All(result.Activity, item =>
+        {
+            Assert.Equal(64, item.ArgumentHash.Length);
+            Assert.Equal(64, item.ResultHash.Length);
+            Assert.InRange(item.ArgumentSummary.Length, 1, 512);
+        });
         Assert.Contains(result.Risks, risk => risk.Contains("repeated identical", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Runtime_bounds_repeated_denied_call_loop_and_preserves_triggering_denial()
+    {
+        var handler = new StubHandler((_, _) => Task.FromResult(ToolCallResponse(
+            "call-patch",
+            "apply_patch",
+            JsonSerializer.Serialize(new { patch = "*** Begin Patch\n*** End Patch" }))));
+        var runtime = new OpenAiCompatibleExternalAgentRuntime(
+            new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore()),
+            new LocalExternalToolHost(),
+            new ExternalAgentRuntimeOptions(MaxRepeatedIdenticalToolCalls: 2));
+
+        var result = await runtime.ExecuteAsync(
+            Provider(),
+            "tool-model",
+            "Keep trying a denied write.",
+            Session(Path.GetFullPath(AppContext.BaseDirectory)));
+
+        Assert.Equal(ExternalAgentRuntimeState.Blocked, result.State);
+        Assert.Equal(3, result.DeniedToolCalls);
+        Assert.Equal(3, result.Activity.Count);
+        Assert.Equal("denied", result.Activity[^1].Outcome);
+        Assert.True(result.Activity[^1].Denied);
+        Assert.True(result.RecoveryAttempted);
+        Assert.Equal("repeated-no-progress-tool-call", result.HardLimitReason);
+    }
+
+    [Fact]
+    public async Task Runtime_allows_one_provider_turn_to_observe_recovery_after_batched_repeats()
+    {
+        var requestCount = 0;
+        var handler = new StubHandler((_, _) =>
+        {
+            requestCount++;
+            return Task.FromResult(requestCount == 1
+                ? Json("""{"model":"tool-model","choices":[{"finish_reason":"tool_calls","message":{"content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"shell","arguments":"{\"command\":\"Get-Location\"}"}},{"id":"call-2","type":"function","function":{"name":"shell","arguments":"{\"command\":\"Get-Location\"}"}},{"id":"call-3","type":"function","function":{"name":"shell","arguments":"{\"command\":\"Get-Location\"}"}}]}}]}""")
+                : CompletionResponse("recovered"));
+        });
+        var runtime = new OpenAiCompatibleExternalAgentRuntime(
+            new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore()),
+            new LocalExternalToolHost(),
+            new ExternalAgentRuntimeOptions(MaxRepeatedIdenticalToolCalls: 2));
+
+        var result = await runtime.ExecuteAsync(
+            Provider(),
+            "tool-model",
+            "Recover after the instruction.",
+            Session(Path.GetFullPath(AppContext.BaseDirectory)));
+
+        Assert.Equal(ExternalAgentRuntimeState.Completed, result.State);
+        Assert.Equal(2, result.ProviderTurns);
+        Assert.Equal(3, result.ToolCalls);
+        Assert.True(result.RecoveryAttempted);
+        Assert.Single(result.Activity, item => item.RecoveryInstructionInjected);
+    }
+
+    [Fact]
+    public async Task Runtime_resets_no_progress_guard_after_changed_file_progress()
+    {
+        var requestCount = 0;
+        var handler = new StubHandler((_, _) =>
+        {
+            requestCount++;
+            return Task.FromResult(requestCount <= 2
+                ? ToolCallResponse($"call-{requestCount}", "shell", "{\"command\":\"same\"}")
+                : CompletionResponse("completed"));
+        });
+        var runtime = new OpenAiCompatibleExternalAgentRuntime(
+            new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore()),
+            new ProgressToolHost(),
+            new ExternalAgentRuntimeOptions(MaxRepeatedIdenticalToolCalls: 2));
+
+        var result = await runtime.ExecuteAsync(Provider(), "tool-model", "Make progress.", Session(Path.GetFullPath(AppContext.BaseDirectory)));
+
+        Assert.Equal(ExternalAgentRuntimeState.Completed, result.State);
+        Assert.Equal(2, result.ToolCalls);
+        Assert.Contains(result.Activity, item => item.Progress && item.ChangedFilesDelta.Count > 0);
+        Assert.DoesNotContain(result.Activity, item => item.RecoveryInstructionInjected);
     }
 
     [Fact]
@@ -1145,6 +1236,30 @@ public sealed class LocalExternalToolHostTests
                 false,
                 false,
                 false));
+    }
+
+    private sealed class ProgressToolHost : IExternalToolHost
+    {
+        private int executionCount;
+
+        public Task<ExternalToolExecutionResult> ExecuteAsync(
+            ExternalToolSession session,
+            ExternalToolExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            executionCount++;
+            IReadOnlyList<string> changedFiles = executionCount == 1 ? ["progress.txt"] : Array.Empty<string>();
+            return Task.FromResult(new ExternalToolExecutionResult(
+                request.ToolCallId,
+                request.ToolName,
+                "same-result",
+                string.Empty,
+                0,
+                false,
+                false,
+                false,
+                changedFiles));
+        }
     }
 
     private sealed class FakeCredentialStore : ICredentialStore

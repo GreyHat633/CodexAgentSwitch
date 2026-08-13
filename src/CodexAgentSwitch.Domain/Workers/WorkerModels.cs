@@ -131,6 +131,12 @@ public sealed record WorkerResult(
     public int? DeniedToolCalls { get; init; }
 
     public TimeSpan? Duration { get; init; }
+
+    public bool RecoveryAttempted { get; init; }
+
+    public bool RetryAttempted { get; init; }
+
+    public string? RecentFailureSummary { get; init; }
 }
 
 public enum WorkerSteerKind

@@ -10,19 +10,24 @@ namespace CodexAgentSwitch.Tests.Scheduling;
 public sealed class WorkerSchedulerTests
 {
     [Fact]
-    public async Task External_plaintext_packet_reaches_executor_and_transitions_to_result()
+    public async Task External_dispatch_returns_promptly_and_terminal_result_is_consumed_once()
     {
         var executor = new FakeExecutor(WorkerTransport.ExternalProvider);
         await using var scheduler = new WorkerScheduler([executor], new MemoryRepository(), new AdvancingClock());
         await scheduler.StartAsync();
         var packet = Packet("CAS-EXTERNAL-013-582941", "deepseek-default");
 
-        var result = await scheduler.DispatchAsync(packet);
+        var acknowledgement = await scheduler.DispatchAsync(packet);
+        Assert.Equal(DelegationState.Delegated, acknowledgement.State);
+        await WaitUntilAsync(() => executor.Received is not null);
+        await WaitUntilAsync(() => scheduler.ListAsync().GetAwaiter().GetResult().Single().State == DelegationState.ResultPending);
+        var result = await scheduler.ConsumeResultAsync(packet.TaskId);
 
         Assert.Equal("CAS-EXTERNAL-013-582941", executor.Received!.Goal);
         Assert.Equal("CAS-EXTERNAL-013-582941", result.Summary);
         Assert.Equal(DelegationState.ResultReceived, result.State);
         Assert.Equal(SchedulerState.Ready, scheduler.Snapshot.State);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => scheduler.ConsumeResultAsync(packet.TaskId));
     }
 
     [Fact]
@@ -55,6 +60,47 @@ public sealed class WorkerSchedulerTests
         Assert.Contains("禁止重复", exception.Message, StringComparison.Ordinal);
         executor.Complete();
         await first;
+        await WaitUntilAsync(() => scheduler.Snapshot.ActiveTaskCount == 0);
+    }
+
+    [Fact]
+    public async Task External_dispatch_acknowledges_before_terminal_and_running_state_is_not_a_result_delivery()
+    {
+        var executor = new BlockingExecutor();
+        await using var scheduler = new WorkerScheduler([executor], new MemoryRepository(), new AdvancingClock());
+        await scheduler.StartAsync();
+        var packet = Packet("CAS-ASYNC-ACK-0262", "deepseek-default");
+
+        var acknowledgement = await scheduler.DispatchAsync(packet).WaitAsync(TimeSpan.FromSeconds(2));
+        await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(DelegationState.Delegated, acknowledgement.State);
+        Assert.False(executor.IsCompleted);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => scheduler.ConsumeResultAsync(packet.TaskId));
+
+        executor.Complete();
+        await WaitUntilAsync(() => scheduler.Snapshot.ActiveTaskCount == 0);
+        Assert.Equal(DelegationState.ResultReceived, (await scheduler.ConsumeResultAsync(packet.TaskId)).State);
+    }
+
+    [Fact]
+    public async Task ResultPending_survives_scheduler_restart_until_one_natural_boundary_consumes_it()
+    {
+        var repository = new MemoryRepository();
+        var packet = Packet("CAS-PENDING-RESTART-0262", "deepseek-default");
+        await using (var first = new WorkerScheduler([new FakeExecutor(WorkerTransport.ExternalProvider)], repository, new AdvancingClock()))
+        {
+            await first.StartAsync();
+            await first.DispatchAsync(packet);
+            await WaitUntilAsync(() => first.Snapshot.ActiveTaskCount == 0);
+            Assert.Equal(DelegationState.ResultPending, (await first.ListAsync()).Single().State);
+        }
+
+        await using var restored = new WorkerScheduler([new FakeExecutor(WorkerTransport.ExternalProvider)], repository, new AdvancingClock());
+        await restored.StartAsync();
+        Assert.Equal(DelegationState.ResultPending, (await restored.ListAsync()).Single().State);
+        Assert.Equal(DelegationState.ResultReceived, (await restored.ConsumeResultAsync(packet.TaskId)).State);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restored.ConsumeResultAsync(packet.TaskId));
     }
 
     [Fact]
@@ -74,6 +120,7 @@ public sealed class WorkerSchedulerTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => scheduler.StopAsync(false));
         executor.Complete();
         await running;
+        await WaitUntilAsync(() => scheduler.Snapshot.ActiveTaskCount == 0);
         await scheduler.StopAsync(false);
         Assert.Equal(SchedulerState.Stopped, scheduler.Snapshot.State);
     }
@@ -97,11 +144,83 @@ public sealed class WorkerSchedulerTests
         await using var scheduler = new WorkerScheduler([new ThrowingExecutor()], new MemoryRepository(), new AdvancingClock());
         await scheduler.StartAsync();
 
-        var result = await scheduler.DispatchAsync(Packet("CAS-WORKER-FAIL-013", "deepseek-default"));
+        var packet = Packet("CAS-WORKER-FAIL-013", "deepseek-default");
+        var acknowledgement = await scheduler.DispatchAsync(packet);
+        Assert.Equal(DelegationState.Delegated, acknowledgement.State);
+        await WaitUntilAsync(() => scheduler.ListAsync().GetAwaiter().GetResult().Single().State == DelegationState.Failed);
+        var result = await scheduler.ConsumeResultAsync(packet.TaskId);
 
         Assert.Equal(DelegationState.Failed, result.State);
         Assert.Contains("fixture worker failure", result.FailureReason, StringComparison.Ordinal);
         Assert.Equal(DelegationState.Failed, (await scheduler.ListAsync()).Single().State);
+        Assert.Equal(DelegationState.Reviewing, (await scheduler.MarkReviewingAsync(packet.TaskId)).State);
+    }
+
+    [Fact]
+    public async Task External_blocked_result_is_delivered_once_and_enters_review_without_main_takeover()
+    {
+        var leases = new LeaseMemoryRepository();
+        var packet = Packet("CAS-BLOCKED-0262", "deepseek-default");
+        await using var scheduler = new WorkerScheduler(
+            [new FailedResultExecutor()],
+            new MemoryRepository(),
+            new AdvancingClock(),
+            leaseRepository: leases);
+        await scheduler.StartAsync();
+        await scheduler.RecordRepartitionAsync(
+            packet.TaskId,
+            RepartitionTrigger.ARCHITECTURE_RESOLVED,
+            WorkOwner.Worker,
+            RepartitionReasonCode.BOUNDED_IMPLEMENTATION,
+            "bounded external package",
+            "deepseek-default",
+            null,
+            packet.TaskId,
+            packet.WorkingDirectory,
+            "Implementation",
+            packet.Scope,
+            null);
+
+        await scheduler.DispatchAsync(packet);
+        await WaitUntilAsync(() => scheduler.ListAsync().GetAwaiter().GetResult().Single().State == DelegationState.Blocked);
+        var result = await scheduler.ConsumeResultAsync(packet.TaskId);
+
+        Assert.Equal(DelegationState.Blocked, result.State);
+        Assert.Equal(packet.Scope, result.Scope);
+        Assert.Equal(["not-completed"], result.Validation);
+        Assert.Equal(WorkPackageLeaseStatus.REVIEW, (await leases.ListAsync()).Single().Status);
+        Assert.False((await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("main", packet.WorkingDirectory, "apply_patch", "patch"))).Allowed);
+        Assert.Equal(DelegationState.Reviewing, (await scheduler.MarkReviewingAsync(packet.TaskId)).State);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => scheduler.ConsumeResultAsync(packet.TaskId));
+    }
+
+    [Fact]
+    public async Task Concurrent_natural_boundaries_deliver_external_terminal_result_exactly_once()
+    {
+        await using var scheduler = new WorkerScheduler(
+            [new FakeExecutor(WorkerTransport.ExternalProvider)],
+            new MemoryRepository(),
+            new AdvancingClock());
+        await scheduler.StartAsync();
+        var packet = Packet("CAS-CONCURRENT-CONSUME-0262", "deepseek-default");
+        await scheduler.DispatchAsync(packet);
+        await WaitUntilAsync(() => scheduler.ListAsync().GetAwaiter().GetResult().Single().State == DelegationState.ResultPending);
+
+        var deliveries = await Task.WhenAll(Enumerable.Range(0, 2).Select(async _ =>
+        {
+            try
+            {
+                await scheduler.ConsumeResultAsync(packet.TaskId);
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }));
+
+        Assert.Single(deliveries, delivered => delivered);
+        Assert.Equal(DelegationState.ResultReceived, (await scheduler.ListAsync()).Single().State);
     }
 
     [Fact]
@@ -268,12 +387,18 @@ public sealed class WorkerSchedulerTests
             new AdvancingClock());
         await scheduler.StartAsync();
 
-        var first = await scheduler.DispatchAsync(Packet("CAS-SERIAL-A", "deepseek-default"));
-        Assert.Equal(DelegationState.ResultReceived, first.State);
+        var firstPacket = Packet("CAS-SERIAL-A", "deepseek-default");
+        var first = await scheduler.DispatchAsync(firstPacket);
+        Assert.Equal(DelegationState.Delegated, first.State);
+        await WaitUntilAsync(() => scheduler.Snapshot.ActiveTaskCount == 0);
+        Assert.Equal(DelegationState.ResultReceived, (await scheduler.ConsumeResultAsync(firstPacket.TaskId)).State);
         Assert.Equal(0, scheduler.Snapshot.ActiveTaskCount);
 
-        var second = await scheduler.DispatchAsync(Packet("CAS-SERIAL-B", "deepseek-default"));
-        Assert.Equal(DelegationState.ResultReceived, second.State);
+        var secondPacket = Packet("CAS-SERIAL-B", "deepseek-default");
+        var second = await scheduler.DispatchAsync(secondPacket);
+        Assert.Equal(DelegationState.Delegated, second.State);
+        await WaitUntilAsync(() => scheduler.Snapshot.ActiveTaskCount == 0);
+        Assert.Equal(DelegationState.ResultReceived, (await scheduler.ConsumeResultAsync(secondPacket.TaskId)).State);
         Assert.Equal(0, scheduler.Snapshot.ActiveTaskCount);
         Assert.Equal(2, (await scheduler.ListAsync()).Count);
     }
@@ -540,6 +665,11 @@ public sealed class WorkerSchedulerTests
         Assert.Contains("DispatchReady = true", source, StringComparison.Ordinal);
         Assert.Contains("cachedToolDefinitions", source, StringComparison.Ordinal);
         Assert.Contains("listChanged = false", source, StringComparison.Ordinal);
+        Assert.Contains("name = \"consume_worker_result\"", source, StringComparison.Ordinal);
+        Assert.Contains("scope = StringsValue(result, \"scope\")", source, StringComparison.Ordinal);
+        Assert.Contains("changedFiles = StringsValue(result, \"changes\")", source, StringComparison.Ordinal);
+        Assert.Contains("recentFailureSummary = TextValue(result, \"recentFailureSummary\")", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("scopeChanges", source, StringComparison.Ordinal);
         Assert.DoesNotContain("costWindowIndex", source, StringComparison.Ordinal);
     }
 
@@ -589,6 +719,7 @@ public sealed class WorkerSchedulerTests
     {
         private readonly TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsCompleted => completion.Task.IsCompleted;
         public WorkerTransport Transport => WorkerTransport.ExternalProvider;
         public bool CanExecute(TaskPacket packet) => true;
         public async Task<WorkerResultPacket> ExecuteAsync(TaskPacket packet, CancellationToken cancellationToken = default)
@@ -606,6 +737,26 @@ public sealed class WorkerSchedulerTests
         public bool CanExecute(TaskPacket packet) => true;
         public Task<WorkerResultPacket> ExecuteAsync(TaskPacket packet, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("fixture worker failure");
+    }
+
+    private sealed class FailedResultExecutor : IWorkerExecutor
+    {
+        public WorkerTransport Transport => WorkerTransport.ExternalProvider;
+        public bool CanExecute(TaskPacket packet) => true;
+        public Task<WorkerResultPacket> ExecuteAsync(TaskPacket packet, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkerResultPacket(
+                packet.TaskId,
+                DelegationState.Failed,
+                "bounded failure",
+                [],
+                ["src/partial.cs"],
+                ["not-completed"],
+                ["review required"],
+                FailureReason: "repeated-no-progress-tool-call",
+                RecoveryAttempted: true,
+                RetryAttempted: true,
+                RecentFailureSummary: "same denied operation repeated",
+                Scope: packet.Scope));
     }
 
     private class MemoryRepository : ISchedulerTaskRepository

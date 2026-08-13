@@ -53,7 +53,7 @@ while (await Console.In.ReadLineAsync() is { } line)
                         ? requestedProtocol.GetString() ?? "2025-06-18"
                         : "2025-06-18",
                 capabilities = new { tools = new { listChanged = false } },
-                serverInfo = new { name = "codex-agent-switch", version = "0.2.6.1" },
+                serverInfo = new { name = "codex-agent-switch", version = "0.2.6.2" },
             },
             "ping" => new { },
             "tools/list" => ListTools(),
@@ -170,6 +170,7 @@ static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
     {
         "delegation_preflight" => ("delegationPreflight", (object)ReadPreflight(arguments)),
         "delegate_worker" => ("dispatch", (object)ReadTaskPacket(arguments)),
+        "consume_worker_result" => ("consumeResult", new { taskId = Required(arguments, "taskId") }),
         "report_worker_result" => ("reportResult", ReadWorkerResult(arguments)),
         "begin_worker_review" => ("review", new { taskId = Required(arguments, "taskId") }),
         "adopt_worker_result" => ("adopt", new { taskId = Required(arguments, "taskId"), summary = Optional(arguments, "summary") }),
@@ -193,6 +194,12 @@ static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
                 || worker?.StartsWith("native-", StringComparison.Ordinal) == true ? "Native" : "External",
             Worker = worker,
         });
+    }
+    else if (string.Equals(name, "consume_worker_result", StringComparison.Ordinal)
+        || string.Equals(name, "begin_worker_review", StringComparison.Ordinal)
+        || string.Equals(name, "adopt_worker_result", StringComparison.Ordinal))
+    {
+        schedulerResult = CompactTerminalPacket(schedulerResult);
     }
     else if (string.Equals(name, "record_repartition", StringComparison.Ordinal))
     {
@@ -224,6 +231,32 @@ static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
         structuredContent = schedulerResult,
         isError = false,
     };
+}
+
+static JsonElement CompactTerminalPacket(JsonElement result)
+{
+    static string? TextValue(JsonElement source, string name) =>
+        source.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    static bool? BoolValue(JsonElement source, string name) =>
+        source.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False ? value.GetBoolean() : null;
+    static string[] StringsValue(JsonElement source, string name) =>
+        source.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
+            ? value.EnumerateArray().Select(item => item.GetString()).Where(item => !string.IsNullOrWhiteSpace(item)).Select(item => item!).ToArray()
+            : [];
+    return JsonSerializer.SerializeToElement(new
+    {
+        taskId = TextValue(result, "taskId"),
+        state = result.TryGetProperty("state", out var state) ? state.Clone() : default,
+        summary = TextValue(result, "summary"),
+        scope = StringsValue(result, "scope"),
+        changedFiles = StringsValue(result, "changes"),
+        validation = StringsValue(result, "validation"),
+        risks = StringsValue(result, "risks"),
+        terminalReason = TextValue(result, "hardLimitReason") ?? TextValue(result, "failureReason"),
+        recoveryAttempted = BoolValue(result, "recoveryAttempted"),
+        retryAttempted = BoolValue(result, "retryAttempted"),
+        recentFailureSummary = TextValue(result, "recentFailureSummary"),
+    });
 }
 
 static TaskPacket ReadTaskPacket(JsonElement arguments) => new(
@@ -348,6 +381,12 @@ static object[] ToolDefinitions() =>
     },
     new
     {
+        name = "consume_worker_result",
+        description = "Consume one persisted External Worker terminal packet exactly once at a natural Main boundary. Do not poll while the task is DELEGATED or RUNNING.",
+        inputSchema = TaskIdSchema(),
+    },
+    new
+    {
         name = "report_worker_result",
         description = "Report a Native Custom Agent result to its existing Scheduler task.",
         inputSchema = ResultSchema(),
@@ -355,7 +394,7 @@ static object[] ToolDefinitions() =>
     new
     {
         name = "begin_worker_review",
-        description = "Move a RESULT_RECEIVED task to REVIEWING before bounded review.",
+        description = "Move a delivered RESULT_RECEIVED, BLOCKED, or FAILED task to REVIEWING before bounded review.",
         inputSchema = TaskIdSchema(),
     },
     new

@@ -111,7 +111,10 @@ public sealed record ControlledWorkerRun(
     bool? CostVerified = null,
     bool? FinalizationAttempted = null,
     bool? FinalizationSucceeded = null,
-    IReadOnlyList<string>? ChangedFiles = null);
+    IReadOnlyList<string>? ChangedFiles = null,
+    bool? RecoveryAttempted = null,
+    bool? RetryAttempted = null,
+    string? RecentFailureSummary = null);
 
 public sealed record ControlledTaskTurn(
     string Id,
