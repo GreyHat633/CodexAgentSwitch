@@ -1,0 +1,1503 @@
+diff --git a/Directory.Build.props b/Directory.Build.props
+index d38a9cf..c0cef12 100644
+--- a/Directory.Build.props
++++ b/Directory.Build.props
+@@ -5,8 +5,8 @@
+     <ImplicitUsings>enable</ImplicitUsings>
+     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+     <Deterministic>true</Deterministic>
+-    <Version>0.2.1</Version>
+-    <AssemblyVersion>0.2.1.0</AssemblyVersion>
+-    <FileVersion>0.2.1.0</FileVersion>
++    <Version>0.2.2</Version>
++    <AssemblyVersion>0.2.2.0</AssemblyVersion>
++    <FileVersion>0.2.2.0</FileVersion>
+   </PropertyGroup>
+ </Project>
+diff --git a/src/CodexAgentSwitch.App/App.xaml.cs b/src/CodexAgentSwitch.App/App.xaml.cs
+index 3ea59cc..bf8d090 100644
+--- a/src/CodexAgentSwitch.App/App.xaml.cs
++++ b/src/CodexAgentSwitch.App/App.xaml.cs
+@@ -1,5 +1,6 @@
+ using CodexAgentSwitch.Application.Abstractions;
+ using CodexAgentSwitch.Application.Credentials;
++using CodexAgentSwitch.Application.ExternalAgents;
+ using CodexAgentSwitch.Application.Profiles;
+ using CodexAgentSwitch.Application.Projects;
+ using CodexAgentSwitch.Application.Providers;
+@@ -15,6 +16,7 @@ using CodexAgentSwitch.Infrastructure.Common;
+ using CodexAgentSwitch.Infrastructure.CodexAppServer;
+ using CodexAgentSwitch.Infrastructure.Credentials;
+ using CodexAgentSwitch.Infrastructure.ExternalProviders;
++using CodexAgentSwitch.Infrastructure.ExternalAgents;
+ using CodexAgentSwitch.Infrastructure.Persistence;
+ using CodexAgentSwitch.Infrastructure.Scheduling;
+ using CodexAgentSwitch.Infrastructure.Usage;
+@@ -49,6 +51,7 @@ public partial class App : Microsoft.UI.Xaml.Application
+         services.AddSingleton<HttpClient>();
+         services.AddSingleton<OpenAiCompatibleClient>();
+         services.AddSingleton<IExternalProviderClient>(provider => provider.GetRequiredService<OpenAiCompatibleClient>());
++        services.AddSingleton<IExternalToolHost, LocalExternalToolHost>();
+         services.AddSingleton<IExternalWorkerAdapterFactory, ExternalWorkerAdapterFactory>();
+         services.AddSingleton<ProviderConfigurationValidator>();
+         services.AddSingleton<ScopeRegistry>();
+diff --git a/src/CodexAgentSwitch.Application/ExternalAgents/ExternalToolContracts.cs b/src/CodexAgentSwitch.Application/ExternalAgents/ExternalToolContracts.cs
+new file mode 100644
+index 0000000..4a91261
+--- /dev/null
++++ b/src/CodexAgentSwitch.Application/ExternalAgents/ExternalToolContracts.cs
+@@ -0,0 +1,43 @@
++namespace CodexAgentSwitch.Application.ExternalAgents;
++
++public enum ExternalToolPermissionMode
++{
++    ReadOnly,
++    WorkspaceFullAccess,
++    FullAccess,
++}
++
++public sealed record ExternalToolSession(
++    string TaskId,
++    string ProjectPath,
++    string WorkingDirectory,
++    ExternalToolPermissionMode PermissionMode,
++    IReadOnlyList<string> AllowedReadScope,
++    IReadOnlyList<string> AllowedWriteScope,
++    DateTimeOffset StartedAt);
++
++public sealed record ExternalToolExecutionRequest(
++    string ToolCallId,
++    string ToolName,
++    string Arguments);
++
++public sealed record ExternalToolExecutionResult(
++    string ToolCallId,
++    string ToolName,
++    string StandardOutput,
++    string StandardError,
++    int? ExitCode,
++    bool TimedOut,
++    bool Denied,
++    bool Truncated)
++{
++    public bool Succeeded => !Denied && !TimedOut && ExitCode == 0;
++}
++
++public interface IExternalToolHost
++{
++    Task<ExternalToolExecutionResult> ExecuteAsync(
++        ExternalToolSession session,
++        ExternalToolExecutionRequest request,
++        CancellationToken cancellationToken = default);
++}
+diff --git a/src/CodexAgentSwitch.Application/Scheduling/WorkerExecutors.cs b/src/CodexAgentSwitch.Application/Scheduling/WorkerExecutors.cs
+index 4b7b6b5..550d90a 100644
+--- a/src/CodexAgentSwitch.Application/Scheduling/WorkerExecutors.cs
++++ b/src/CodexAgentSwitch.Application/Scheduling/WorkerExecutors.cs
+@@ -122,7 +122,8 @@ public sealed class ExternalWorkerExecutor(
+             scope,
+             [packet.OutputContract],
+             packet.AcceptanceCriteria,
+-            packet.Constraints);
++            packet.Constraints,
++            ApprovalMode: effectiveProfile.ApprovalMode);
+         var execution = await orchestrator.ExecuteAsync(snapshot, workerTask, cancellationToken: cancellationToken);
+         return new WorkerResultPacket(
+             packet.TaskId,
+diff --git a/src/CodexAgentSwitch.Domain/ExternalAgents/ExternalAgentModels.cs b/src/CodexAgentSwitch.Domain/ExternalAgents/ExternalAgentModels.cs
+new file mode 100644
+index 0000000..c6f3a8e
+--- /dev/null
++++ b/src/CodexAgentSwitch.Domain/ExternalAgents/ExternalAgentModels.cs
+@@ -0,0 +1,69 @@
++using System.Text.Json;
++
++namespace CodexAgentSwitch.Domain.ExternalAgents;
++
++/// <summary>Roles supported by an OpenAI-compatible chat completion.</summary>
++public enum ExternalAgentMessageRole
++{
++    System,
++    User,
++    Assistant,
++    Tool,
++}
++
++/// <summary>A function exposed to the model as a structured tool.</summary>
++public sealed record ExternalAgentToolDefinition(
++    string Name,
++    JsonElement Parameters,
++    string? Description = null)
++{
++    public ExternalAgentToolDefinition(string name, string description, JsonElement parameters)
++        : this(name, parameters, description)
++    {
++    }
++}
++
++/// <summary>A function invocation returned by the model.</summary>
++public sealed record ExternalAgentToolCall(
++    string Id,
++    string Name,
++    string Arguments);
++
++/// <summary>A chat message, including assistant tool calls and tool results.</summary>
++public sealed record ExternalAgentMessage(
++    ExternalAgentMessageRole Role,
++    string? Content = null,
++    IReadOnlyList<ExternalAgentToolCall>? ToolCalls = null,
++    string? ToolCallId = null,
++    string? Name = null)
++{
++    public static ExternalAgentMessage System(string content) => new(ExternalAgentMessageRole.System, content);
++
++    public static ExternalAgentMessage User(string content) => new(ExternalAgentMessageRole.User, content);
++
++    public static ExternalAgentMessage Assistant(
++        string? content = null,
++        IReadOnlyList<ExternalAgentToolCall>? toolCalls = null) =>
++        new(ExternalAgentMessageRole.Assistant, content, toolCalls);
++
++    public static ExternalAgentMessage Tool(string toolCallId, string content, string? name = null) =>
++        new(ExternalAgentMessageRole.Tool, content, null, toolCallId, name);
++
++    public static ExternalAgentMessage ToolResult(string toolCallId, string content, string? name = null) =>
++        Tool(toolCallId, content, name);
++}
++
++public sealed record ExternalAgentChatRequest(
++    string ModelId,
++    IReadOnlyList<ExternalAgentMessage> Messages,
++    IReadOnlyList<ExternalAgentToolDefinition>? Tools = null);
++
++/// <summary>Structured result for one provider chat-completion turn.</summary>
++public sealed record ExternalAgentCompletion(
++    string? Content,
++    IReadOnlyList<ExternalAgentToolCall> ToolCalls,
++    string? ResponseModel,
++    Providers.ProviderUsage? Usage,
++    Uri RequestUri,
++    JsonElement RawResponse,
++    string? FinishReason);
+diff --git a/src/CodexAgentSwitch.Infrastructure/ExternalAgents/LocalExternalToolHost.cs b/src/CodexAgentSwitch.Infrastructure/ExternalAgents/LocalExternalToolHost.cs
+new file mode 100644
+index 0000000..376ab0a
+--- /dev/null
++++ b/src/CodexAgentSwitch.Infrastructure/ExternalAgents/LocalExternalToolHost.cs
+@@ -0,0 +1,209 @@
++using System.Diagnostics;
++using System.Text.Json;
++using CodexAgentSwitch.Application.ExternalAgents;
++
++namespace CodexAgentSwitch.Infrastructure.ExternalAgents;
++
++public sealed class LocalExternalToolHost : IExternalToolHost
++{
++    private const int DefaultTimeoutSeconds = 30;
++    private const int MaximumTimeoutSeconds = 300;
++    private const int MaximumOutputCharacters = 32_000;
++
++    public Task<ExternalToolExecutionResult> ExecuteAsync(
++        ExternalToolSession session,
++        ExternalToolExecutionRequest request,
++        CancellationToken cancellationToken = default) =>
++        request.ToolName switch
++        {
++            "shell" => ExecuteShellAsync(session, request, cancellationToken),
++            _ => Task.FromResult(Denied(request, $"Unsupported external tool: {request.ToolName}.")),
++        };
++
++    private static async Task<ExternalToolExecutionResult> ExecuteShellAsync(
++        ExternalToolSession session,
++        ExternalToolExecutionRequest request,
++        CancellationToken cancellationToken)
++    {
++        ShellArguments arguments;
++        try
++        {
++            arguments = JsonSerializer.Deserialize<ShellArguments>(request.Arguments, JsonOptions)
++                ?? throw new JsonException("Shell arguments are empty.");
++        }
++        catch (JsonException exception)
++        {
++            return Denied(request, $"Invalid shell arguments: {exception.Message}");
++        }
++
++        if (string.IsNullOrWhiteSpace(arguments.Command))
++        {
++            return Denied(request, "Shell command is required.");
++        }
++
++        string workingDirectory;
++        try
++        {
++            workingDirectory = ResolveWorkingDirectory(session, arguments.Cwd);
++        }
++        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
++        {
++            return Denied(request, exception.Message);
++        }
++
++        if (session.PermissionMode == ExternalToolPermissionMode.WorkspaceFullAccess)
++        {
++            return Denied(request, "Workspace Full Access shell enforcement is not implemented in this vertical slice.");
++        }
++
++        if (session.PermissionMode == ExternalToolPermissionMode.ReadOnly && !IsAllowedReadOnlyCommand(arguments.Command))
++        {
++            return Denied(request, "Read Only currently permits only Get-Location, pwd, git status, and git diff --stat.");
++        }
++
++        var timeoutSeconds = Math.Clamp(arguments.Timeout ?? DefaultTimeoutSeconds, 1, MaximumTimeoutSeconds);
++        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
++        timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
++        using var process = new Process
++        {
++            StartInfo = new ProcessStartInfo
++            {
++                FileName = "powershell.exe",
++                WorkingDirectory = workingDirectory,
++                UseShellExecute = false,
++                CreateNoWindow = true,
++                RedirectStandardOutput = true,
++                RedirectStandardError = true,
++            },
++        };
++        process.StartInfo.ArgumentList.Add("-NoLogo");
++        process.StartInfo.ArgumentList.Add("-NoProfile");
++        process.StartInfo.ArgumentList.Add("-NonInteractive");
++        process.StartInfo.ArgumentList.Add("-Command");
++        process.StartInfo.ArgumentList.Add(arguments.Command);
++
++        try
++        {
++            if (!process.Start())
++            {
++                return Denied(request, "Shell process did not start.");
++            }
++
++            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
++            var stderrTask = process.StandardError.ReadToEndAsync(timeout.Token);
++            await process.WaitForExitAsync(timeout.Token);
++            var stdout = await stdoutTask;
++            var stderr = await stderrTask;
++            var truncated = false;
++            stdout = Truncate(stdout, ref truncated);
++            stderr = Truncate(stderr, ref truncated);
++            return new ExternalToolExecutionResult(
++                request.ToolCallId,
++                request.ToolName,
++                stdout,
++                stderr,
++                process.ExitCode,
++                TimedOut: false,
++                Denied: false,
++                truncated);
++        }
++        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
++        {
++            Kill(process);
++            return new ExternalToolExecutionResult(
++                request.ToolCallId,
++                request.ToolName,
++                string.Empty,
++                $"Shell command exceeded {timeoutSeconds} seconds.",
++                null,
++                TimedOut: true,
++                Denied: false,
++                Truncated: false);
++        }
++        catch (OperationCanceledException)
++        {
++            Kill(process);
++            throw;
++        }
++    }
++
++    private static string ResolveWorkingDirectory(ExternalToolSession session, string? requested)
++    {
++        var root = Path.GetFullPath(session.ProjectPath);
++        var candidate = string.IsNullOrWhiteSpace(requested)
++            ? Path.GetFullPath(session.WorkingDirectory)
++            : Path.GetFullPath(Path.IsPathRooted(requested) ? requested : Path.Combine(session.WorkingDirectory, requested));
++        if (session.PermissionMode != ExternalToolPermissionMode.FullAccess && !IsWithin(root, candidate))
++        {
++            throw new UnauthorizedAccessException($"Shell cwd is outside the project scope: {candidate}");
++        }
++
++        if (!Directory.Exists(candidate))
++        {
++            throw new IOException($"Shell cwd does not exist: {candidate}");
++        }
++
++        return candidate;
++    }
++
++    private static bool IsWithin(string root, string candidate)
++    {
++        var relative = Path.GetRelativePath(root, candidate);
++        return relative == "."
++            || (!relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
++                && !string.Equals(relative, "..", StringComparison.Ordinal)
++                && !Path.IsPathRooted(relative));
++    }
++
++    private static bool IsAllowedReadOnlyCommand(string command)
++    {
++        var normalized = string.Join(' ', command.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
++        return normalized.Equals("Get-Location", StringComparison.OrdinalIgnoreCase)
++            || normalized.Equals("pwd", StringComparison.OrdinalIgnoreCase)
++            || normalized.Equals("git status", StringComparison.OrdinalIgnoreCase)
++            || normalized.Equals("git status --short", StringComparison.OrdinalIgnoreCase)
++            || normalized.Equals("git diff --stat", StringComparison.OrdinalIgnoreCase);
++    }
++
++    private static ExternalToolExecutionResult Denied(ExternalToolExecutionRequest request, string error) => new(
++        request.ToolCallId,
++        request.ToolName,
++        string.Empty,
++        error,
++        null,
++        TimedOut: false,
++        Denied: true,
++        Truncated: false);
++
++    private static void Kill(Process process)
++    {
++        try
++        {
++            if (!process.HasExited)
++            {
++                process.Kill(entireProcessTree: true);
++                process.WaitForExit(5_000);
++            }
++        }
++        catch (InvalidOperationException)
++        {
++        }
++    }
++
++    private static string Truncate(string value, ref bool truncated)
++    {
++        if (value.Length <= MaximumOutputCharacters)
++        {
++            return value;
++        }
++
++        truncated = true;
++        const int markerAllowance = 80;
++        var half = (MaximumOutputCharacters - markerAllowance) / 2;
++        return $"{value[..half]}\n... output truncated by Agent Switch ...\n{value[^half..]}";
++    }
++
++    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
++
++    private sealed record ShellArguments(string Command, string? Cwd = null, int? Timeout = null);
++}
+diff --git a/src/CodexAgentSwitch.Infrastructure/ExternalAgents/OpenAiCompatibleExternalAgentRuntime.cs b/src/CodexAgentSwitch.Infrastructure/ExternalAgents/OpenAiCompatibleExternalAgentRuntime.cs
+new file mode 100644
+index 0000000..35f7b60
+--- /dev/null
++++ b/src/CodexAgentSwitch.Infrastructure/ExternalAgents/OpenAiCompatibleExternalAgentRuntime.cs
+@@ -0,0 +1,215 @@
++using System.Diagnostics;
++using System.Text.Json;
++using CodexAgentSwitch.Application.ExternalAgents;
++using CodexAgentSwitch.Domain.ExternalAgents;
++using CodexAgentSwitch.Domain.Providers;
++using CodexAgentSwitch.Infrastructure.ExternalProviders;
++
++namespace CodexAgentSwitch.Infrastructure.ExternalAgents;
++
++public enum ExternalAgentRuntimeState
++{
++    Completed,
++    Blocked,
++    Cancelled,
++    Timeout,
++}
++
++public sealed record ExternalAgentRuntimeOptions(
++    int MaxProviderTurns = 12,
++    int MaxToolCalls = 24,
++    int MaxRepeatedIdenticalToolCalls = 3,
++    TimeSpan? MaxWallClock = null)
++{
++    public TimeSpan EffectiveMaxWallClock => MaxWallClock ?? TimeSpan.FromMinutes(10);
++}
++
++public sealed record ExternalAgentRuntimeResult(
++    ExternalAgentRuntimeState State,
++    string? Content,
++    int ProviderTurns,
++    int ToolCalls,
++    int FailedToolCalls,
++    int DeniedToolCalls,
++    TimeSpan Duration,
++    ProviderUsage? Usage,
++    IReadOnlyList<string> Risks,
++    JsonElement? RawResponse);
++
++public sealed class OpenAiCompatibleExternalAgentRuntime(
++    OpenAiCompatibleClient client,
++    IExternalToolHost toolHost,
++    ExternalAgentRuntimeOptions? options = null)
++{
++    private readonly ExternalAgentRuntimeOptions options = options ?? new ExternalAgentRuntimeOptions();
++
++    public async Task<ExternalAgentRuntimeResult> ExecuteAsync(
++        ProviderConfiguration provider,
++        string modelId,
++        string prompt,
++        ExternalToolSession session,
++        CancellationToken cancellationToken = default)
++    {
++        ValidateOptions();
++        var stopwatch = Stopwatch.StartNew();
++        using var wallClock = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
++        wallClock.CancelAfter(options.EffectiveMaxWallClock);
++        var messages = new List<ExternalAgentMessage>
++        {
++            ExternalAgentMessage.System("You are an external coding worker. Use the provided tools when needed. Return a concise final result without revealing hidden reasoning."),
++            ExternalAgentMessage.User(prompt),
++        };
++        var tools = new[] { ShellToolDefinition() };
++        var repeatedCalls = new Dictionary<string, int>(StringComparer.Ordinal);
++        ProviderUsage? totalUsage = null;
++        JsonElement? lastRaw = null;
++        var turns = 0;
++        var toolCalls = 0;
++        var failedToolCalls = 0;
++        var deniedToolCalls = 0;
++
++        try
++        {
++            while (turns < options.MaxProviderTurns)
++            {
++                var completion = await client.CompleteWithToolsAsync(provider, modelId, messages, tools, wallClock.Token);
++                turns++;
++                totalUsage = AddUsage(totalUsage, completion.Usage);
++                lastRaw = completion.RawResponse;
++                if (completion.ToolCalls.Count == 0)
++                {
++                    return Result(ExternalAgentRuntimeState.Completed, completion.Content, []);
++                }
++
++                if (toolCalls + completion.ToolCalls.Count > options.MaxToolCalls)
++                {
++                    return Result(ExternalAgentRuntimeState.Blocked, null, ["External Agent Runtime reached MaxToolCalls."]);
++                }
++
++                messages.Add(ExternalAgentMessage.Assistant(completion.Content, completion.ToolCalls));
++                foreach (var call in completion.ToolCalls)
++                {
++                    var key = $"{call.Name}\n{call.Arguments}";
++                    repeatedCalls.TryGetValue(key, out var repeated);
++                    repeated++;
++                    repeatedCalls[key] = repeated;
++                    if (repeated > options.MaxRepeatedIdenticalToolCalls)
++                    {
++                        return Result(ExternalAgentRuntimeState.Blocked, null, ["External Agent Runtime detected a repeated identical tool call loop."]);
++                    }
++
++                    toolCalls++;
++                    var execution = await toolHost.ExecuteAsync(
++                        session,
++                        new ExternalToolExecutionRequest(call.Id, call.Name, call.Arguments),
++                        wallClock.Token);
++                    if (!execution.Succeeded)
++                    {
++                        failedToolCalls++;
++                    }
++                    if (execution.Denied)
++                    {
++                        deniedToolCalls++;
++                    }
++
++                    messages.Add(ExternalAgentMessage.ToolResult(call.Id, SerializeToolResult(execution), call.Name));
++                }
++            }
++
++            return Result(ExternalAgentRuntimeState.Blocked, null, ["External Agent Runtime reached MaxProviderTurns."]);
++        }
++        catch (ProviderRequestException exception) when (
++            exception.Kind == ProviderErrorKind.Cancelled
++            && wallClock.IsCancellationRequested
++            && !cancellationToken.IsCancellationRequested)
++        {
++            return Result(ExternalAgentRuntimeState.Timeout, null, ["External Agent Runtime reached MaxWallClock."]);
++        }
++        catch (ProviderRequestException exception) when (
++            exception.Kind == ProviderErrorKind.Cancelled
++            && cancellationToken.IsCancellationRequested)
++        {
++            return Result(ExternalAgentRuntimeState.Cancelled, null, ["External Agent Runtime was cancelled."]);
++        }
++        catch (OperationCanceledException) when (wallClock.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
++        {
++            return Result(ExternalAgentRuntimeState.Timeout, null, ["External Agent Runtime reached MaxWallClock."]);
++        }
++        catch (OperationCanceledException)
++        {
++            return Result(ExternalAgentRuntimeState.Cancelled, null, ["External Agent Runtime was cancelled."]);
++        }
++
++        ExternalAgentRuntimeResult Result(ExternalAgentRuntimeState state, string? content, IReadOnlyList<string> risks) => new(
++            state,
++            content,
++            turns,
++            toolCalls,
++            failedToolCalls,
++            deniedToolCalls,
++            stopwatch.Elapsed,
++            totalUsage,
++            risks,
++            lastRaw);
++    }
++
++    private void ValidateOptions()
++    {
++        if (options.MaxProviderTurns <= 0
++            || options.MaxToolCalls <= 0
++            || options.MaxRepeatedIdenticalToolCalls <= 0
++            || options.EffectiveMaxWallClock <= TimeSpan.Zero)
++        {
++            throw new InvalidOperationException("External Agent Runtime limits must be positive.");
++        }
++    }
++
++    private static ExternalAgentToolDefinition ShellToolDefinition()
++    {
++        using var document = JsonDocument.Parse("""
++            {
++              "type": "object",
++              "properties": {
++                "command": { "type": "string" },
++                "cwd": { "type": "string" },
++                "timeout": { "type": "integer", "minimum": 1, "maximum": 300 }
++              },
++              "required": ["command"],
++              "additionalProperties": false
++            }
++            """);
++        return new ExternalAgentToolDefinition(
++            "shell",
++            document.RootElement.Clone(),
++            "Execute one PowerShell command in the task session and return stdout, stderr, exitCode, timeout and truncation metadata.");
++    }
++
++    private static string SerializeToolResult(ExternalToolExecutionResult result) => JsonSerializer.Serialize(new
++    {
++        stdout = result.StandardOutput,
++        stderr = result.StandardError,
++        exitCode = result.ExitCode,
++        timedOut = result.TimedOut,
++        denied = result.Denied,
++        truncated = result.Truncated,
++    });
++
++    private static ProviderUsage? AddUsage(ProviderUsage? left, ProviderUsage? right)
++    {
++        if (left is null)
++        {
++            return right;
++        }
++        if (right is null)
++        {
++            return left;
++        }
++
++        return new ProviderUsage(
++            Add(left.InputTokens, right.InputTokens),
++            Add(left.OutputTokens, right.OutputTokens),
++            Add(left.TotalTokens, right.TotalTokens));
++    }
++
++    private static long? Add(long? left, long? right) => left is null && right is null ? null : (left ?? 0) + (right ?? 0);
++}
+diff --git a/src/CodexAgentSwitch.Infrastructure/ExternalProviders/ExternalWorkerAdapterFactory.cs b/src/CodexAgentSwitch.Infrastructure/ExternalProviders/ExternalWorkerAdapterFactory.cs
+index 5a071ae..35575ba 100644
+--- a/src/CodexAgentSwitch.Infrastructure/ExternalProviders/ExternalWorkerAdapterFactory.cs
++++ b/src/CodexAgentSwitch.Infrastructure/ExternalProviders/ExternalWorkerAdapterFactory.cs
+@@ -1,11 +1,20 @@
+ using CodexAgentSwitch.Application.Abstractions;
++using CodexAgentSwitch.Application.ExternalAgents;
+ using CodexAgentSwitch.Application.Providers;
+ using CodexAgentSwitch.Application.Workers;
+ using CodexAgentSwitch.Domain.Providers;
++using CodexAgentSwitch.Infrastructure.ExternalAgents;
+ 
+ namespace CodexAgentSwitch.Infrastructure.ExternalProviders;
+ 
+-public sealed class ExternalWorkerAdapterFactory(OpenAiCompatibleClient client, IClock clock) : IExternalWorkerAdapterFactory
++public sealed class ExternalWorkerAdapterFactory(
++    OpenAiCompatibleClient client,
++    IClock clock,
++    IExternalToolHost? toolHost = null) : IExternalWorkerAdapterFactory
+ {
+-    public IWorkerAdapter Create(ProviderConfiguration provider) => new OpenAiCompatibleWorkerAdapter(provider, client, clock);
++    public IWorkerAdapter Create(ProviderConfiguration provider) => new OpenAiCompatibleWorkerAdapter(
++        provider,
++        client,
++        clock,
++        new OpenAiCompatibleExternalAgentRuntime(client, toolHost ?? new LocalExternalToolHost()));
+ }
+diff --git a/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleClient.cs b/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleClient.cs
+index d32cf1f..08e72a1 100644
+--- a/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleClient.cs
++++ b/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleClient.cs
+@@ -5,6 +5,7 @@ using System.Text;
+ using System.Text.Json;
+ using CodexAgentSwitch.Application.Credentials;
+ using CodexAgentSwitch.Application.Providers;
++using CodexAgentSwitch.Domain.ExternalAgents;
+ using CodexAgentSwitch.Domain.Providers;
+ 
+ namespace CodexAgentSwitch.Infrastructure.ExternalProviders;
+@@ -155,6 +156,52 @@ public sealed class OpenAiCompatibleClient(HttpClient httpClient, ICredentialSto
+         return new ExternalCompletion(content, responseModel, usage, requestUri, root.Clone());
+     }
+ 
++    /// <summary>Executes one structured chat-completion turn, optionally exposing function tools.</summary>
++    public Task<ExternalAgentCompletion> CompleteAsync(
++        ProviderConfiguration provider,
++        string modelId,
++        IReadOnlyList<ExternalAgentMessage> messages,
++        IReadOnlyList<ExternalAgentToolDefinition>? tools = null,
++        CancellationToken cancellationToken = default) =>
++        CompleteAsync(provider, new ExternalAgentChatRequest(modelId, messages, tools), cancellationToken);
++
++    public Task<ExternalAgentCompletion> CompleteAsync(
++        ProviderConfiguration provider,
++        string modelId,
++        IReadOnlyList<ExternalAgentMessage> messages,
++        CancellationToken cancellationToken) =>
++        CompleteAsync(provider, modelId, messages, null, cancellationToken);
++
++    public Task<ExternalAgentCompletion> CompleteWithToolsAsync(
++        ProviderConfiguration provider,
++        string modelId,
++        IReadOnlyList<ExternalAgentMessage> messages,
++        IReadOnlyList<ExternalAgentToolDefinition>? tools = null,
++        CancellationToken cancellationToken = default) =>
++        CompleteAsync(provider, modelId, messages, tools, cancellationToken);
++
++    public async Task<ExternalAgentCompletion> CompleteAsync(
++        ProviderConfiguration provider,
++        ExternalAgentChatRequest requestModel,
++        CancellationToken cancellationToken = default)
++    {
++        var payload = OpenAiCompatibleToolCallCodec.SerializeRequest(requestModel);
++        using var request = await CreateRequestAsync(provider, HttpMethod.Post, "chat/completions", cancellationToken);
++        request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
++        var requestUri = request.RequestUri
++            ?? throw new ProviderRequestException(ProviderErrorKind.InvalidConfiguration, "Provider request URI is invalid.");
++        using var response = await SendAsync(provider, request, cancellationToken);
++        using var document = await ReadJsonAsync(response, cancellationToken);
++        try
++        {
++            return OpenAiCompatibleToolCallCodec.ParseResponse(document.RootElement, requestUri);
++        }
++        catch (OpenAiCompatibleProtocolException exception)
++        {
++            throw new ProviderRequestException(ProviderErrorKind.Protocol, exception.Message, response.StatusCode, innerException: exception);
++        }
++    }
++
+     private async Task<HttpRequestMessage> CreateRequestAsync(
+         ProviderConfiguration provider,
+         HttpMethod method,
+diff --git a/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleToolCallCodec.cs b/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleToolCallCodec.cs
+new file mode 100644
+index 0000000..beb4996
+--- /dev/null
++++ b/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleToolCallCodec.cs
+@@ -0,0 +1,324 @@
++using System.Text.Json;
++using System.Text.Json.Nodes;
++using CodexAgentSwitch.Domain.ExternalAgents;
++using CodexAgentSwitch.Domain.Providers;
++
++namespace CodexAgentSwitch.Infrastructure.ExternalProviders;
++
++/// <summary>Protocol error raised when an OpenAI-compatible tool payload is malformed.</summary>
++public sealed class OpenAiCompatibleProtocolException(string message, Exception? innerException = null)
++    : Exception(message, innerException);
++
++/// <summary>Serialization and response parsing for structured chat tool calls.</summary>
++public static class OpenAiCompatibleToolCallCodec
++{
++    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
++
++    public static JsonElement SerializeMessage(ExternalAgentMessage message)
++    {
++        ArgumentNullException.ThrowIfNull(message);
++        ValidateMessage(message);
++        var node = new JsonObject
++        {
++            ["role"] = RoleName(message.Role),
++        };
++        if (message.Content is not null)
++        {
++            node["content"] = message.Content;
++        }
++
++        if (message.Role == ExternalAgentMessageRole.Assistant && message.ToolCalls is { Count: > 0 })
++        {
++            node["tool_calls"] = new JsonArray(message.ToolCalls.Select(SerializeToolCallNode).ToArray());
++        }
++
++        if (message.Role == ExternalAgentMessageRole.Tool)
++        {
++            node["tool_call_id"] = message.ToolCallId;
++            if (message.Name is not null)
++            {
++                node["name"] = message.Name;
++            }
++        }
++
++        return JsonSerializer.SerializeToElement(node, JsonOptions);
++    }
++
++    public static JsonElement SerializeToolDefinition(ExternalAgentToolDefinition definition)
++    {
++        ArgumentNullException.ThrowIfNull(definition);
++        if (string.IsNullOrWhiteSpace(definition.Name))
++        {
++            throw new OpenAiCompatibleProtocolException("Tool definition name is required.");
++        }
++
++        if (definition.Parameters.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
++        {
++            throw new OpenAiCompatibleProtocolException($"Tool '{definition.Name}' parameters are required.");
++        }
++
++        var function = new JsonObject
++        {
++            ["name"] = definition.Name,
++            ["parameters"] = JsonNode.Parse(definition.Parameters.GetRawText()),
++        };
++        if (definition.Description is not null)
++        {
++            function["description"] = definition.Description;
++        }
++
++        return JsonSerializer.SerializeToElement(new JsonObject
++        {
++            ["type"] = "function",
++            ["function"] = function,
++        }, JsonOptions);
++    }
++
++    public static string SerializeRequest(ExternalAgentChatRequest request)
++    {
++        ArgumentNullException.ThrowIfNull(request);
++        if (string.IsNullOrWhiteSpace(request.ModelId))
++        {
++            throw new OpenAiCompatibleProtocolException("Model ID is required.");
++        }
++
++        if (request.Messages is null || request.Messages.Count == 0)
++        {
++            throw new OpenAiCompatibleProtocolException("At least one chat message is required.");
++        }
++
++        var messages = new JsonArray(request.Messages.Select(message =>
++            JsonNode.Parse(SerializeMessage(message).GetRawText())!).ToArray());
++        var payload = new JsonObject
++        {
++            ["model"] = request.ModelId,
++            ["messages"] = messages,
++            ["stream"] = false,
++        };
++        if (request.Tools is { Count: > 0 })
++        {
++            payload["tools"] = new JsonArray(request.Tools.Select(tool =>
++                JsonNode.Parse(SerializeToolDefinition(tool).GetRawText())!).ToArray());
++        }
++
++        return payload.ToJsonString(JsonOptions);
++    }
++
++    public static string SerializeRequest(
++        string modelId,
++        IReadOnlyList<ExternalAgentMessage> messages,
++        IReadOnlyList<ExternalAgentToolDefinition>? tools = null) =>
++        SerializeRequest(new ExternalAgentChatRequest(modelId, messages, tools));
++
++    public static ExternalAgentCompletion ParseResponse(JsonElement root, Uri requestUri)
++    {
++        ArgumentNullException.ThrowIfNull(requestUri);
++        if (root.ValueKind != JsonValueKind.Object
++            || !root.TryGetProperty("choices", out var choices)
++            || choices.ValueKind != JsonValueKind.Array
++            || choices.GetArrayLength() == 0
++            || !choices[0].TryGetProperty("message", out var message)
++            || message.ValueKind != JsonValueKind.Object)
++        {
++            throw new OpenAiCompatibleProtocolException("Provider response is missing choices[0].message.");
++        }
++
++        string? content = null;
++        if (message.TryGetProperty("content", out var contentElement)
++            && contentElement.ValueKind is not JsonValueKind.Null)
++        {
++            if (contentElement.ValueKind != JsonValueKind.String)
++            {
++                throw new OpenAiCompatibleProtocolException("choices[0].message.content must be a string or null.");
++            }
++
++            content = contentElement.GetString();
++        }
++
++        var toolCalls = ParseToolCalls(message);
++        if (content is null && toolCalls.Count == 0)
++        {
++            throw new OpenAiCompatibleProtocolException("Provider response must contain message.content or message.tool_calls.");
++        }
++
++        string? responseModel = null;
++        if (root.TryGetProperty("model", out var modelElement) && modelElement.ValueKind is not JsonValueKind.Null)
++        {
++            if (modelElement.ValueKind != JsonValueKind.String)
++            {
++                throw new OpenAiCompatibleProtocolException("Provider response model must be a string.");
++            }
++
++            responseModel = modelElement.GetString();
++        }
++
++        string? finishReason = null;
++        if (choices[0].TryGetProperty("finish_reason", out var finishElement)
++            && finishElement.ValueKind is not JsonValueKind.Null)
++        {
++            if (finishElement.ValueKind != JsonValueKind.String)
++            {
++                throw new OpenAiCompatibleProtocolException("choices[0].finish_reason must be a string or null.");
++            }
++
++            finishReason = finishElement.GetString();
++        }
++
++        return new ExternalAgentCompletion(
++            content,
++            toolCalls,
++            responseModel,
++            ParseUsage(root),
++            requestUri,
++            root.Clone(),
++            finishReason);
++    }
++
++    public static ExternalAgentCompletion ParseResponse(string json, Uri requestUri)
++    {
++        using var document = JsonDocument.Parse(json);
++        return ParseResponse(document.RootElement, requestUri);
++    }
++
++    private static IReadOnlyList<ExternalAgentToolCall> ParseToolCalls(JsonElement message)
++    {
++        if (!message.TryGetProperty("tool_calls", out var callsElement)
++            || callsElement.ValueKind == JsonValueKind.Null)
++        {
++            return [];
++        }
++
++        if (callsElement.ValueKind != JsonValueKind.Array)
++        {
++            throw new OpenAiCompatibleProtocolException("message.tool_calls must be an array.");
++        }
++
++        var calls = new List<ExternalAgentToolCall>(callsElement.GetArrayLength());
++        foreach (var call in callsElement.EnumerateArray())
++        {
++            if (call.ValueKind != JsonValueKind.Object
++                || !TryRequiredString(call, "id", out var id)
++                || !TryRequiredString(call, "type", out var type)
++                || !string.Equals(type, "function", StringComparison.Ordinal)
++                || !call.TryGetProperty("function", out var function)
++                || function.ValueKind != JsonValueKind.Object
++                || !TryRequiredString(function, "name", out var name)
++                || !TryRequiredString(function, "arguments", out var arguments))
++            {
++                throw new OpenAiCompatibleProtocolException("Each tool call requires id, type=function, and function.name/function.arguments strings.");
++            }
++
++            calls.Add(new ExternalAgentToolCall(id, name, arguments));
++        }
++
++        return calls;
++    }
++
++    private static JsonNode SerializeToolCallNode(ExternalAgentToolCall call)
++    {
++        if (string.IsNullOrWhiteSpace(call.Id) || string.IsNullOrWhiteSpace(call.Name))
++        {
++            throw new OpenAiCompatibleProtocolException("Tool call id and name are required.");
++        }
++
++        if (string.IsNullOrWhiteSpace(call.Arguments))
++        {
++            throw new OpenAiCompatibleProtocolException($"Tool call '{call.Id}' arguments are required.");
++        }
++
++        return new JsonObject
++        {
++            ["id"] = call.Id,
++            ["type"] = "function",
++            ["function"] = new JsonObject
++            {
++                ["name"] = call.Name,
++                ["arguments"] = call.Arguments,
++            },
++        };
++    }
++
++    private static void ValidateMessage(ExternalAgentMessage message)
++    {
++        if (message.Role is ExternalAgentMessageRole.System or ExternalAgentMessageRole.User
++            && message.Content is null)
++        {
++            throw new OpenAiCompatibleProtocolException($"{message.Role} messages require content.");
++        }
++
++        if (message.Role == ExternalAgentMessageRole.Tool && string.IsNullOrWhiteSpace(message.ToolCallId))
++        {
++            throw new OpenAiCompatibleProtocolException("Tool messages require tool_call_id.");
++        }
++
++        if (message.Role == ExternalAgentMessageRole.Tool && message.Content is null)
++        {
++            throw new OpenAiCompatibleProtocolException("Tool messages require content.");
++        }
++
++        if (message.Role != ExternalAgentMessageRole.Assistant && message.ToolCalls is { Count: > 0 })
++        {
++            throw new OpenAiCompatibleProtocolException("Only assistant messages may contain tool_calls.");
++        }
++
++        if (message.Role == ExternalAgentMessageRole.Assistant
++            && message.Content is null
++            && (message.ToolCalls is null || message.ToolCalls.Count == 0))
++        {
++            throw new OpenAiCompatibleProtocolException("Assistant messages require content or tool_calls.");
++        }
++    }
++
++    private static string RoleName(ExternalAgentMessageRole role) => role switch
++    {
++        ExternalAgentMessageRole.System => "system",
++        ExternalAgentMessageRole.User => "user",
++        ExternalAgentMessageRole.Assistant => "assistant",
++        ExternalAgentMessageRole.Tool => "tool",
++        _ => throw new OpenAiCompatibleProtocolException($"Unsupported message role: {role}."),
++    };
++
++    private static bool TryRequiredString(JsonElement element, string name, out string value)
++    {
++        value = string.Empty;
++        if (!element.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.String)
++        {
++            return false;
++        }
++
++        var text = property.GetString();
++        if (string.IsNullOrWhiteSpace(text))
++        {
++            return false;
++        }
++
++        value = text;
++        return true;
++    }
++
++    private static ProviderUsage? ParseUsage(JsonElement root)
++    {
++        if (!root.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
++        {
++            return null;
++        }
++
++        return new ProviderUsage(
++            ReadInt64(usage, "prompt_tokens", "input_tokens"),
++            ReadInt64(usage, "completion_tokens", "output_tokens"),
++            ReadInt64(usage, "total_tokens"));
++    }
++
++    private static long? ReadInt64(JsonElement element, params string[] names)
++    {
++        foreach (var name in names)
++        {
++            if (element.TryGetProperty(name, out var value) && value.TryGetInt64(out var number))
++            {
++                return number;
++            }
++        }
++
++        return null;
++    }
++}
+diff --git a/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleWorkerAdapter.cs b/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleWorkerAdapter.cs
+index 4e2e55a..8ec6f49 100644
+--- a/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleWorkerAdapter.cs
++++ b/src/CodexAgentSwitch.Infrastructure/ExternalProviders/OpenAiCompatibleWorkerAdapter.cs
+@@ -1,8 +1,11 @@
+ using System.Collections.Concurrent;
+ using CodexAgentSwitch.Application.Abstractions;
++using CodexAgentSwitch.Application.ExternalAgents;
+ using CodexAgentSwitch.Application.Workers;
+ using CodexAgentSwitch.Domain.Providers;
++using CodexAgentSwitch.Domain.Profiles;
+ using CodexAgentSwitch.Domain.Workers;
++using CodexAgentSwitch.Infrastructure.ExternalAgents;
+ 
+ namespace CodexAgentSwitch.Infrastructure.ExternalProviders;
+ 
+@@ -11,13 +14,15 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
+     private readonly ProviderConfiguration provider;
+     private readonly OpenAiCompatibleClient client;
+     private readonly IClock clock;
++    private readonly OpenAiCompatibleExternalAgentRuntime? agentRuntime;
+     private readonly SemaphoreSlim concurrency = new(3, 3);
+     private readonly ConcurrentDictionary<string, ExternalJobRuntime> jobs = new(StringComparer.Ordinal);
+ 
+     public OpenAiCompatibleWorkerAdapter(
+         ProviderConfiguration provider,
+         OpenAiCompatibleClient client,
+-        IClock clock)
++        IClock clock,
++        OpenAiCompatibleExternalAgentRuntime? agentRuntime = null)
+     {
+         if (provider.Kind == ProviderKind.NativeCodex)
+         {
+@@ -27,6 +32,7 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
+         this.provider = provider;
+         this.client = client;
+         this.clock = clock;
++        this.agentRuntime = agentRuntime;
+     }
+ 
+     public string AdapterId => $"external:{provider.Id}";
+@@ -214,17 +220,24 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
+             await concurrency.WaitAsync(runtime.Cancellation.Token);
+             entered = true;
+             runtime.Job = runtime.Job with { Status = WorkerJobStatus.Running, StatusMessage = "Provider request running." };
+-            var completion = await client.CompleteAsync(provider, runtime.ModelId, runtime.Task.Prompt, runtime.Cancellation.Token);
+-            runtime.Job = runtime.Job with { Status = WorkerJobStatus.Completed, CompletedAt = clock.UtcNow, StatusMessage = "completed" };
++            var completion = agentRuntime is null
++                ? await ExecuteLegacyTextTurnAsync(runtime)
++                : await ExecuteAgentRuntimeAsync(runtime);
++            runtime.Job = runtime.Job with
++            {
++                Status = completion.Status,
++                CompletedAt = clock.UtcNow,
++                StatusMessage = completion.Status == WorkerJobStatus.Completed ? "completed" : completion.Unresolved.FirstOrDefault() ?? completion.Status.ToString(),
++            };
+             Complete(
+                 runtime,
+                 new WorkerResult(
+                     runtime.Task.TaskId,
+-                    WorkerJobStatus.Completed,
++                    completion.Status,
+                     completion.Content,
+                     completion.RawResponse,
+-                    completion.Usage is null ? ["Provider 未返回 Usage；费用只能标记为不可用或估算。"] : [],
+-                    [],
++                    completion.Risks,
++                    completion.Unresolved,
+                     provider.Id,
+                     provider.Name,
+                     completion.RequestUri,
+@@ -292,6 +305,59 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
+         }
+     }
+ 
++    private async Task<ExternalExecution> ExecuteLegacyTextTurnAsync(ExternalJobRuntime runtime)
++    {
++        var completion = await client.CompleteAsync(provider, runtime.ModelId, runtime.Task.Prompt, runtime.Cancellation.Token);
++        return new ExternalExecution(
++            WorkerJobStatus.Completed,
++            completion.Content,
++            completion.RawResponse,
++            completion.Usage is null ? ["Provider 未返回 Usage；费用只能标记为不可用或估算。"] : [],
++            [],
++            completion.RequestUri,
++            completion.ResponseModel,
++            completion.Usage);
++    }
++
++    private async Task<ExternalExecution> ExecuteAgentRuntimeAsync(ExternalJobRuntime runtime)
++    {
++        var permissionMode = runtime.Task.ApprovalMode switch
++        {
++            ExecutionApprovalMode.Safe => ExternalToolPermissionMode.ReadOnly,
++            ExecutionApprovalMode.FullAuto => ExternalToolPermissionMode.FullAccess,
++            _ => ExternalToolPermissionMode.WorkspaceFullAccess,
++        };
++        var session = new ExternalToolSession(
++            runtime.Task.TaskId,
++            runtime.Task.WorkingDirectory,
++            runtime.Task.WorkingDirectory,
++            permissionMode,
++            runtime.Task.Scope.Files,
++            permissionMode == ExternalToolPermissionMode.ReadOnly ? [] : runtime.Task.Scope.Files,
++            clock.UtcNow);
++        var result = await agentRuntime!.ExecuteAsync(
++            provider,
++            runtime.ModelId,
++            runtime.Task.Prompt,
++            session,
++            runtime.Cancellation.Token);
++        var status = result.State switch
++        {
++            ExternalAgentRuntimeState.Completed => WorkerJobStatus.Completed,
++            ExternalAgentRuntimeState.Cancelled => WorkerJobStatus.Interrupted,
++            _ => WorkerJobStatus.Failed,
++        };
++        return new ExternalExecution(
++            status,
++            result.Content,
++            result.RawResponse,
++            result.Usage is null ? ["Provider 未返回 Usage；费用只能标记为不可用或估算。", .. result.Risks] : result.Risks,
++            status == WorkerJobStatus.Completed ? [] : [result.State.ToString()],
++            ProviderEndpoint(),
++            runtime.ModelId,
++            result.Usage);
++    }
++
+     private static WorkerModelCapability ToCapability(string id)
+     {
+         if (DeepSeekV4Catalog.TryGet(id, out var model))
+@@ -338,4 +404,14 @@ public sealed class OpenAiCompatibleWorkerAdapter : IWorkerAdapter, IAsyncDispos
+ 
+         public TaskCompletionSource<WorkerResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+     }
++
++    private sealed record ExternalExecution(
++        WorkerJobStatus Status,
++        string? Content,
++        System.Text.Json.JsonElement? RawResponse,
++        IReadOnlyList<string> Risks,
++        IReadOnlyList<string> Unresolved,
++        Uri? RequestUri,
++        string? ResponseModel,
++        ProviderUsage? Usage = null);
+ }
+diff --git a/tests/CodexAgentSwitch.Tests/ExternalAgents/LocalExternalToolHostTests.cs b/tests/CodexAgentSwitch.Tests/ExternalAgents/LocalExternalToolHostTests.cs
+new file mode 100644
+index 0000000..1a88221
+--- /dev/null
++++ b/tests/CodexAgentSwitch.Tests/ExternalAgents/LocalExternalToolHostTests.cs
+@@ -0,0 +1,181 @@
++using System.Net;
++using System.Text;
++using System.Text.Json;
++using CodexAgentSwitch.Application.Credentials;
++using CodexAgentSwitch.Application.ExternalAgents;
++using CodexAgentSwitch.Domain.Providers;
++using CodexAgentSwitch.Infrastructure.ExternalAgents;
++using CodexAgentSwitch.Infrastructure.ExternalProviders;
++
++namespace CodexAgentSwitch.Tests.ExternalAgents;
++
++public sealed class LocalExternalToolHostTests
++{
++    [Fact]
++    public async Task Provider_tool_call_executes_real_read_only_shell_and_returns_result_for_final_turn()
++    {
++        var requestPayloads = new List<string>();
++        string? toolResultContent = null;
++        var handler = new StubHandler(async (request, _) =>
++        {
++            requestPayloads.Add(await request.Content!.ReadAsStringAsync());
++            if (requestPayloads.Count == 2)
++            {
++                using var payload = JsonDocument.Parse(requestPayloads[1]);
++                toolResultContent = payload.RootElement.GetProperty("messages")[3].GetProperty("content").GetString();
++            }
++            return requestPayloads.Count == 1
++                ? Json("""{"model":"tool-model","choices":[{"finish_reason":"tool_calls","message":{"content":null,"tool_calls":[{"id":"call-shell","type":"function","function":{"name":"shell","arguments":"{\"command\":\"Get-Location\"}"}}]}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}""")
++                : Json("""{"model":"tool-model","choices":[{"finish_reason":"stop","message":{"content":"SOL_DS_022_SHELL_OK"}}],"usage":{"prompt_tokens":7,"completion_tokens":1,"total_tokens":8}}""");
++        });
++        var client = new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore());
++        var runtime = new OpenAiCompatibleExternalAgentRuntime(client, new LocalExternalToolHost());
++        var projectPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
++        var session = new ExternalToolSession(
++            "test-shell-loop",
++            projectPath,
++            projectPath,
++            ExternalToolPermissionMode.ReadOnly,
++            [projectPath],
++            [],
++            DateTimeOffset.UtcNow);
++
++        var result = await runtime.ExecuteAsync(Provider(), "tool-model", "Report the current location.", session);
++
++        Assert.Equal(ExternalAgentRuntimeState.Completed, result.State);
++        Assert.Equal("SOL_DS_022_SHELL_OK", result.Content);
++        Assert.Equal(2, result.ProviderTurns);
++        Assert.Equal(1, result.ToolCalls);
++        Assert.Equal(13, result.Usage?.TotalTokens);
++        Assert.Contains("\"tool_call_id\":\"call-shell\"", requestPayloads[1]);
++        Assert.NotNull(toolResultContent);
++        using var toolResult = JsonDocument.Parse(toolResultContent);
++        Assert.Equal(0, toolResult.RootElement.GetProperty("exitCode").GetInt32());
++        Assert.Contains("cas-022-sol", toolResult.RootElement.GetProperty("stdout").GetString(), StringComparison.OrdinalIgnoreCase);
++    }
++
++    [Fact]
++    public async Task Read_only_denies_mutating_shell_command_without_starting_it()
++    {
++        var projectPath = Path.GetFullPath(AppContext.BaseDirectory);
++        var session = new ExternalToolSession(
++            "test-read-only-denial",
++            projectPath,
++            projectPath,
++            ExternalToolPermissionMode.ReadOnly,
++            [projectPath],
++            [],
++            DateTimeOffset.UtcNow);
++        var result = await new LocalExternalToolHost().ExecuteAsync(
++            session,
++            new ExternalToolExecutionRequest("call-denied", "shell", "{\"command\":\"Set-Content denied.txt nope\"}"));
++
++        Assert.True(result.Denied);
++        Assert.False(result.Succeeded);
++        Assert.Null(result.ExitCode);
++        Assert.False(File.Exists(Path.Combine(projectPath, "denied.txt")));
++    }
++
++    [Fact]
++    public async Task Runtime_blocks_repeated_identical_tool_call_loop()
++    {
++        var handler = new StubHandler((_, _) => Task.FromResult(Json(
++            """{"model":"tool-model","choices":[{"finish_reason":"tool_calls","message":{"content":null,"tool_calls":[{"id":"call-shell","type":"function","function":{"name":"shell","arguments":"{\"command\":\"Get-Location\"}"}}]}}]}""")));
++        var runtime = new OpenAiCompatibleExternalAgentRuntime(
++            new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore()),
++            new LocalExternalToolHost(),
++            new ExternalAgentRuntimeOptions(MaxRepeatedIdenticalToolCalls: 2));
++        var projectPath = Path.GetFullPath(AppContext.BaseDirectory);
++
++        var result = await runtime.ExecuteAsync(
++            Provider(),
++            "tool-model",
++            "Keep trying.",
++            Session(projectPath));
++
++        Assert.Equal(ExternalAgentRuntimeState.Blocked, result.State);
++        Assert.Equal(3, result.ProviderTurns);
++        Assert.Equal(2, result.ToolCalls);
++        Assert.Contains(result.Risks, risk => risk.Contains("repeated identical", StringComparison.Ordinal));
++    }
++
++    [Fact]
++    public async Task Runtime_distinguishes_user_cancellation_from_wall_clock_timeout()
++    {
++        var handler = new StubHandler(async (_, token) =>
++        {
++            await Task.Delay(Timeout.InfiniteTimeSpan, token);
++            throw new InvalidOperationException("Unreachable.");
++        });
++        var client = new OpenAiCompatibleClient(new HttpClient(handler), new FakeCredentialStore());
++        var projectPath = Path.GetFullPath(AppContext.BaseDirectory);
++        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
++        var cancelledRuntime = new OpenAiCompatibleExternalAgentRuntime(client, new LocalExternalToolHost());
++
++        var cancelled = await cancelledRuntime.ExecuteAsync(
++            Provider(),
++            "tool-model",
++            "Wait.",
++            Session(projectPath),
++            cancellation.Token);
++
++        Assert.Equal(ExternalAgentRuntimeState.Cancelled, cancelled.State);
++
++        var timeoutRuntime = new OpenAiCompatibleExternalAgentRuntime(
++            client,
++            new LocalExternalToolHost(),
++            new ExternalAgentRuntimeOptions(MaxWallClock: TimeSpan.FromMilliseconds(50)));
++        var timedOut = await timeoutRuntime.ExecuteAsync(
++            Provider(),
++            "tool-model",
++            "Wait.",
++            Session(projectPath));
++
++        Assert.Equal(ExternalAgentRuntimeState.Timeout, timedOut.State);
++    }
++
++    private static ExternalToolSession Session(string projectPath) => new(
++        "test-runtime",
++        projectPath,
++        projectPath,
++        ExternalToolPermissionMode.ReadOnly,
++        [projectPath],
++        [],
++        DateTimeOffset.UtcNow);
++
++    private static ProviderConfiguration Provider() => new(
++        "tool-provider",
++        "Tool Provider",
++        ProviderKind.OpenAiCompatible,
++        new Uri("https://provider.test/v1"),
++        "credential-ref",
++        "tool-model",
++        new Dictionary<string, string>(),
++        TimeSpan.FromSeconds(5),
++        true,
++        null,
++        DateTimeOffset.UtcNow,
++        DateTimeOffset.UtcNow);
++
++    private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)
++    {
++        Content = new StringContent(body, Encoding.UTF8, "application/json"),
++    };
++
++    private sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> response) : HttpMessageHandler
++    {
++        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
++            response(request, cancellationToken);
++    }
++
++    private sealed class FakeCredentialStore : ICredentialStore
++    {
++        public Task<bool> ExistsAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult(true);
++
++        public Task SaveAsync(string referenceId, string secret, CancellationToken cancellationToken = default) => Task.CompletedTask;
++
++        public Task<string?> ReadAsync(string referenceId, CancellationToken cancellationToken = default) => Task.FromResult<string?>("test-secret");
++
++        public Task DeleteAsync(string referenceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
++    }
++}
+diff --git a/tests/CodexAgentSwitch.Tests/ExternalProviders/OpenAiCompatibleClientTests.cs b/tests/CodexAgentSwitch.Tests/ExternalProviders/OpenAiCompatibleClientTests.cs
+index bc4ad5f..25ef971 100644
+--- a/tests/CodexAgentSwitch.Tests/ExternalProviders/OpenAiCompatibleClientTests.cs
++++ b/tests/CodexAgentSwitch.Tests/ExternalProviders/OpenAiCompatibleClientTests.cs
+@@ -4,6 +4,7 @@ using System.Text.Json;
+ using CodexAgentSwitch.Application.Abstractions;
+ using CodexAgentSwitch.Application.Credentials;
+ using CodexAgentSwitch.Application.Providers;
++using CodexAgentSwitch.Domain.ExternalAgents;
+ using CodexAgentSwitch.Domain.Providers;
+ using CodexAgentSwitch.Domain.Workers;
+ using CodexAgentSwitch.Infrastructure.ExternalProviders;
+@@ -77,6 +78,45 @@ public sealed class OpenAiCompatibleClientTests
+         Assert.Contains("\"model\":\"deepseek-v4-pro\"", completionPayload);
+     }
+ 
++    [Fact]
++    public async Task Structured_tool_call_and_tool_result_follow_up_are_serialized_and_parsed()
++    {
++        var payloads = new List<string>();
++        var handler = new StubHandler(async (request, _) =>
++        {
++            payloads.Add(await request.Content!.ReadAsStringAsync());
++            return payloads.Count == 1
++                ? Json(HttpStatusCode.OK, "{\"model\":\"tool-model\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"content\":null,\"tool_calls\":[{\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"key\\\":\\\"value\\\"}\"}}]}}]}")
++                : Json(HttpStatusCode.OK, "{\"model\":\"tool-model\",\"choices\":[{\"message\":{\"content\":\"done\"}}]}");
++        });
++        var client = Client(handler);
++        using var schema = JsonDocument.Parse("{\"type\":\"object\"}");
++        var tools = new[] { new ExternalAgentToolDefinition("lookup", schema.RootElement.Clone()) };
++
++        var first = await client.CompleteAsync(
++            Provider(),
++            "tool-model",
++            [ExternalAgentMessage.User("Find it.")],
++            tools);
++        var second = await client.CompleteAsync(
++            Provider(),
++            "tool-model",
++            [
++                ExternalAgentMessage.User("Find it."),
++                ExternalAgentMessage.Assistant(toolCalls: first.ToolCalls),
++                ExternalAgentMessage.Tool(first.ToolCalls[0].Id, "value", "lookup"),
++            ],
++            tools);
++
++        Assert.Single(first.ToolCalls);
++        Assert.Equal("call-1", first.ToolCalls[0].Id);
++        Assert.Equal("done", second.Content);
++        Assert.Contains("\"tools\"", payloads[0]);
++        Assert.Contains("\"tool_calls\"", payloads[1]);
++        Assert.Contains("\"tool_call_id\":\"call-1\"", payloads[1]);
++        Assert.Equal(2, handler.CallCount);
++    }
++
+     [Theory]
+     [InlineData(HttpStatusCode.Unauthorized, ProviderErrorKind.Authentication)]
+     [InlineData(HttpStatusCode.TooManyRequests, ProviderErrorKind.RateLimited)]
+diff --git a/tests/CodexAgentSwitch.Tests/ExternalProviders/OpenAiCompatibleToolCallCodecTests.cs b/tests/CodexAgentSwitch.Tests/ExternalProviders/OpenAiCompatibleToolCallCodecTests.cs
+new file mode 100644
+index 0000000..1f557da
+--- /dev/null
++++ b/tests/CodexAgentSwitch.Tests/ExternalProviders/OpenAiCompatibleToolCallCodecTests.cs
+@@ -0,0 +1,67 @@
++using System.Text.Json;
++using CodexAgentSwitch.Domain.ExternalAgents;
++using CodexAgentSwitch.Infrastructure.ExternalProviders;
++
++namespace CodexAgentSwitch.Tests.ExternalProviders;
++
++public sealed class OpenAiCompatibleToolCallCodecTests
++{
++    [Fact]
++    public void Request_serializes_all_message_roles_tools_and_tool_call_id()
++    {
++        using var parameters = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}");
++        var request = new ExternalAgentChatRequest(
++            "model-1",
++            [
++                ExternalAgentMessage.System("You are concise."),
++                ExternalAgentMessage.User("Read the file."),
++                ExternalAgentMessage.Assistant(toolCalls: [new("call-1", "read_file", "{\"path\":\"a.txt\"}")]),
++                ExternalAgentMessage.Tool("call-1", "contents", "read_file"),
++            ],
++            [new ExternalAgentToolDefinition("read_file", parameters.RootElement.Clone(), "Read a file")]);
++
++        using var document = JsonDocument.Parse(OpenAiCompatibleToolCallCodec.SerializeRequest(request));
++        var root = document.RootElement;
++        Assert.Equal("model-1", root.GetProperty("model").GetString());
++        Assert.Equal("system", root.GetProperty("messages")[0].GetProperty("role").GetString());
++        Assert.Equal("call-1", root.GetProperty("messages")[2].GetProperty("tool_calls")[0].GetProperty("id").GetString());
++        Assert.Equal("call-1", root.GetProperty("messages")[3].GetProperty("tool_call_id").GetString());
++        Assert.Equal("read_file", root.GetProperty("tools")[0].GetProperty("function").GetProperty("name").GetString());
++    }
++
++    [Fact]
++    public void Response_parses_text_and_multiple_tool_calls_with_metadata()
++    {
++        using var document = JsonDocument.Parse("""
++            {"model":"model-response","choices":[{"finish_reason":"tool_calls","message":{"content":null,"tool_calls":[
++              {"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}},
++              {"id":"call-2","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"b.txt\"}"}}
++            ]}}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}
++            """);
++
++        var result = OpenAiCompatibleToolCallCodec.ParseResponse(document.RootElement, new Uri("https://provider.test/v1/chat/completions"));
++
++        Assert.Null(result.Content);
++        Assert.Equal(2, result.ToolCalls.Count);
++        Assert.Equal("call-2", result.ToolCalls[1].Id);
++        Assert.Equal("model-response", result.ResponseModel);
++        Assert.Equal(5, result.Usage?.TotalTokens);
++        Assert.Equal("tool_calls", result.FinishReason);
++        Assert.Equal("model-response", result.RawResponse.GetProperty("model").GetString());
++    }
++
++    [Theory]
++    [InlineData("{\"choices\":[]}")]
++    [InlineData("{\"choices\":[{\"message\":{\"tool_calls\":[{\"id\":\"missing-function\"}]}}]}")]
++    [InlineData("{\"choices\":[{\"message\":{\"tool_calls\":[{\"id\":\"call-1\",\"type\":\"custom\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{}\"}}]}}]}")]
++    [InlineData("{\"choices\":[{\"message\":{}}]}")]
++    public void Missing_or_malformed_fields_raise_explicit_protocol_error(string json)
++    {
++        using var document = JsonDocument.Parse(json);
++
++        var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
++            OpenAiCompatibleToolCallCodec.ParseResponse(document.RootElement, new Uri("https://provider.test/chat/completions")));
++
++        Assert.NotEmpty(exception.Message);
++    }
++}

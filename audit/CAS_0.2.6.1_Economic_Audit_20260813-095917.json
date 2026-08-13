@@ -1,0 +1,156 @@
+﻿{
+    "GeneratedAt":  "2026-08-13T09:59:19.1924649+08:00",
+    "Repo":  "E:\\AISPace\\主模型项目区\\state\\worktrees\\cas-026-impl",
+    "SessionsRoot":  "E:\\AI\\CODEX\\.codex\\sessions\\2026\\08\\13",
+    "BaseRef":  "v0.2.6",
+    "Round1Ref":  "a381a04",
+    "FinalRef":  "v0.2.6.1",
+    "Windows":  {
+                    "R1":  "08/13/2026 08:33:00 -\u003e 08/13/2026 09:00:00",
+                    "R2":  "08/13/2026 09:00:00 -\u003e 08/13/2026 09:30:00"
+                },
+    "RelevantSessions":  [
+                             {
+                                 "File":  "E:\\AI\\CODEX\\.codex\\sessions\\2026\\08\\13\\rollout-2026-08-13T08-36-34-019ff88c-a328-7620-99f4-025eb1c8aa6b.jsonl",
+                                 "Name":  "rollout-2026-08-13T08-36-34-019ff88c-a328-7620-99f4-025eb1c8aa6b.jsonl",
+                                 "Model":  "gpt-5.6-sol",
+                                 "Start":  "\/Date(1786581404446)\/",
+                                 "End":  "\/Date(1786584261943)\/",
+                                 "RelevantByText":  true
+                             },
+                             {
+                                 "File":  "E:\\AI\\CODEX\\.codex\\sessions\\2026\\08\\13\\rollout-2026-08-13T08-39-15-019ff88f-1b03-7f42-b745-a60866c9d07b.jsonl",
+                                 "Name":  "rollout-2026-08-13T08-39-15-019ff88f-1b03-7f42-b745-a60866c9d07b.jsonl",
+                                 "Model":  "gpt-5.6-luna",
+                                 "Start":  "\/Date(1786581556233)\/",
+                                 "End":  "\/Date(1786582207184)\/",
+                                 "RelevantByText":  true
+                             },
+                             {
+                                 "File":  "E:\\AI\\CODEX\\.codex\\sessions\\2026\\08\\13\\rollout-2026-08-13T09-00-34-019ff8a2-9d6b-7e53-ae9e-99a6d5c7e1e6.jsonl",
+                                 "Name":  "rollout-2026-08-13T09-00-34-019ff8a2-9d6b-7e53-ae9e-99a6d5c7e1e6.jsonl",
+                                 "Model":  "gpt-5.6-luna",
+                                 "Start":  "\/Date(1786582834855)\/",
+                                 "End":  "\/Date(1786583493028)\/",
+                                 "RelevantByText":  true
+                             }
+                         ],
+    "Cost":  [
+                 {
+                     "Round":  "R1",
+                     "SolActual":  70.65,
+                     "LunaActual":  19.09,
+                     "ActualCost":  89.74,
+                     "LunaSolEquivalent":  95.46,
+                     "AllSolEquivalent":  166.11,
+                     "SolDisplacementPct":  57.5,
+                     "SavingPct":  46
+                 },
+                 {
+                     "Round":  "R2",
+                     "SolActual":  181.36,
+                     "LunaActual":  18.54,
+                     "ActualCost":  199.9,
+                     "LunaSolEquivalent":  92.7,
+                     "AllSolEquivalent":  274.06,
+                     "SolDisplacementPct":  33.8,
+                     "SavingPct":  27.1
+                 },
+                 {
+                     "Round":  "TOTAL",
+                     "SolActual":  252.01,
+                     "LunaActual":  37.63,
+                     "ActualCost":  289.64,
+                     "LunaSolEquivalent":  188.16,
+                     "AllSolEquivalent":  440.17,
+                     "SolDisplacementPct":  42.7,
+                     "SavingPct":  34.2
+                 }
+             ],
+    "PaidPointsObserved":  [
+                               {
+                                   "Round":  "R1",
+                                   "BalanceEvents":  121,
+                                   "ObservedDecrease":  34.351281,
+                                   "ObservedIncrease":  0,
+                                   "TopupOrStaleBalanceDetected":  false
+                               },
+                               {
+                                   "Round":  "R2",
+                                   "BalanceEvents":  151,
+                                   "ObservedDecrease":  155.246304,
+                                   "ObservedIncrease":  27.210875,
+                                   "TopupOrStaleBalanceDetected":  true
+                               }
+                           ],
+    "DelegationCoverage":  [
+                               {
+                                   "Round":  "R1",
+                                   "ChangedDevFiles":  5,
+                                   "WorkerTouchedDevFiles":  2,
+                                   "DevFileCoveragePct":  40,
+                                   "ChangedDevLines":  231,
+                                   "WorkerFootprintDevLines":  144,
+                                   "DevLineCoveragePct":  62.3,
+                                   "ChangedCoreFiles":  4,
+                                   "WorkerTouchedCoreFiles":  1,
+                                   "CoreFileCoveragePct":  25,
+                                   "ChangedCoreLines":  162,
+                                   "WorkerFootprintCoreLines":  75,
+                                   "CoreLineCoveragePct":  46.3,
+                                   "CoverageConfidence":  "Medium-High"
+                               },
+                               {
+                                   "Round":  "R2",
+                                   "ChangedDevFiles":  18,
+                                   "WorkerTouchedDevFiles":  2,
+                                   "DevFileCoveragePct":  11.1,
+                                   "ChangedDevLines":  642,
+                                   "WorkerFootprintDevLines":  142,
+                                   "DevLineCoveragePct":  22.1,
+                                   "ChangedCoreFiles":  13,
+                                   "WorkerTouchedCoreFiles":  1,
+                                   "CoreFileCoveragePct":  7.7,
+                                   "ChangedCoreLines":  324,
+                                   "WorkerFootprintCoreLines":  35,
+                                   "CoreLineCoveragePct":  10.8,
+                                   "CoverageConfidence":  "Medium-High"
+                               }
+                           ],
+    "AdoptionEfficiency":  [
+                               {
+                                   "Round":  "R1",
+                                   "WorkerTouchedFiles":  2,
+                                   "RetainedFiles":  2,
+                                   "RetentionPct":  100,
+                                   "DirectAdoptFiles":  0,
+                                   "DirectAdoptionPct":  0,
+                                   "MainAdjustedFiles":  2,
+                                   "MainAdjustedPct":  100,
+                                   "RevertedFiles":  0,
+                                   "RevertedPct":  0,
+                                   "AdoptionConfidence":  "Medium"
+                               },
+                               {
+                                   "Round":  "R2",
+                                   "WorkerTouchedFiles":  2,
+                                   "RetainedFiles":  2,
+                                   "RetentionPct":  100,
+                                   "DirectAdoptFiles":  0,
+                                   "DirectAdoptionPct":  0,
+                                   "MainAdjustedFiles":  2,
+                                   "MainAdjustedPct":  100,
+                                   "RevertedFiles":  0,
+                                   "RevertedPct":  0,
+                                   "AdoptionConfidence":  "Medium"
+                               }
+                           ],
+    "R2ContinuationTaxProxy":  5.16,
+    "Notes":  [
+                  "ActualCost / SolDisplacement are token-price accounting metrics.",
+                  "Paid point balance is account-level evidence and is not assumed to equal normalized cost.",
+                  "DelegationCoverage is a mechanical Git footprint proxy, not semantic workload percentage.",
+                  "AdoptionEfficiency is a retention/direct-adjustment proxy; MainAdjusted does not mean Worker failure.",
+                  "R2ContinuationTaxProxy is Sol cost before first observed R2 Luna token event; it is only a relocalization proxy."
+              ]
+}
