@@ -4,6 +4,159 @@ namespace CodexAgentSwitch.Tests.Usage;
 
 public sealed class CodexSessionUsageSourceTests
 {
+    [Theory]
+    [InlineData("258400", 258400L)]
+    [InlineData("null", null)]
+    [InlineData("\"258400\"", null)]
+    [InlineData("{}", null)]
+    [InlineData("[]", null)]
+    [InlineData("true", null)]
+    public void Model_context_window_accepts_only_json_numbers(string value, long? expected)
+    {
+        var root = CreateTestDirectory("context-window");
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "session.jsonl"),
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s\",\"cwd\":\"E:/p\",\"source\":\"vscode\"}}\n" +
+                "{\"type\":\"event_msg\",\"payload\":{\"info\":{\"model_context_window\":" + value + ",\"last_token_usage\":{\"input_tokens\":10}}}}\n");
+
+            var record = Assert.Single(new CodexSessionUsageSource(root).Read());
+            Assert.Equal(expected, record.ContextWindowTokens);
+            Assert.Equal(10, record.LatestInputTokens);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Missing_model_context_window_is_no_value_and_other_usage_is_preserved()
+    {
+        var root = CreateTestDirectory("missing-context-window");
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "session.jsonl"), """
+{"type":"session_meta","payload":{"id":"s","cwd":"E:/p","source":"vscode"}}
+{"type":"event_msg","payload":{"info":{"last_token_usage":{"input_tokens":10,"output_tokens":2}}}}
+""");
+
+            var record = Assert.Single(new CodexSessionUsageSource(root).Read());
+            Assert.Null(record.ContextWindowTokens);
+            Assert.Equal(10, record.InputTokens);
+            Assert.Equal(2, record.OutputTokens);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Nullable_and_wrong_type_token_fields_are_ignored_without_losing_valid_fields()
+    {
+        var root = CreateTestDirectory("nullable-tokens");
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "session.jsonl"), """
+{"type":"session_meta","payload":{"id":"s","cwd":"E:/p","source":"vscode"}}
+{"type":"event_msg","payload":{"info":{"last_token_usage":{"input_tokens":12,"cached_input_tokens":null,"output_tokens":"4","reasoning_tokens":{},"total_tokens":[]}}}}
+{"type":"event_msg","payload":{"nested":{"model_context_window":{},"last_token_usage":{"input_tokens":8,"cached_input_tokens":3,"output_tokens":2,"reasoning_tokens":true,"total_tokens":10}}}}
+""");
+
+            var record = Assert.Single(new CodexSessionUsageSource(root).Read());
+            Assert.Equal(20, record.InputTokens);
+            Assert.Equal(3, record.CachedInputTokens);
+            Assert.Equal(2, record.OutputTokens);
+            Assert.Equal(0, record.ReasoningTokens);
+            Assert.Equal(22, record.TotalTokens);
+            Assert.Null(record.ContextWindowTokens);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Bad_event_is_skipped_and_later_good_event_is_read_with_sanitized_diagnostic()
+    {
+        var root = CreateTestDirectory("bad-event");
+        var diagnostics = Path.Combine(CreateTestDirectory("bad-event-diagnostics"), "usage.jsonl");
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "session.jsonl"), """
+{"type":"session_meta","payload":{"id":"s","cwd":"E:/p","source":"vscode"}}
+not-json TOP-SECRET-PROMPT
+{"type":"event_msg","payload":{"info":{"last_token_usage":{"input_tokens":17,"output_tokens":3}}}}
+""");
+
+            var source = new CodexSessionUsageSource(root, diagnostics);
+            var record = Assert.Single(source.Read());
+
+            Assert.Equal(17, record.LatestInputTokens);
+            Assert.Equal(1, source.LastScanMetrics.EventsSkipped);
+            Assert.Equal(0, source.LastScanMetrics.FilesFailed);
+            Assert.Equal(1, source.LastScanMetrics.RecordsProduced);
+            var diagnostic = File.ReadAllText(diagnostics);
+            Assert.Contains("event-parse", diagnostic);
+            Assert.Contains("\"lineIndex\":2", diagnostic);
+            Assert.Contains("JsonReaderException", diagnostic);
+            Assert.DoesNotContain("TOP-SECRET-PROMPT", diagnostic);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+            Directory.Delete(Path.GetDirectoryName(diagnostics)!, true);
+        }
+    }
+
+    [Fact]
+    public void Bad_old_session_does_not_hide_good_current_session()
+    {
+        var root = CreateTestDirectory("bad-old-good-current");
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "old.jsonl"), """
+{"type":"session_meta","payload":{"id":"old","cwd":"E:/old","source":"vscode"}}
+not-json old-session-content
+""");
+            File.WriteAllText(Path.Combine(root, "current.jsonl"), """
+{"type":"session_meta","payload":{"id":"current","cwd":"E:/current","source":"vscode"}}
+{"type":"event_msg","payload":{"info":{"last_token_usage":{"input_tokens":23}}}}
+""");
+
+            var source = new CodexSessionUsageSource(root);
+            var current = Assert.Single(source.Read(), item => item.SessionId == "current");
+
+            Assert.Equal(23, current.LatestInputTokens);
+            Assert.Equal(1, source.LastScanMetrics.EventsSkipped);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Unreadable_file_does_not_prevent_other_files_from_being_scanned()
+    {
+        var root = CreateTestDirectory("bad-file-good-file");
+        var diagnostics = Path.Combine(CreateTestDirectory("bad-file-diagnostics"), "usage.jsonl");
+        try
+        {
+            var badPath = Path.Combine(root, "locked.jsonl");
+            File.WriteAllText(badPath, "locked");
+            File.WriteAllText(Path.Combine(root, "good.jsonl"), """
+{"type":"session_meta","payload":{"id":"good","cwd":"E:/good","source":"vscode"}}
+{"type":"event_msg","payload":{"info":{"last_token_usage":{"input_tokens":31}}}}
+""");
+
+            using var locked = new FileStream(badPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            var source = new CodexSessionUsageSource(root, diagnostics);
+            var good = Assert.Single(source.Read(), item => item.SessionId == "good");
+
+            Assert.Equal(31, good.LatestInputTokens);
+            Assert.Equal(2, source.LastScanMetrics.FilesScanned);
+            Assert.Equal(1, source.LastScanMetrics.FilesFailed);
+            Assert.Equal(1, source.LastScanMetrics.RecordsProduced);
+            Assert.Contains("file-read", File.ReadAllText(diagnostics));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+            Directory.Delete(Path.GetDirectoryName(diagnostics)!, true);
+        }
+    }
+
     [Fact]
     public void Session_source_falls_back_to_root_and_later_lifecycle_payloads()
     {
@@ -104,5 +257,14 @@ bad json
             Assert.Equal(4, record.Calls);
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static string CreateTestDirectory(string name)
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"usage-source-{name}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        return root;
     }
 }

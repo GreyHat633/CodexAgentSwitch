@@ -10,6 +10,18 @@ namespace CodexAgentSwitch.Tests.CodexAppServer;
 public sealed class CodexMainAgentSessionContextTests
 {
     [Fact]
+    public void App_server_initialization_opts_into_the_experimental_resume_contract()
+    {
+        var method = typeof(CodexAppServerClient).GetMethod(
+            "CreateInitializationParameters",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+        var parameters = JsonSerializer.SerializeToElement(method.Invoke(null, null));
+
+        Assert.Equal("codex-agent-switch", parameters.GetProperty("clientInfo").GetProperty("name").GetString());
+        Assert.True(parameters.GetProperty("capabilities").GetProperty("experimentalApi").GetBoolean());
+    }
+
+    [Fact]
     public async Task Compact_uses_exact_native_rpc_and_emits_context_compaction_events_without_turn_registration()
     {
         var calls = new List<(string Method, JsonElement Parameters)>();

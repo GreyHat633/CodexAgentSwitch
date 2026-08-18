@@ -57,19 +57,24 @@ public sealed class CodexAppServerClient(CodexCommand command) : IAsyncDisposabl
 
         await _session.SendRequestAsync(
             "initialize",
-            new
-            {
-                clientInfo = new
-                {
-                    name = "codex-agent-switch",
-                    title = "Codex Agent Switch",
-                    version = typeof(CodexAppServerClient).Assembly.GetName().Version?.ToString(3) ?? "unknown",
-                },
-                capabilities = (object?)null,
-            },
+            CreateInitializationParameters(),
             cancellationToken);
         await _session.SendNotificationAsync("initialized", cancellationToken: cancellationToken);
     }
+
+    private static object CreateInitializationParameters() => new
+    {
+        clientInfo = new
+        {
+            name = "codex-agent-switch",
+            title = "Codex Agent Switch",
+            version = typeof(CodexAppServerClient).Assembly.GetName().Version?.ToString(3) ?? "unknown",
+        },
+        // BindExistingThreadAsync resumes persisted vscode threads without
+        // hydrating all turns. app-server gates excludeTurns behind this
+        // explicit capability.
+        capabilities = new { experimentalApi = true },
+    };
 
     public async Task<JsonElement> RequestAsync(string method, object? parameters, CancellationToken cancellationToken = default)
     {

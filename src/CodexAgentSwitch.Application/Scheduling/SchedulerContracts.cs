@@ -103,7 +103,15 @@ public sealed record ContextEconomyRuntimeDiagnostics(
     DateTimeOffset? StructuredCompactedAt,
     CompactionEffectiveness? Effectiveness,
     int CooldownRemaining,
-    string Reason);
+    string Reason,
+    bool? BindingAccepted = null,
+    bool? TelemetryAvailable = null,
+    long? LatestInputTokens = null,
+    long? ContextWindowTokens = null,
+    decimal? CurrentPressure = null,
+    DateTimeOffset? LastBoundaryAt = null,
+    bool? CompactionRequested = null,
+    bool? CompactionSucceeded = null);
 
 public interface ISchedulerTaskRepository
 {

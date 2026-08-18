@@ -53,7 +53,7 @@ while (await Console.In.ReadLineAsync() is { } line)
                         ? requestedProtocol.GetString() ?? "2025-06-18"
                         : "2025-06-18",
                 capabilities = new { tools = new { listChanged = false } },
-                serverInfo = new { name = "codex-agent-switch", version = "0.2.6.2" },
+                serverInfo = new { name = "codex-agent-switch", version = "0.2.6.3" },
             },
             "ping" => new { },
             "tools/list" => ListTools(),
@@ -88,13 +88,17 @@ static async Task RunStopHookAsync(string pipeName)
 {
     var line = await Console.In.ReadLineAsync();
     if (string.IsNullOrWhiteSpace(line)) return;
+    var sessionId = string.Empty;
+    var cwd = Environment.CurrentDirectory;
+    var stage = "parse-input";
     try
     {
         using var document = JsonDocument.Parse(line);
         var root = document.RootElement;
-        var sessionId = ReadJsonString(root, "session_id") ?? ReadJsonString(root, "sessionId") ?? string.Empty;
-        var cwd = ReadJsonString(root, "cwd") ?? ReadJsonString(root, "workingDirectory") ?? Environment.CurrentDirectory;
-        await SendAsync(pipeName, "mainContextBoundary", new
+        sessionId = ReadJsonString(root, "session_id") ?? ReadJsonString(root, "sessionId") ?? string.Empty;
+        cwd = ReadJsonString(root, "cwd") ?? ReadJsonString(root, "workingDirectory") ?? Environment.CurrentDirectory;
+        stage = "scheduler-send";
+        var result = await SendAsync(pipeName, "mainContextBoundary", new
         {
             sessionId,
             threadId = sessionId,
@@ -102,14 +106,81 @@ static async Task RunStopHookAsync(string pipeName)
             source = "vscode",
             boundary = "stop",
         });
+        var bindingAccepted = ReadJsonBool(result, "bindingAccepted");
+        var compactionRequested = ReadJsonBool(result, "compactionRequested");
+        var compactionSucceeded = ReadJsonBool(result, "compactionSucceeded");
+        if (bindingAccepted == false || compactionRequested == true || compactionSucceeded == true)
+            WriteStopHookDiagnostic(pipeName, sessionId, cwd, "scheduler-result", null, result);
     }
-    catch
+    catch (Exception exception)
     {
-        // Context economy is protective telemetry. A failed Stop hook must not
-        // trap the completed Main turn or cause a recursive stop loop.
+        WriteStopHookDiagnostic(pipeName, sessionId, cwd, stage, exception);
     }
 
     await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = "Stop" } });
+}
+
+static void WriteStopHookDiagnostic(
+    string pipeName,
+    string sessionId,
+    string workingDirectory,
+    string stage,
+    Exception? exception,
+    JsonElement? result = null)
+{
+    try
+    {
+        var dataRoot = Environment.GetEnvironmentVariable("CAS_DATA_ROOT");
+        if (string.IsNullOrWhiteSpace(dataRoot)) dataRoot = Path.Combine(AppContext.BaseDirectory, "data");
+        var logsDirectory = Path.Combine(Path.GetFullPath(dataRoot), "logs");
+        Directory.CreateDirectory(logsDirectory);
+        var path = Path.Combine(logsDirectory, "context-economy-stop-hook.jsonl");
+        var boundary = result.GetValueOrDefault();
+        var record = new Dictionary<string, object?>
+        {
+            ["Timestamp"] = DateTimeOffset.UtcNow,
+            ["Hook"] = "Stop",
+            ["SessionId"] = sessionId,
+            ["WorkingDirectory"] = workingDirectory,
+            ["PipeName"] = pipeName,
+            ["Stage"] = stage,
+            ["ExceptionType"] = exception?.GetType().Name,
+            ["Message"] = SanitizeDiagnosticMessage(exception?.Message ?? ReadJsonString(boundary, "reason")),
+            ["BindingAccepted"] = ReadJsonBool(boundary, "bindingAccepted"),
+            ["TelemetryAvailable"] = ReadJsonBool(boundary, "telemetryAvailable"),
+            ["State"] = ReadJsonScalar(boundary, "state"),
+            ["Reason"] = SanitizeDiagnosticMessage(ReadJsonString(boundary, "reason")),
+            ["CompactionRequested"] = ReadJsonBool(boundary, "compactionRequested"),
+            ["CompactionSucceeded"] = ReadJsonBool(boundary, "compactionSucceeded"),
+        };
+        using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+        using var output = new StreamWriter(stream, new UTF8Encoding(false));
+        output.WriteLine(JsonSerializer.Serialize(record));
+    }
+    catch
+    {
+        // Diagnostics are best-effort; Stop must remain fail-open even if logging fails.
+    }
+}
+
+static bool? ReadJsonBool(JsonElement element, string name) =>
+    element.ValueKind == JsonValueKind.Object
+    && element.TryGetProperty(name, out var value)
+    && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+        ? value.GetBoolean()
+        : null;
+
+static string? ReadJsonScalar(JsonElement element, string name)
+{
+    if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(name, out var value)) return null;
+    return value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
+}
+
+static string? SanitizeDiagnosticMessage(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value)) return null;
+    var sanitized = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+    return sanitized.Length <= 512 ? sanitized : sanitized[..512];
 }
 
 static async Task RunPreToolUseHookAsync(string pipeName)
@@ -160,7 +231,11 @@ static async Task RunPreToolUseHookAsync(string pipeName)
 }
 
 static string? ReadJsonString(JsonElement element, string name) =>
-    element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    element.ValueKind == JsonValueKind.Object
+    && element.TryGetProperty(name, out var value)
+    && value.ValueKind == JsonValueKind.String
+        ? value.GetString()
+        : null;
 
 static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
 {

@@ -585,18 +585,20 @@ public sealed class WorkerScheduler(
         CancellationToken cancellationToken = default)
     {
         if (contextRuntime is null || contextEconomy is null || usageSource is null)
-            return BoundaryFailure(request.ThreadId, "Context economy runtime is unavailable.");
+            return RecordBoundary(BoundaryFailure(request.ThreadId, "Context economy runtime is unavailable."));
         if (string.IsNullOrWhiteSpace(request.ThreadId)
             || !string.Equals(request.ThreadId, request.SessionId, StringComparison.Ordinal)
             || !string.Equals(request.Source, "vscode", StringComparison.OrdinalIgnoreCase)
             || !string.Equals(request.Boundary, "stop", StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(request.WorkingDirectory))
-            return BoundaryFailure(request.ThreadId, "The explicit source=vscode Stop binding is missing or inconsistent.");
-        if (tasks.Values.Any(item => item.State is DelegationState.ResultPending or DelegationState.ResultReceived
-            or DelegationState.Blocked or DelegationState.Reviewing))
-            return BoundaryFailure(request.ThreadId, "A Worker terminal result still requires Main review; compaction boundary deferred.");
-
+            return RecordBoundary(BoundaryFailure(request.ThreadId, "The explicit source=vscode Stop binding is missing or inconsistent."));
         var cwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
+        if (tasks.Values.Any(item =>
+            string.Equals(WorkPackageLease.NormalizePath(item.Packet.WorkingDirectory), cwd, StringComparison.OrdinalIgnoreCase)
+            && item.State is DelegationState.ResultPending or DelegationState.ResultReceived
+                or DelegationState.Blocked or DelegationState.Reviewing))
+            return RecordBoundary(BoundaryFailure(request.ThreadId, "A Worker terminal result still requires Main review; compaction boundary deferred."));
+
         var usage = usageSource.Read(cancellationToken)
             .Where(item => string.Equals(item.SessionId, request.SessionId, StringComparison.Ordinal)
                 && string.Equals(item.SessionSource, "vscode", StringComparison.OrdinalIgnoreCase)
@@ -604,8 +606,8 @@ public sealed class WorkerScheduler(
             .OrderByDescending(item => item.EndedAt ?? item.StartedAt)
             .FirstOrDefault();
         if (usage?.LatestInputTokens is null)
-            return new(request.ThreadId, false, false, ContextEconomyState.Idle, false, false,
-                "No exact source=vscode usage sample is available for this thread and cwd.");
+            return RecordBoundary(new(request.ThreadId, false, false, ContextEconomyState.Idle, false, false,
+                "No exact source=vscode usage sample is available for this thread and cwd."));
 
         try
         {
@@ -642,16 +644,7 @@ public sealed class WorkerScheduler(
                 safeBoundary: true,
                 cancellationToken);
             var current = await contextEconomy.GetSnapshotAsync(request.ThreadId, cancellationToken);
-            if (current is not null)
-            {
-                lastContextEconomy = new(
-                    current.ThreadId, current.State, current.LastCompactionTrigger,
-                    current.PreCompactionPressure, current.PreCompactionInput,
-                    current.PostCompactionPressure, current.PostCompactionInput,
-                    current.StructuredCompactedAt, current.LastEffectiveness?.Classification,
-                    current.CooldownRemaining, current.LastReason ?? observation.Decision.Reason);
-            }
-            return new(
+            var result = new MainContextBoundaryResult(
                 request.ThreadId,
                 true,
                 true,
@@ -659,15 +652,46 @@ public sealed class WorkerScheduler(
                 observation.CompactionRequested,
                 observation.Compaction?.Succeeded == true,
                 observation.Compaction?.Reason ?? observation.Decision.Reason);
+            return RecordBoundary(result, usage, current, observation);
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            return BoundaryFailure(request.ThreadId, exception.Message);
+            return RecordBoundary(BoundaryFailure(request.ThreadId, exception.Message), usage);
         }
     }
 
     private static MainContextBoundaryResult BoundaryFailure(string threadId, string reason) =>
         new(threadId ?? string.Empty, false, false, ContextEconomyState.ContextProtectionBlocked, false, false, reason);
+
+    private MainContextBoundaryResult RecordBoundary(
+        MainContextBoundaryResult result,
+        NativeUsageRecord? usage = null,
+        ContextEconomySnapshot? snapshot = null,
+        ContextEconomyObservationResult? observation = null)
+    {
+        var latest = snapshot?.Samples.LastOrDefault();
+        lastContextEconomy = new(
+            result.ThreadId,
+            result.State,
+            snapshot?.LastCompactionTrigger ?? CompactionTrigger.Unknown,
+            snapshot?.PreCompactionPressure,
+            snapshot?.PreCompactionInput,
+            snapshot?.PostCompactionPressure,
+            snapshot?.PostCompactionInput,
+            snapshot?.StructuredCompactedAt,
+            snapshot?.LastEffectiveness?.Classification,
+            snapshot?.CooldownRemaining ?? 0,
+            result.Reason,
+            result.BindingAccepted,
+            result.TelemetryAvailable,
+            usage?.LatestInputTokens ?? latest?.NativeInputTokens ?? latest?.InputTokens,
+            usage?.ContextWindowTokens ?? latest?.ContextWindowTokens,
+            observation?.Decision.Telemetry.Pressure,
+            clock.UtcNow,
+            result.CompactionRequested,
+            result.CompactionSucceeded);
+        return result;
+    }
 
     private static IReadOnlyList<ContextTurnSample>? BuildPreCompactionSamples(NativeUsageRecord usage, DateTimeOffset compactedAt)
     {

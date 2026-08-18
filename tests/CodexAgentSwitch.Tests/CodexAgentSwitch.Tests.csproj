@@ -18,5 +18,6 @@
     <ProjectReference Include="..\..\src\CodexAgentSwitch.Application\CodexAgentSwitch.Application.csproj" />
     <ProjectReference Include="..\..\src\CodexAgentSwitch.Infrastructure\CodexAgentSwitch.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\CodexAgentSwitch.Setup\CodexAgentSwitch.Setup.csproj" />
+    <ProjectReference Include="..\..\src\CodexAgentSwitch.ToolHost\CodexAgentSwitch.ToolHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

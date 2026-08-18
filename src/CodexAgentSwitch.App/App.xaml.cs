@@ -71,7 +71,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<JsonlContinuationCorrelationSink>();
         services.AddSingleton<IContinuationCorrelationSink>(provider => provider.GetRequiredService<JsonlContinuationCorrelationSink>());
         services.AddSingleton<ContinuationCorrelationTracker>();
-        services.AddSingleton<IUsageSource, CodexSessionUsageSource>();
+        services.AddSingleton<IUsageSource>(_ => new CodexSessionUsageSource(
+            diagnosticPath: Path.Combine(paths.LogsDirectory, "context-economy-usage.jsonl")));
         services.AddSingleton<MainCostGuardCoordinator>();
         services.AddSingleton(new ContextEconomyOptions());
         services.AddSingleton<IMainContextEconomyStateStore, SqliteMainContextEconomyStateStore>();
