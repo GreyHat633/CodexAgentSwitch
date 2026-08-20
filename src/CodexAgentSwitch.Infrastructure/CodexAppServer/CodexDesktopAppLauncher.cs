@@ -594,19 +594,17 @@ public sealed class CodexDesktopAppLauncher(
         root["hooks"] = hooks;
         var preToolUse = hooks["PreToolUse"] as JsonArray ?? new JsonArray();
         hooks["PreToolUse"] = preToolUse;
-        for (var index = preToolUse.Count - 1; index >= 0; index--)
-        {
-            if (IsManagedHookGroup(preToolUse[index])) preToolUse.RemoveAt(index);
-        }
+        RemoveManagedHookHandlers(preToolUse);
+        var postToolUse = hooks["PostToolUse"] as JsonArray ?? new JsonArray();
+        hooks["PostToolUse"] = postToolUse;
+        RemoveManagedHookHandlers(postToolUse);
         var stop = hooks["Stop"] as JsonArray ?? new JsonArray();
         hooks["Stop"] = stop;
-        for (var index = stop.Count - 1; index >= 0; index--)
-        {
-            if (IsManagedHookGroup(stop[index])) stop.RemoveAt(index);
-        }
+        RemoveManagedHookHandlers(stop);
         if (!enabled)
         {
             if (preToolUse.Count == 0) hooks.Remove("PreToolUse");
+            if (postToolUse.Count == 0) hooks.Remove("PostToolUse");
             if (stop.Count == 0) hooks.Remove("Stop");
             if (hooks.Count == 0) root.Remove("hooks");
             return root.Count == 0 ? null : root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
@@ -614,6 +612,7 @@ public sealed class CodexDesktopAppLauncher(
 
         var command = Path.Combine(AppContext.BaseDirectory, "ToolHost", "CodexAgentSwitch.ToolHost.exe");
         var preToolUseCommand = $"\"{command}\" --hook pre-tool-use --pipe {SchedulerEndpoint.PipeName}";
+        var postToolUseCommand = $"\"{command}\" --hook post-tool-use --pipe {SchedulerEndpoint.PipeName}";
         var stopCommand = $"\"{command}\" --hook stop --pipe {SchedulerEndpoint.PipeName}";
         var managed = new JsonObject
         {
@@ -629,6 +628,19 @@ public sealed class CodexDesktopAppLauncher(
             },
         };
         preToolUse.Add(managed);
+        postToolUse.Add(new JsonObject
+        {
+            ["matcher"] = "apply_patch|Edit|Write",
+            ["hooks"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["type"] = "command",
+                    ["command"] = postToolUseCommand,
+                    ["commandWindows"] = postToolUseCommand,
+                },
+            },
+        });
         stop.Add(new JsonObject
         {
             ["hooks"] = new JsonArray
@@ -645,12 +657,24 @@ public sealed class CodexDesktopAppLauncher(
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
-    private static bool IsManagedHookGroup(JsonNode? node)
+    private static void RemoveManagedHookHandlers(JsonArray groups)
     {
-        if (node is JsonObject direct && IsManagedHookHandler(direct))
-            return true;
-        if (node is not JsonObject group || group["hooks"] is not JsonArray handlers) return false;
-        return handlers.OfType<JsonObject>().Any(IsManagedHookHandler);
+        for (var groupIndex = groups.Count - 1; groupIndex >= 0; groupIndex--)
+        {
+            if (groups[groupIndex] is not JsonObject group) continue;
+            if (IsManagedHookHandler(group))
+            {
+                groups.RemoveAt(groupIndex);
+                continue;
+            }
+            if (group["hooks"] is not JsonArray handlers) continue;
+            for (var handlerIndex = handlers.Count - 1; handlerIndex >= 0; handlerIndex--)
+            {
+                if (handlers[handlerIndex] is JsonObject handler && IsManagedHookHandler(handler))
+                    handlers.RemoveAt(handlerIndex);
+            }
+            if (handlers.Count == 0) groups.RemoveAt(groupIndex);
+        }
     }
 
     private static bool IsManagedHookHandler(JsonObject handler) =>
@@ -683,6 +707,7 @@ public sealed class CodexDesktopAppLauncher(
 
         return string.Equals(Path.GetFileName(executable), "CodexAgentSwitch.ToolHost.exe", StringComparison.OrdinalIgnoreCase)
             && (HasArgumentPair(arguments, "--hook", "pre-tool-use")
+                || HasArgumentPair(arguments, "--hook", "post-tool-use")
                 || HasArgumentPair(arguments, "--hook", "stop"));
     }
 

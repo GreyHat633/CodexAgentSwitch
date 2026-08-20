@@ -100,7 +100,21 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
                         payload.GetProperty("toolName").GetString() ?? string.Empty,
                         payload.TryGetProperty("toolInput", out var toolInput)
                             ? toolInput.ValueKind == JsonValueKind.String ? toolInput.GetString() : toolInput.GetRawText()
-                            : null), cancellationToken),
+                            : null,
+                        ReadOptionalString(payload, "turnId"),
+                        ReadOptionalString(payload, "agentId"),
+                        ReadOptionalString(payload, "agentType"),
+                        ReadOptionalString(payload, "toolUseId")), cancellationToken),
+                    "postToolUse" => await scheduler.ObservePostToolUseAsync(new PostToolUseRequest(
+                        payload.GetProperty("sessionId").GetString() ?? string.Empty,
+                        payload.GetProperty("workingDirectory").GetString() ?? string.Empty,
+                        payload.GetProperty("toolName").GetString() ?? string.Empty,
+                        ReadOptionalString(payload, "toolInput"),
+                        ReadOptionalString(payload, "toolResponse"),
+                        ReadOptionalString(payload, "turnId"),
+                        ReadOptionalString(payload, "agentId"),
+                        ReadOptionalString(payload, "agentType"),
+                        ReadOptionalString(payload, "toolUseId")), cancellationToken),
                     "mainContextBoundary" => await scheduler.ObserveMainContextBoundaryAsync(
                         payload.Deserialize<MainContextBoundaryRequest>(JsonOptions)
                             ?? throw new InvalidDataException("MainContextBoundaryRequest invalid."),
@@ -113,6 +127,7 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
                         payload.GetProperty("taskGroupId").GetString() ?? string.Empty,
                         cancellationToken),
                     "status" => scheduler.Snapshot,
+                    "runtimeDiagnostics" => await scheduler.GetRuntimeDiagnosticsAsync(cancellationToken),
                     _ => throw new InvalidOperationException($"未知 Scheduler IPC 方法：{method}"),
                 };
                 await writer.WriteLineAsync(JsonSerializer.Serialize(new { ok = true, result }, JsonOptions));
@@ -163,4 +178,9 @@ public sealed class SchedulerIpcServer(IWorkerScheduler scheduler, string? pipeN
             ? parsed
             : throw new InvalidDataException($"{name} is invalid.");
     }
+
+    private static string? ReadOptionalString(JsonElement payload, string name) =>
+        payload.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 }

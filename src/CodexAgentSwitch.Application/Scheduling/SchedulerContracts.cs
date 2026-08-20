@@ -56,7 +56,15 @@ public interface IWorkPackageLeaseRepository
     Task SaveAsync(WorkPackageLease lease, CancellationToken cancellationToken = default);
 }
 
-public sealed record PreToolUseRequest(string SessionId, string WorkingDirectory, string ToolName, string? ToolInput);
+public sealed record PreToolUseRequest(
+    string SessionId,
+    string WorkingDirectory,
+    string ToolName,
+    string? ToolInput,
+    string? TurnId = null,
+    string? AgentId = null,
+    string? AgentType = null,
+    string? ToolUseId = null);
 
 public sealed record PreToolUseResult(
     string SessionId,
@@ -65,7 +73,29 @@ public sealed record PreToolUseResult(
     string Classification,
     bool Allowed,
     bool RequiresSafetyPolicy,
-    string Reason);
+    string Reason,
+    bool ShadowEvaluated = false,
+    bool WouldDeny = false,
+    bool Denied = false,
+    string? WorkerTaskId = null,
+    IReadOnlyList<string>? TargetPaths = null);
+
+public sealed record PostToolUseRequest(
+    string SessionId,
+    string WorkingDirectory,
+    string ToolName,
+    string? ToolInput,
+    string? ToolResponse = null,
+    string? TurnId = null,
+    string? AgentId = null,
+    string? AgentType = null,
+    string? ToolUseId = null);
+
+public sealed record PostToolUseResult(
+    bool Recorded,
+    string Reason,
+    string? WorkerTaskId = null,
+    IReadOnlyList<string>? TouchedPaths = null);
 
 public sealed record MainContextBoundaryRequest(
     string SessionId,
@@ -90,7 +120,49 @@ public sealed record SchedulerRuntimeDiagnostics(
     string? WorkerIdentity,
     string? LastReason,
     int GuardHits,
-    ContextEconomyRuntimeDiagnostics? ContextEconomy = null);
+    ContextEconomyRuntimeDiagnostics? ContextEconomy = null,
+    HookRuntimeDiagnostics? Hooks = null);
+
+public sealed record HookRuntimeDiagnostics(
+    DateTimeOffset? PreToolUseLastSeen,
+    long PreToolUseSeenCount,
+    DateTimeOffset? PostToolUseLastSeen,
+    long PostToolUseSeenCount,
+    DateTimeOffset? StopLastSeen,
+    long StopSeenCount,
+    DateTimeOffset? ContextBoundaryLastSeen,
+    long ContextBoundarySeenCount,
+    bool ContextStateBound,
+    long? LastObservedInputTokens,
+    decimal? LastObservedPressure,
+    DateTimeOffset? LastCompactionRequestAt,
+    string? LastCompactionResult,
+    long HardGateShadowEvaluatedCount,
+    long HardGateWouldDenyCount,
+    long HardGateDeniedCount,
+    DateTimeOffset? HardGateLastWouldDenyAt,
+    DateTimeOffset? HardGateLastDenyAt,
+    HardGateEventDiagnostics? LastHardGateEvent);
+
+public sealed record HardGateEventDiagnostics(
+    DateTimeOffset Timestamp,
+    string ProjectId,
+    string SessionId,
+    string WorkerTaskId,
+    string LeaseId,
+    string WorkerState,
+    string OperationType,
+    IReadOnlyList<string> NormalizedTargetPaths,
+    DateTimeOffset FirstWorkerTouchTimestamp,
+    int WorkerTouchedPathCount,
+    bool ActorIsMain,
+    bool WorkerIsRunning,
+    bool OperationSupported,
+    bool TargetPathResolved,
+    bool TargetInWorkerTouchedPaths,
+    bool WouldDeny,
+    bool Denied,
+    string Mode);
 
 public sealed record ContextEconomyRuntimeDiagnostics(
     string ThreadId,
@@ -218,6 +290,8 @@ public interface IWorkerScheduler : IAsyncDisposable
         Task.FromException<IReadOnlyList<RepartitionTelemetry>>(new NotSupportedException("Repartition telemetry is not available on this scheduler."));
     Task<PreToolUseResult> EvaluatePreToolUseAsync(PreToolUseRequest request, CancellationToken cancellationToken = default) =>
         Task.FromException<PreToolUseResult>(new NotSupportedException("PreToolUse is not available on this scheduler."));
+    Task<PostToolUseResult> ObservePostToolUseAsync(PostToolUseRequest request, CancellationToken cancellationToken = default) =>
+        Task.FromException<PostToolUseResult>(new NotSupportedException("PostToolUse is not available on this scheduler."));
     Task<MainContextBoundaryResult> ObserveMainContextBoundaryAsync(
         MainContextBoundaryRequest request,
         CancellationToken cancellationToken = default) =>

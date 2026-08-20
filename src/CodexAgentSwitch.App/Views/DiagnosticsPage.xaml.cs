@@ -26,7 +26,11 @@ public sealed partial class DiagnosticsPage : Page
             var contextText = context is null
                 ? "Context Economy：暂无 source=vscode 边界遥测。"
                 : $"Context Economy：Thread {context.ThreadId}；状态 {context.State}；触发 {context.Trigger}；压缩前 {FormatPressure(context.PrePressure)} / Input {FormatLong(context.PreInput)}；压缩后 {FormatPressure(context.PostPressure)} / Input {FormatLong(context.PostInput)}；结构化时间 {context.StructuredCompactedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "无"}；效果 {context.Effectiveness?.ToString() ?? "待验证"}；冷却 {context.CooldownRemaining}。";
-            EconomyDiagnosticsText.Text = $"当前窗口额度 {runtime.Economy.CurrentWindowCredits:0.###} / 阈值 {runtime.Economy.CurrentThreshold:0.###}；退避阶段 {runtime.Economy.BackoffStage}；所有权 {LeaseStatusLabel(runtime.Ownership)}；包 {runtime.PackageId ?? "无"}；Worker {runtime.WorkerIdentity ?? "无"}；最后原因 {runtime.LastReason ?? "无"}；防护命中 {runtime.GuardHits}。\n{contextText}";
+            var hooks = runtime.Hooks;
+            var hookText = hooks is null
+                ? "Hooks：暂无生产事件。"
+                : $"Hooks：Pre {hooks.PreToolUseSeenCount}；Post {hooks.PostToolUseSeenCount}；Stop {hooks.StopSeenCount}；Boundary {hooks.ContextBoundarySeenCount}；Shadow {hooks.HardGateShadowEvaluatedCount}；WouldDeny {hooks.HardGateWouldDenyCount}；Denied {hooks.HardGateDeniedCount}；ContextBound {(hooks.ContextStateBound ? "是" : "否")}。";
+            EconomyDiagnosticsText.Text = $"当前窗口额度 {runtime.Economy.CurrentWindowCredits:0.###} / 阈值 {runtime.Economy.CurrentThreshold:0.###}；退避阶段 {runtime.Economy.BackoffStage}；所有权 {LeaseStatusLabel(runtime.Ownership)}；包 {runtime.PackageId ?? "无"}；Worker {runtime.WorkerIdentity ?? "无"}；最后原因 {runtime.LastReason ?? "无"}；防护命中 {runtime.GuardHits}。\n{hookText}\n{contextText}";
             var state = await App.Services.GetRequiredService<CodexRuntimeManager>().DetectAsync();
             CodexStatusText.Text = state.Installed ? "已检测" : "不可用";
             CodexDetailText.Text = state.Installed ? $"{state.Version}；应用服务器：{(state.AppServerRunning ? "运行中" : "未启动")}。" : state.Message;

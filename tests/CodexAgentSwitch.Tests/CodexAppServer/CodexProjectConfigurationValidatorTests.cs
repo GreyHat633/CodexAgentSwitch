@@ -10,10 +10,11 @@ public sealed class CodexProjectConfigurationValidatorTests
     {
         var report = CodexProjectConfigurationValidator.ReportHooks(new Dictionary<string, string>
         {
-            ["hooks.json"] = "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test-pipe\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test-pipe\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test-pipe\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test-pipe\"}]}]}}",
+            ["hooks.json"] = "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test-pipe\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test-pipe\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook post-tool-use --pipe test-pipe\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook post-tool-use --pipe test-pipe\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test-pipe\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test-pipe\"}]}]}}",
         });
         Assert.True(report.HooksPresent);
         Assert.True(report.PreToolUseConfigured);
+        Assert.True(report.PostToolUseConfigured);
         Assert.True(report.StopConfigured);
         Assert.Null(report.ValidationError);
         Assert.Contains("trust", report.ReviewNotice, StringComparison.OrdinalIgnoreCase);
@@ -38,22 +39,24 @@ public sealed class CodexProjectConfigurationValidatorTests
     [Fact]
     public void Hook_report_accepts_command_without_optional_windows_override()
     {
-        const string hooks = "{\"hooks\":{\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test\"}]}]}}";
+        const string hooks = "{\"hooks\":{\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook post-tool-use --pipe test\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test\"}]}]}}";
 
         var report = CodexProjectConfigurationValidator.ReportHooks(new Dictionary<string, string> { ["hooks.json"] = hooks });
 
         Assert.True(report.PreToolUseConfigured);
+        Assert.True(report.PostToolUseConfigured);
         Assert.True(report.StopConfigured);
         Assert.Null(report.ValidationError);
     }
 
     [Fact]
-    public void ToolHost_hook_failure_uses_supported_deny_shape()
+    public void ToolHost_pre_hook_failure_is_fail_open_while_explicit_gate_denial_remains_supported()
     {
         var path = Path.Combine(FindRepositoryRoot(), "src", "CodexAgentSwitch.ToolHost", "Program.cs");
         var source = File.ReadAllText(path);
         Assert.Contains("permissionDecision = \"deny\"", source, StringComparison.Ordinal);
-        Assert.Contains("Agent Switch ownership gate is unavailable; retry after Scheduler recovery.", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Agent Switch ownership gate is unavailable; retry after Scheduler recovery.", source, StringComparison.Ordinal);
+        Assert.Contains("Infrastructure, parsing, actor, or", source, StringComparison.Ordinal);
         Assert.DoesNotContain("permissionDecision = \"ask\"", source, StringComparison.Ordinal);
     }
     [Fact]
@@ -118,7 +121,7 @@ public sealed class CodexProjectConfigurationValidatorTests
             var validator = new CodexProjectConfigurationValidator(new AppDataPaths(root));
             var fixtures = Path.Combine(FindRepositoryRoot(), "tests", "Fixtures", "native-codex");
             var projectConfiguration = await File.ReadAllTextAsync(Path.Combine(fixtures, "valid-project-whitelist.toml"));
-            const string validHooks = "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"apply_patch|Edit|Write\",\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe contract-test\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe contract-test\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe contract-test\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe contract-test\"}]}]}}";
+            const string validHooks = "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"apply_patch|Edit|Write\",\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe contract-test\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe contract-test\"}]}],\"PostToolUse\":[{\"matcher\":\"apply_patch|Edit|Write\",\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook post-tool-use --pipe contract-test\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook post-tool-use --pipe contract-test\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe contract-test\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe contract-test\"}]}]}}";
 
             // This proves the layered candidate remains loadable, but it is
             // deliberately not a negative hook-parser oracle: app-server

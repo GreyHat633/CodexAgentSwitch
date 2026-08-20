@@ -189,7 +189,7 @@ public sealed class WorkerSchedulerTests
         Assert.Equal(packet.Scope, result.Scope);
         Assert.Equal(["not-completed"], result.Validation);
         Assert.Equal(WorkPackageLeaseStatus.REVIEW, (await leases.ListAsync()).Single().Status);
-        Assert.False((await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("main", packet.WorkingDirectory, "apply_patch", "patch"))).Allowed);
+        Assert.True((await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("main", packet.WorkingDirectory, "apply_patch", "patch"))).Allowed);
         Assert.Equal(DelegationState.Reviewing, (await scheduler.MarkReviewingAsync(packet.TaskId)).State);
         await Assert.ThrowsAsync<InvalidOperationException>(() => scheduler.ConsumeResultAsync(packet.TaskId));
     }
@@ -404,7 +404,166 @@ public sealed class WorkerSchedulerTests
     }
 
     [Fact]
-    public async Task Main_cost_guard_uses_exact_session_and_matching_cwd_then_persists_cost_checkpoint()
+    public async Task Shadow_gate_records_exact_same_path_and_allows_different_path_or_terminal_worker()
+    {
+        const string root = "E:\\AISPace\\HardGateShadow";
+        var leases = new LeaseMemoryRepository();
+        var packet = Packet("CAS-HARD-GATE-SHADOW", "native-luna") with
+        {
+            WorkingDirectory = root,
+            Scope = [root],
+            AllowedReadScope = [root],
+            AllowedWriteScope = [root],
+        };
+        await using var scheduler = new WorkerScheduler(
+            [new NativeWorkerExecutor()], new MemoryRepository(), new AdvancingClock(), leaseRepository: leases);
+        await scheduler.StartAsync();
+        await PrepareNativeWorkerAsync(scheduler, packet);
+
+        var failedPost = await scheduler.ObservePostToolUseAsync(new PostToolUseRequest(
+            "session-1", root, "Write", "{\"file_path\":\"src\\\\Target.cs\"}",
+            "{\"success\":false}",
+            AgentId: "worker-agent-1", AgentType: "delegated_subagent"));
+        var post = await scheduler.ObservePostToolUseAsync(new PostToolUseRequest(
+            "session-1", root, "Write", "{\"file_path\":\"src\\\\..\\\\src\\\\Target.cs\"}",
+            "{\"success\":true}",
+            AgentId: "worker-agent-1", AgentType: "delegated_subagent"));
+
+        Assert.False(failedPost.Recorded);
+        Assert.True(post.Recorded);
+        Assert.Equal(DelegationState.Running, (await scheduler.ListAsync()).Single().State);
+        var same = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest(
+            "session-1", root, "Write", "{\"file_path\":\"SRC\\\\target.cs\"}",
+            AgentType: "main_turn"));
+        var different = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest(
+            "session-1", root, "Edit", "{\"file_path\":\"src\\\\Other.cs\"}",
+            AgentType: "main_turn"));
+        var bash = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest(
+            "session-1", root, "Bash", "{\"command\":\"Set-Content src\\\\Target.cs x\"}",
+            AgentType: "main_turn"));
+
+        Assert.True(same.Allowed);
+        Assert.True(same.ShadowEvaluated);
+        Assert.True(same.WouldDeny);
+        Assert.False(same.Denied);
+        Assert.True(different.Allowed);
+        Assert.True(different.ShadowEvaluated);
+        Assert.False(different.WouldDeny);
+        Assert.True(bash.Allowed);
+        Assert.False(bash.ShadowEvaluated);
+
+        await scheduler.ReportNativeResultAsync(new WorkerResultPacket(
+            packet.TaskId, DelegationState.ResultReceived, "done", [], ["src/Target.cs"], ["pass"], []));
+        var terminal = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest(
+            "session-1", root, "Write", "{\"file_path\":\"src\\\\Target.cs\"}",
+            AgentType: "main_turn"));
+        Assert.True(terminal.Allowed);
+        Assert.False(terminal.ShadowEvaluated);
+
+        var hooks = (await scheduler.GetRuntimeDiagnosticsAsync()).Hooks!;
+        Assert.Equal(4, hooks.PreToolUseSeenCount);
+        Assert.Equal(2, hooks.PostToolUseSeenCount);
+        Assert.Equal(2, hooks.HardGateShadowEvaluatedCount);
+        Assert.Equal(1, hooks.HardGateWouldDenyCount);
+        Assert.Equal(0, hooks.HardGateDeniedCount);
+        Assert.Equal(packet.TaskId, hooks.LastHardGateEvent!.WorkerTaskId);
+        Assert.Equal("project-1", hooks.LastHardGateEvent.ProjectId);
+        Assert.Equal("session-1", hooks.LastHardGateEvent.SessionId);
+        Assert.Equal("SHADOW", hooks.LastHardGateEvent.Mode);
+        Assert.False(hooks.LastHardGateEvent.TargetInWorkerTouchedPaths);
+    }
+
+    [Fact]
+    public async Task Enforcement_denies_only_exact_same_touched_path_while_worker_is_running()
+    {
+        const string root = "E:\\AISPace\\HardGateEnforce";
+        var leases = new LeaseMemoryRepository();
+        var packet = Packet("CAS-HARD-GATE-ENFORCE", "native-luna") with
+        {
+            WorkingDirectory = root,
+            Scope = [root],
+            AllowedReadScope = [root],
+            AllowedWriteScope = [root],
+        };
+        await using var scheduler = new WorkerScheduler(
+            [new NativeWorkerExecutor()], new MemoryRepository(), new AdvancingClock(),
+            leaseRepository: leases, enforceHardGate: true);
+        await scheduler.StartAsync();
+        await PrepareNativeWorkerAsync(scheduler, packet);
+        Assert.True((await scheduler.ObservePostToolUseAsync(new PostToolUseRequest(
+            "session-1", root, "apply_patch",
+            "{\"patch\":\"*** Begin Patch\\n*** Update File: src/Target.cs\\n@@\\n-old\\n+new\\n*** End Patch\"}",
+            "{\"success\":true}",
+            AgentId: "worker-agent-1", AgentType: "delegated_subagent"))).Recorded);
+
+        var denied = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest(
+            "session-1", root, "apply_patch",
+            "{\"patch\":\"*** Begin Patch\\n*** Update File: src/Target.cs\\n@@\\n-old\\n+main\\n*** End Patch\"}",
+            AgentType: "main_turn"));
+        var otherSession = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest(
+            "session-2", root, "Write", "{\"file_path\":\"src\\\\Target.cs\"}",
+            AgentType: "main_turn"));
+
+        Assert.False(denied.Allowed);
+        Assert.True(denied.Denied);
+        Assert.True(denied.WouldDeny);
+        Assert.True(otherSession.Allowed);
+        Assert.False(otherSession.ShadowEvaluated);
+        var hooks = (await scheduler.GetRuntimeDiagnosticsAsync()).Hooks!;
+        Assert.Equal(1, hooks.HardGateDeniedCount);
+    }
+
+    [Fact]
+    public async Task PostToolUse_does_not_bind_when_multiple_native_workers_are_ambiguous()
+    {
+        const string root = "E:\\AISPace\\HardGateMultiple";
+        var leases = new LeaseMemoryRepository();
+        await using var scheduler = new WorkerScheduler(
+            [new NativeWorkerExecutor()], new MemoryRepository(), new AdvancingClock(), leaseRepository: leases);
+        await scheduler.StartAsync();
+        var first = Packet("CAS-HARD-GATE-MULTI-A", "native-luna") with { WorkingDirectory = root, Scope = [root] };
+        var second = Packet("CAS-HARD-GATE-MULTI-B", "native-luna") with { WorkingDirectory = root, Scope = [root] };
+        await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.ARCHITECTURE_RESOLVED,
+            WorkOwner.Worker, RepartitionReasonCode.BOUNDED_IMPLEMENTATION, "worker", "native-luna", null,
+            first.TaskId, root, "Implementation", [root], null);
+        await scheduler.DispatchAsync(first);
+        await scheduler.DispatchAsync(second);
+
+        var post = await scheduler.ObservePostToolUseAsync(new PostToolUseRequest(
+            "session-1", root, "Write", "{\"file_path\":\"src\\\\Target.cs\"}",
+            "{\"success\":true}",
+            AgentId: "worker-agent-1", AgentType: "delegated_subagent"));
+
+        Assert.False(post.Recorded);
+        Assert.Contains("unique", post.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PostToolUse_does_not_bind_a_native_task_to_an_unrelated_worker_lease()
+    {
+        const string root = "E:\\AISPace\\HardGateLeaseMismatch";
+        var leases = new LeaseMemoryRepository();
+        await using var scheduler = new WorkerScheduler(
+            [new NativeWorkerExecutor()], new MemoryRepository(), new AdvancingClock(), leaseRepository: leases);
+        await scheduler.StartAsync();
+        var packet = Packet("CAS-HARD-GATE-LEASE-TASK", "native-luna") with { WorkingDirectory = root, Scope = [root] };
+        await scheduler.RecordRepartitionAsync("group", RepartitionTrigger.ARCHITECTURE_RESOLVED,
+            WorkOwner.Worker, RepartitionReasonCode.BOUNDED_IMPLEMENTATION, "worker", "native-luna", null,
+            "CAS-HARD-GATE-OTHER-LEASE", root, "Implementation", [root], null);
+        await scheduler.DispatchAsync(packet);
+
+        var post = await scheduler.ObservePostToolUseAsync(new PostToolUseRequest(
+            "session-1", root, "Write", "{\"file_path\":\"src\\\\Target.cs\"}",
+            "{\"success\":true}",
+            AgentId: "worker-agent-1", AgentType: "delegated_subagent"));
+
+        Assert.False(post.Recorded);
+        Assert.Contains("lease", post.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(DelegationState.Delegated, (await scheduler.ListAsync()).Single().State);
+    }
+
+    [Fact]
+    public async Task PreToolUse_no_longer_drives_main_cost_guard_or_ownership_checkpoint()
     {
         const string root = "E:\\AISPace\\Phase6Main";
         var leases = new LeaseMemoryRepository();
@@ -418,14 +577,13 @@ public sealed class WorkerSchedulerTests
 
         var result = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("session-main", root, "apply_patch", "patch"));
 
-        Assert.False(result.Allowed);
-        Assert.Contains("CostCheckpoint", result.Reason, StringComparison.Ordinal);
-        Assert.Equal(WorkPackageLeaseStatus.INVALID, (await leases.ListAsync()).Single().Status);
-        Assert.Equal(1, source.ReadCount);
+        Assert.True(result.Allowed);
+        Assert.Equal(WorkPackageLeaseStatus.MAIN_OWNED, (await leases.ListAsync()).Single().Status);
+        Assert.Equal(0, source.ReadCount);
     }
 
     [Fact]
-    public async Task Worker_owned_mutation_is_denied_before_usage_scan_and_unknown_requires_safety()
+    public async Task Worker_ownership_without_exact_actor_running_task_and_touched_path_fails_open()
     {
         const string root = "E:\\AISPace\\Phase6Worker";
         var leases = new LeaseMemoryRepository();
@@ -438,14 +596,14 @@ public sealed class WorkerSchedulerTests
         var denied = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
         var unknown = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "shell", "mystery"));
 
-        Assert.False(denied.Allowed);
+        Assert.True(denied.Allowed);
         Assert.Equal(0, source.ReadCount);
         Assert.True(unknown.Allowed);
-        Assert.True(unknown.RequiresSafetyPolicy);
+        Assert.False(unknown.RequiresSafetyPolicy);
     }
 
     [Fact]
-    public async Task Pending_repartition_blocks_mutation_until_one_valid_ownership_resolution()
+    public async Task Pending_repartition_is_telemetry_only_for_the_conservative_exact_path_gate()
     {
         const string root = "E:\\AISPace\\PendingRepartition";
         var leases = new LeaseMemoryRepository();
@@ -462,8 +620,7 @@ public sealed class WorkerSchedulerTests
         Assert.True(unrelated.Allowed);
 
         var blocked = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
-        Assert.False(blocked.Allowed);
-        Assert.Contains("pending", blocked.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(blocked.Allowed);
 
         var resolved = await scheduler.RecordRepartitionAsync("group-pending", RepartitionTrigger.WORK_CONVERGED,
             WorkOwner.Main, RepartitionReasonCode.FINAL_INTEGRATION, "resolved", null, null,
@@ -471,7 +628,7 @@ public sealed class WorkerSchedulerTests
         Assert.Equal(2, resolved.PendingTriggersCleared);
         Assert.Equal([RepartitionTrigger.PHASE_CHANGE, RepartitionTrigger.MODULE_COMPLETE], resolved.CoalescedTriggers);
         Assert.Equal(1, resolved.OwnershipDecisionCount);
-        Assert.Equal(1, resolved.HardGateDenials);
+        Assert.Equal(0, resolved.HardGateDenials);
         Assert.True(resolved.LeaseActive);
 
         var allowed = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
@@ -483,8 +640,7 @@ public sealed class WorkerSchedulerTests
             "pkg-worker", root, "Implementation", [root], null);
         Assert.Equal(1, worker.PendingTriggersCleared);
         var workerBlocked = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
-        Assert.False(workerBlocked.Allowed);
-        Assert.Contains("Worker", workerBlocked.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(workerBlocked.Allowed);
     }
 
     [Fact]
@@ -512,7 +668,7 @@ public sealed class WorkerSchedulerTests
                 Assert.Equal(2, persisted.Single(item => item.TaskGroupId == "restart-group" &&
                     item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase)).PendingTriggers.Count);
                 var denied = await first.EvaluatePreToolUseAsync(new PreToolUseRequest("s", workingDirectory, "apply_patch", "patch"));
-                Assert.False(denied.Allowed);
+                Assert.True(denied.Allowed);
                 await first.StopAsync(force: true);
             }
 
@@ -530,11 +686,11 @@ public sealed class WorkerSchedulerTests
                     item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase));
                 Assert.Equal(restored.UpdatedAt, restoredAgain.UpdatedAt);
                 var restoredDenied = await second.EvaluatePreToolUseAsync(new PreToolUseRequest("s", workingDirectory, "apply_patch", "patch"));
-                Assert.False(restoredDenied.Allowed);
+                Assert.True(restoredDenied.Allowed);
                 var afterDenial = (await repository.ListPendingRepartitionsAsync()).Single(item => item.TaskGroupId == "restart-group" &&
                     item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase));
-                Assert.Equal(2, afterDenial.HardGateDenialCount);
-                Assert.Equal(2, (await repository.ListPendingRepartitionsAsync())
+                Assert.Equal(0, afterDenial.HardGateDenialCount);
+                Assert.Equal(0, (await repository.ListPendingRepartitionsAsync())
                     .Single(item => item.TaskGroupId == "restart-group" && item.WorkingDirectory.EndsWith("PendingRestart", StringComparison.OrdinalIgnoreCase))
                     .HardGateDenialCount);
                 var resolved = await second.RecordRepartitionAsync("restart-group", RepartitionTrigger.WORK_CONVERGED,
@@ -556,7 +712,7 @@ public sealed class WorkerSchedulerTests
     }
 
     [Fact]
-    public async Task Resolving_one_pending_group_keeps_other_group_for_same_working_directory_gated()
+    public async Task Resolving_one_pending_group_preserves_other_group_without_blocking_pretooluse()
     {
         const string root = "E:\\AISPace\\PendingRepartitionGroups";
         var leases = new LeaseMemoryRepository();
@@ -569,8 +725,7 @@ public sealed class WorkerSchedulerTests
             "pkg-a", root, "Implementation", [root], null);
 
         var blocked = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("s", root, "apply_patch", "patch"));
-        Assert.False(blocked.Allowed);
-        Assert.Contains("pending", blocked.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(blocked.Allowed);
     }
 
     [Fact]
@@ -589,7 +744,7 @@ public sealed class WorkerSchedulerTests
         var result = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("session-main", root, "apply_patch", "patch"));
 
         Assert.True(result.Allowed);
-        Assert.Equal(1, source.ReadCount);
+        Assert.Equal(0, source.ReadCount);
     }
 
     [Fact]
@@ -608,7 +763,7 @@ public sealed class WorkerSchedulerTests
         var result = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest("session-main", root, "apply_patch", "patch"));
 
         Assert.True(result.Allowed);
-        Assert.Equal(1, source.ReadCount);
+        Assert.Equal(0, source.ReadCount);
     }
 
     [Fact]
@@ -693,6 +848,25 @@ public sealed class WorkerSchedulerTests
         ["nonce round-trips"],
         ["do not read session logs"],
         "Return the nonce.");
+
+    private static async Task PrepareNativeWorkerAsync(WorkerScheduler scheduler, TaskPacket packet)
+    {
+        await scheduler.RecordRepartitionAsync(
+            packet.TaskId,
+            RepartitionTrigger.ARCHITECTURE_RESOLVED,
+            WorkOwner.Worker,
+            RepartitionReasonCode.BOUNDED_IMPLEMENTATION,
+            "bounded native package",
+            packet.WorkerId,
+            null,
+            packet.TaskId,
+            packet.WorkingDirectory,
+            "Implementation",
+            packet.Scope,
+            null);
+        var invocation = await scheduler.DispatchAsync(packet);
+        Assert.Equal(DelegationState.Delegated, invocation.State);
+    }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {

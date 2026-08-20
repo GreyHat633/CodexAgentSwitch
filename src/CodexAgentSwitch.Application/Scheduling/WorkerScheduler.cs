@@ -24,7 +24,8 @@ public sealed class WorkerScheduler(
     MainCostGuardCoordinator? guardCoordinator = null,
     IDelegationPreflight? preflight = null,
     IControlledTaskRuntime? contextRuntime = null,
-    IMainContextEconomyCoordinator? contextEconomy = null) : IWorkerScheduler
+    IMainContextEconomyCoordinator? contextEconomy = null,
+    bool enforceHardGate = false) : IWorkerScheduler
 {
     private readonly IReadOnlyList<IWorkerExecutor> executors = executors.ToArray();
     private readonly IReadOnlyList<ITaskPacketResolver> resolvers = resolvers?.ToArray() ?? [];
@@ -37,6 +38,7 @@ public sealed class WorkerScheduler(
     private readonly IDelegationPreflight? preflight = preflight;
     private readonly IControlledTaskRuntime? contextRuntime = contextRuntime;
     private readonly IMainContextEconomyCoordinator? contextEconomy = contextEconomy;
+    private readonly bool enforceHardGate = enforceHardGate;
     private readonly Channel<QueuedWork> queue = Channel.CreateUnbounded<QueuedWork>(new UnboundedChannelOptions
     {
         SingleReader = true,
@@ -52,6 +54,9 @@ public sealed class WorkerScheduler(
     // gate) while retaining each event in append-only telemetry.
     private readonly ConcurrentDictionary<string, PendingRepartition> pendingRepartitions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pendingByWorkingDirectory = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object workerTouchLock = new();
+    private readonly Dictionary<string, WorkerTouchState> workerTouches = new(StringComparer.Ordinal);
+    private readonly HookTelemetryState hookTelemetry = new();
     private CancellationTokenSource? workerCancellation;
     private Task? workerLoop;
     private SchedulerState state = SchedulerState.Stopped;
@@ -298,6 +303,7 @@ public sealed class WorkerScheduler(
             : DelegationState.ResultReceived;
         var updated = existing with { State = stateValue, Result = result with { State = stateValue }, UpdatedAt = clock.UtcNow, CompletedAt = clock.UtcNow, FailureReason = result.FailureReason };
         tasks[result.TaskId] = updated;
+        RemoveWorkerTouch(result.TaskId);
         await repository.UpsertAsync(updated, cancellationToken);
         await NotifyResultAsync(updated, cancellationToken);
         if (stateValue == DelegationState.ResultReceived)
@@ -514,70 +520,147 @@ public sealed class WorkerScheduler(
 
     public async Task<PreToolUseResult> EvaluatePreToolUseAsync(PreToolUseRequest request, CancellationToken cancellationToken = default)
     {
+        var now = clock.UtcNow.ToUniversalTime();
+        hookTelemetry.RecordPreToolUse(now);
         var tool = request.ToolName?.Trim() ?? string.Empty;
-        var command = tool.Equals("apply_patch", StringComparison.OrdinalIgnoreCase)
-            || tool.Equals("edit", StringComparison.OrdinalIgnoreCase)
-            || tool.Equals("write", StringComparison.OrdinalIgnoreCase) ? tool : request.ToolInput;
-        var classification = MutationClassifier.Classify(command);
-        if (classification.IsReadOnly)
-        {
-            return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), true, false, "Read-only operation is allowed.");
-        }
-        if (classification.IsUnknown)
-        {
-            return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), true, true, "Unknown operation was not classified; existing safety policy must decide.");
-        }
+        var resolution = HookMutationPathResolver.Resolve(tool, request.ToolInput, request.WorkingDirectory);
+        var classification = resolution.Supported ? MutationKind.Mutation.ToString() : MutationKind.Unknown.ToString();
+        if (!IsMainActor(request.AgentType, request.AgentId))
+            return Allow("Actor is not the exact main_turn contract; fail open.");
+        if (!resolution.Supported)
+            return Allow("Operation is not an exact-path structured mutation; fail open.");
+        if (!resolution.Resolved)
+            return Allow("Target path was not resolved exactly; fail open.");
+
         var lease = leaseRepository is null ? null : await leaseRepository.GetActiveForWorkingDirectoryAsync(request.WorkingDirectory, cancellationToken);
-        var normalizedWorkingDirectory = WorkPackageLease.NormalizePath(request.WorkingDirectory);
-        if (pendingByWorkingDirectory.TryGetValue(normalizedWorkingDirectory, out var pendingGroups) && !pendingGroups.IsEmpty)
+        if (lease?.Status != WorkPackageLeaseStatus.WORKER_OWNED)
+            return Allow("Worker lease is not RUNNING; fail open.");
+
+        WorkerTouchSnapshot[] candidates;
+        lock (workerTouchLock)
         {
-            foreach (var key in pendingGroups.Keys)
-            {
-                if (pendingRepartitions.TryGetValue(key, out var pendingState))
-                {
-                    pendingState.RecordHardGateDenial(clock.UtcNow.ToUniversalTime());
-                    await PersistPendingAsync(pendingState, cancellationToken);
-                }
-            }
-            return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), false, false,
-                "Mutation denied: a repartition decision is pending; require MAIN/WORKER ownership resolution.");
+            RemoveTerminalWorkerTouchesLocked();
+            var cwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
+            candidates = workerTouches.Values.Where(state =>
+                string.Equals(state.SessionId, request.SessionId, StringComparison.Ordinal)
+                && string.Equals(state.WorkingDirectory, cwd, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(state.TaskId, lease.PackageId, StringComparison.Ordinal)
+                && tasks.TryGetValue(state.TaskId, out var task)
+                && task.State == DelegationState.Running).Select(state => state.Snapshot()).ToArray();
         }
-        if (lease?.Status == WorkPackageLeaseStatus.WORKER_OWNED)
+        if (candidates.Length != 1)
+            return Allow("A unique RUNNING Worker touch state was not resolved; fail open.");
+
+        var candidate = candidates[0];
+        var wouldDeny = resolution.Paths.Any(path => candidate.Paths.Contains(path));
+        var denied = enforceHardGate && wouldDeny;
+        hookTelemetry.RecordHardGate(new HardGateEventDiagnostics(
+            now,
+            candidate.ProjectId,
+            request.SessionId,
+            candidate.TaskId,
+            lease.PackageId,
+            DelegationState.Running.ToString(),
+            tool,
+            resolution.Paths,
+            candidate.FirstTouchedAt,
+            candidate.Paths.Count,
+            true,
+            true,
+            true,
+            true,
+            wouldDeny,
+            wouldDeny,
+            denied,
+            enforceHardGate ? "ENFORCE" : "SHADOW"));
+        var reason = $"Hard Gate exact inputs: Actor=MAIN; WorkerState=RUNNING; SupportedOperation=true; TargetPathResolved=true; TargetInWorkerTouchedPaths={wouldDeny.ToString().ToLowerInvariant()}; Mode={(enforceHardGate ? "ENFORCE" : "SHADOW")}.";
+        return new(request.SessionId, tool, request.WorkingDirectory, classification, !denied, false, reason,
+            true, wouldDeny, denied, candidate.TaskId, resolution.Paths);
+
+        PreToolUseResult Allow(string reason) => new(
+            request.SessionId, tool, request.WorkingDirectory, classification, true, false, reason,
+            false, false, false, null, resolution.Paths);
+    }
+
+    public async Task<PostToolUseResult> ObservePostToolUseAsync(PostToolUseRequest request, CancellationToken cancellationToken = default)
+    {
+        var now = clock.UtcNow.ToUniversalTime();
+        hookTelemetry.RecordPostToolUse(now);
+        if (!IsWorkerActor(request.AgentType, request.AgentId))
+            return new(false, "Actor is not the exact delegated_subagent contract; ignored.");
+        if (!ToolResponseIndicatesSuccess(request.ToolResponse))
+            return new(false, "PostToolUse did not provide an explicit successful mutation result; ignored.");
+        var resolution = HookMutationPathResolver.Resolve(request.ToolName, request.ToolInput, request.WorkingDirectory);
+        if (!resolution.Supported || !resolution.Resolved)
+            return new(false, resolution.Reason);
+        if (leaseRepository is null)
+            return new(false, "Worker lease repository is unavailable.");
+        var lease = await leaseRepository.GetActiveForWorkingDirectoryAsync(request.WorkingDirectory, cancellationToken);
+        if (lease?.Status != WorkPackageLeaseStatus.WORKER_OWNED)
+            return new(false, "Worker lease is not RUNNING.");
+
+        var cwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
+        var candidates = tasks.Values.Where(task =>
+            task.Transport == WorkerTransport.NativeCustomAgent
+            && task.State is DelegationState.Delegated or DelegationState.Running
+            && string.Equals(WorkPackageLease.NormalizePath(task.Packet.WorkingDirectory), cwd, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (candidates.Length != 1)
+            return new(false, "A unique active native Worker task was not resolved.");
+
+        var candidate = candidates[0];
+        if (!string.Equals(candidate.Packet.TaskId, lease.PackageId, StringComparison.Ordinal))
+            return new(false, "The active native Worker task does not match the active Worker lease.");
+        if (candidate.State == DelegationState.Delegated)
         {
-            return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), false, false,
-                "Mutation denied: the current package is owned by Worker.");
+            candidate = candidate with { State = DelegationState.Running, StartedAt = candidate.StartedAt ?? now, UpdatedAt = now };
+            tasks[candidate.Packet.TaskId] = candidate;
+            await repository.UpsertAsync(candidate, cancellationToken);
+            Publish();
         }
 
-        if (lease?.Status == WorkPackageLeaseStatus.MAIN_OWNED && usageSource is not null
-            && !string.IsNullOrWhiteSpace(request.SessionId))
+        lock (workerTouchLock)
         {
-            var guard = guardCoordinator.Resolve(request.WorkingDirectory, request.SessionId);
-            var requestedCwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
-            var usage = usageSource.Read(cancellationToken)
-                .Where(item => string.Equals(item.SessionId, request.SessionId, StringComparison.Ordinal)
-                    && (string.Equals(item.AgentRole, "Sol", StringComparison.Ordinal)
-                        || string.Equals(item.AgentRole, "Main", StringComparison.Ordinal))
-                    && (string.Equals(NormalizeOptional(item.Cwd), requestedCwd, StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(NormalizeOptional(item.Project), requestedCwd, StringComparison.OrdinalIgnoreCase)))
-                .OrderByDescending(item => item.EndedAt ?? item.StartedAt)
-                .FirstOrDefault();
-            if (usage is not null)
-            {
-                guard.AcceptUsage(usage);
-            }
+            if (workerTouches.TryGetValue(candidate.Packet.TaskId, out var existing)
+                && (!string.Equals(existing.SessionId, request.SessionId, StringComparison.Ordinal)
+                    || !string.Equals(existing.AgentId, request.AgentId, StringComparison.Ordinal)))
+                return new(false, "Worker task is already bound to another session or agent; ignored.");
 
-            if (guard.IsGuardHit)
-            {
-                if (lease.TryTransition(WorkPackageLifecycleEvent.CostCheckpoint, out _))
-                {
-                    await leaseRepository!.SaveAsync(lease, cancellationToken);
-                }
-                return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), false, false,
-                    "MAIN normalized-credit cost guard reached; ownership lease invalidated at CostCheckpoint.");
-            }
+            var state = existing ?? new WorkerTouchState(
+                candidate.Packet.TaskId, candidate.Packet.ProjectId, request.SessionId, request.AgentId!, cwd, now);
+            state.Add(resolution.Paths);
+            workerTouches[candidate.Packet.TaskId] = state;
         }
-        var decision = new MainToolOwnershipGate(lease).Evaluate(command, request.WorkingDirectory);
-        return new(request.SessionId, tool, request.WorkingDirectory, classification.Kind.ToString(), decision.Allowed, false, decision.Message);
+        return new(true, "Exact Worker mutation paths recorded.", candidate.Packet.TaskId, resolution.Paths);
+    }
+
+    private static bool IsMainActor(string? agentType, string? agentId) =>
+        string.Equals(agentType, "main_turn", StringComparison.Ordinal)
+        && string.IsNullOrWhiteSpace(agentId);
+
+    private static bool IsWorkerActor(string? agentType, string? agentId) =>
+        string.Equals(agentType, "delegated_subagent", StringComparison.Ordinal)
+        && !string.IsNullOrWhiteSpace(agentId);
+
+    private static bool ToolResponseIndicatesSuccess(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response)) return false;
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return false;
+            if (root.TryGetProperty("success", out var success)
+                && success.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)
+                return success.GetBoolean();
+            foreach (var name in new[] { "is_error", "isError" })
+                if (root.TryGetProperty(name, out var error)
+                    && error.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)
+                    return !error.GetBoolean();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+        return false;
     }
 
     public async Task<MainContextBoundaryResult> ObserveMainContextBoundaryAsync(
@@ -669,6 +752,7 @@ public sealed class WorkerScheduler(
         ContextEconomySnapshot? snapshot = null,
         ContextEconomyObservationResult? observation = null)
     {
+        hookTelemetry.RecordStop(clock.UtcNow.ToUniversalTime());
         var latest = snapshot?.Samples.LastOrDefault();
         lastContextEconomy = new(
             result.ThreadId,
@@ -690,6 +774,7 @@ public sealed class WorkerScheduler(
             clock.UtcNow,
             result.CompactionRequested,
             result.CompactionSucceeded);
+        hookTelemetry.RecordContextBoundary(clock.UtcNow.ToUniversalTime(), lastContextEconomy);
         return result;
     }
 
@@ -743,7 +828,20 @@ public sealed class WorkerScheduler(
         return new SchedulerRuntimeDiagnostics(economy, lease?.Status, lease?.PackageId,
             active?.Packet.WorkerId ?? telemetry?.WorkerIdentity,
             lease?.InvalidReason ?? economy.LastReason?.ToString() ?? telemetry?.Reason.ToString(), economy.GuardHitCount,
-            lastContextEconomy);
+            lastContextEconomy,
+            hookTelemetry.Snapshot());
+    }
+
+    private void RemoveWorkerTouch(string taskId)
+    {
+        lock (workerTouchLock) workerTouches.Remove(taskId);
+    }
+
+    private void RemoveTerminalWorkerTouchesLocked()
+    {
+        foreach (var taskId in workerTouches.Keys.Where(taskId =>
+            !tasks.TryGetValue(taskId, out var task) || task.State != DelegationState.Running).ToArray())
+            workerTouches.Remove(taskId);
     }
 
     private static string NormalizeOptional(string? path) => string.IsNullOrWhiteSpace(path)
@@ -925,6 +1023,127 @@ public sealed class WorkerScheduler(
     }
 
     private sealed record QueuedWork(TaskPacket Packet, IWorkerExecutor Executor);
+
+    private sealed class WorkerTouchState(
+        string taskId,
+        string projectId,
+        string sessionId,
+        string agentId,
+        string workingDirectory,
+        DateTimeOffset firstTouchedAt)
+    {
+        private readonly HashSet<string> paths = new(StringComparer.OrdinalIgnoreCase);
+        public string TaskId { get; } = taskId;
+        public string ProjectId { get; } = projectId;
+        public string SessionId { get; } = sessionId;
+        public string AgentId { get; } = agentId;
+        public string WorkingDirectory { get; } = workingDirectory;
+        public DateTimeOffset FirstTouchedAt { get; } = firstTouchedAt;
+        public void Add(IEnumerable<string> values) => paths.UnionWith(values);
+        public WorkerTouchSnapshot Snapshot() => new(
+            TaskId, ProjectId, SessionId, AgentId, WorkingDirectory, FirstTouchedAt,
+            paths.ToHashSet(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private sealed record WorkerTouchSnapshot(
+        string TaskId,
+        string ProjectId,
+        string SessionId,
+        string AgentId,
+        string WorkingDirectory,
+        DateTimeOffset FirstTouchedAt,
+        IReadOnlySet<string> Paths);
+
+    private sealed class HookTelemetryState
+    {
+        private readonly object sync = new();
+        private DateTimeOffset? preToolUseLastSeen;
+        private long preToolUseSeenCount;
+        private DateTimeOffset? postToolUseLastSeen;
+        private long postToolUseSeenCount;
+        private DateTimeOffset? stopLastSeen;
+        private long stopSeenCount;
+        private DateTimeOffset? contextBoundaryLastSeen;
+        private long contextBoundarySeenCount;
+        private bool contextStateBound;
+        private long? lastObservedInputTokens;
+        private decimal? lastObservedPressure;
+        private DateTimeOffset? lastCompactionRequestAt;
+        private string? lastCompactionResult;
+        private long hardGateShadowEvaluatedCount;
+        private long hardGateWouldDenyCount;
+        private long hardGateDeniedCount;
+        private DateTimeOffset? hardGateLastWouldDenyAt;
+        private DateTimeOffset? hardGateLastDenyAt;
+        private HardGateEventDiagnostics? lastHardGateEvent;
+
+        public void RecordPreToolUse(DateTimeOffset at)
+        {
+            lock (sync) { preToolUseLastSeen = at; preToolUseSeenCount++; }
+        }
+
+        public void RecordPostToolUse(DateTimeOffset at)
+        {
+            lock (sync) { postToolUseLastSeen = at; postToolUseSeenCount++; }
+        }
+
+        public void RecordStop(DateTimeOffset at)
+        {
+            lock (sync) { stopLastSeen = at; stopSeenCount++; }
+        }
+
+        public void RecordContextBoundary(DateTimeOffset at, ContextEconomyRuntimeDiagnostics value)
+        {
+            lock (sync)
+            {
+                contextBoundaryLastSeen = at;
+                contextBoundarySeenCount++;
+                contextStateBound = value.BindingAccepted == true;
+                lastObservedInputTokens = value.LatestInputTokens;
+                lastObservedPressure = value.CurrentPressure;
+                if (value.CompactionRequested == true)
+                {
+                    lastCompactionRequestAt = at;
+                    lastCompactionResult = value.CompactionSucceeded == true ? "Succeeded" : "Failed";
+                }
+            }
+        }
+
+        public void RecordHardGate(HardGateEventDiagnostics value)
+        {
+            lock (sync)
+            {
+                hardGateShadowEvaluatedCount++;
+                lastHardGateEvent = value;
+                if (value.WouldDeny)
+                {
+                    hardGateWouldDenyCount++;
+                    hardGateLastWouldDenyAt = value.Timestamp;
+                }
+                if (value.Denied)
+                {
+                    hardGateDeniedCount++;
+                    hardGateLastDenyAt = value.Timestamp;
+                }
+            }
+        }
+
+        public HookRuntimeDiagnostics Snapshot()
+        {
+            lock (sync)
+            {
+                return new(
+                    preToolUseLastSeen, preToolUseSeenCount,
+                    postToolUseLastSeen, postToolUseSeenCount,
+                    stopLastSeen, stopSeenCount,
+                    contextBoundaryLastSeen, contextBoundarySeenCount,
+                    contextStateBound, lastObservedInputTokens, lastObservedPressure,
+                    lastCompactionRequestAt, lastCompactionResult,
+                    hardGateShadowEvaluatedCount, hardGateWouldDenyCount, hardGateDeniedCount,
+                    hardGateLastWouldDenyAt, hardGateLastDenyAt, lastHardGateEvent);
+            }
+        }
+    }
 
     private async Task PersistPendingAsync(PendingRepartition pending, CancellationToken cancellationToken)
     {

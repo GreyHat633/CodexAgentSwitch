@@ -18,6 +18,10 @@ if (string.Equals(hook, "pre-tool-use", StringComparison.OrdinalIgnoreCase))
 {
     await RunPreToolUseHookAsync(pipeName);
 }
+else if (string.Equals(hook, "post-tool-use", StringComparison.OrdinalIgnoreCase))
+{
+    await RunPostToolUseHookAsync(pipeName);
+}
 else if (string.Equals(hook, "stop", StringComparison.OrdinalIgnoreCase))
 {
     await RunStopHookAsync(pipeName);
@@ -53,7 +57,7 @@ while (await Console.In.ReadLineAsync() is { } line)
                         ? requestedProtocol.GetString() ?? "2025-06-18"
                         : "2025-06-18",
                 capabilities = new { tools = new { listChanged = false } },
-                serverInfo = new { name = "codex-agent-switch", version = "0.2.6.3" },
+                serverInfo = new { name = "codex-agent-switch", version = "0.2.6.4" },
             },
             "ping" => new { },
             "tools/list" => ListTools(),
@@ -195,7 +199,17 @@ static async Task RunPreToolUseHookAsync(string pipeName)
         var cwd = ReadJsonString(root, "cwd") ?? ReadJsonString(root, "workingDirectory") ?? Environment.CurrentDirectory;
         var toolName = ReadJsonString(root, "tool_name") ?? ReadJsonString(root, "toolName") ?? string.Empty;
         var input = root.TryGetProperty("tool_input", out var toolInput) ? toolInput.GetRawText() : root.TryGetProperty("toolInput", out var inputValue) ? inputValue.GetRawText() : null;
-        var result = await SendAsync(pipeName, "preToolUse", new { sessionId, workingDirectory = cwd, toolName, toolInput = input });
+        var result = await SendAsync(pipeName, "preToolUse", new
+        {
+            sessionId,
+            workingDirectory = cwd,
+            toolName,
+            toolInput = input,
+            turnId = ReadJsonString(root, "turn_id") ?? ReadJsonString(root, "turnId"),
+            agentId = ReadJsonString(root, "agent_id") ?? ReadJsonString(root, "agentId"),
+            agentType = ReadJsonString(root, "agent_type") ?? ReadJsonString(root, "agentType"),
+            toolUseId = ReadJsonString(root, "tool_use_id") ?? ReadJsonString(root, "toolUseId"),
+        });
         var denied = result.TryGetProperty("allowed", out var allowed) && !allowed.GetBoolean();
         if (denied)
         {
@@ -216,18 +230,41 @@ static async Task RunPreToolUseHookAsync(string pipeName)
     }
     catch (Exception)
     {
-        // Codex does not support "ask" for PreToolUse hooks. Scheduler or
-        // malformed-input failures therefore deny this narrowly matched hook.
-        await WriteResponseAsync(new
+        // Hard Gate is a last-resort fuse. Infrastructure, parsing, actor, or
+        // telemetry failures must never block normal development.
+        await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = "PreToolUse" } });
+    }
+}
+
+static async Task RunPostToolUseHookAsync(string pipeName)
+{
+    var line = await Console.In.ReadLineAsync();
+    if (string.IsNullOrWhiteSpace(line)) return;
+    try
+    {
+        using var document = JsonDocument.Parse(line);
+        var root = document.RootElement;
+        var input = root.TryGetProperty("tool_input", out var toolInput) ? toolInput.GetRawText() : root.TryGetProperty("toolInput", out var inputValue) ? inputValue.GetRawText() : null;
+        var response = root.TryGetProperty("tool_response", out var toolResponse) ? toolResponse.GetRawText() : root.TryGetProperty("toolResponse", out var responseValue) ? responseValue.GetRawText() : null;
+        await SendAsync(pipeName, "postToolUse", new
         {
-            hookSpecificOutput = new
-            {
-                hookEventName = "PreToolUse",
-                permissionDecision = "deny",
-                permissionDecisionReason = "Agent Switch ownership gate is unavailable; retry after Scheduler recovery.",
-            },
+            sessionId = ReadJsonString(root, "session_id") ?? ReadJsonString(root, "sessionId") ?? string.Empty,
+            workingDirectory = ReadJsonString(root, "cwd") ?? ReadJsonString(root, "workingDirectory") ?? Environment.CurrentDirectory,
+            toolName = ReadJsonString(root, "tool_name") ?? ReadJsonString(root, "toolName") ?? string.Empty,
+            toolInput = input,
+            toolResponse = response,
+            turnId = ReadJsonString(root, "turn_id") ?? ReadJsonString(root, "turnId"),
+            agentId = ReadJsonString(root, "agent_id") ?? ReadJsonString(root, "agentId"),
+            agentType = ReadJsonString(root, "agent_type") ?? ReadJsonString(root, "agentType"),
+            toolUseId = ReadJsonString(root, "tool_use_id") ?? ReadJsonString(root, "toolUseId"),
         });
     }
+    catch
+    {
+        // PostToolUse is observability only and always fails open.
+    }
+
+    await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = "PostToolUse" } });
 }
 
 static string? ReadJsonString(JsonElement element, string name) =>
@@ -254,6 +291,7 @@ static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
         "queue_repartition" => ("queueRepartition", new { taskGroupId = Required(arguments, "taskGroupId"), workingDirectory = Required(arguments, "workingDirectory"), workSummary = Required(arguments, "workSummary"), triggers = RequiredStrings(arguments, "triggers") }),
         "list_repartitions" => ("listRepartitions", new { taskGroupId = Required(arguments, "taskGroupId") }),
         "scheduler_status" => ("status", new { }),
+        "runtime_diagnostics" => ("runtimeDiagnostics", new { }),
         _ => throw new InvalidOperationException($"Unknown tool: {name}"),
     };
     var schedulerResult = await SendAsync(pipeName, method, payload);
@@ -488,6 +526,12 @@ static object[] ToolDefinitions() =>
     {
         name = "scheduler_status",
         description = "Read Scheduler state and active task count without starting model work.",
+        inputSchema = new { type = "object", properties = new { }, additionalProperties = false },
+    },
+    new
+    {
+        name = "runtime_diagnostics",
+        description = "Read zero-model-cost Hook, Hard Gate, Context Economy, and ownership production diagnostics.",
         inputSchema = new { type = "object", properties = new { }, additionalProperties = false },
     },
     new

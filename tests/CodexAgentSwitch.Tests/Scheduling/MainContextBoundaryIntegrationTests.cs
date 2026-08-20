@@ -49,6 +49,14 @@ public sealed class MainContextBoundaryIntegrationTests
         Assert.Equal(threadId, main.BoundThreadId);
         Assert.Equal(threadId, Assert.Single(main.CompactedThreads));
         Assert.Equal(0, main.CreateThreadCalls);
+        var hooks = (await scheduler.GetRuntimeDiagnosticsAsync()).Hooks!;
+        Assert.Equal(1, hooks.StopSeenCount);
+        Assert.Equal(1, hooks.ContextBoundarySeenCount);
+        Assert.True(hooks.ContextStateBound);
+        Assert.Equal(80, hooks.LastObservedInputTokens);
+        Assert.NotNull(hooks.LastObservedPressure);
+        Assert.NotNull(hooks.LastCompactionRequestAt);
+        Assert.Equal("Succeeded", hooks.LastCompactionResult);
     }
 
     [Fact]

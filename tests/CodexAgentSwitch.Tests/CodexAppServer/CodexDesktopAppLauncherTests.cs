@@ -288,6 +288,47 @@ public sealed class CodexDesktopAppLauncherTests
     }
 
     [Fact]
+    public async Task Reconcile_preserves_unrelated_handler_in_the_same_hook_group()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-hooks-shared-group-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var codexDirectory = Path.Combine(projectDirectory, ".codex");
+        Directory.CreateDirectory(codexDirectory);
+        var hooksPath = Path.Combine(codexDirectory, "hooks.json");
+        await File.WriteAllTextAsync(hooksPath, """
+            {
+              "hooks": {
+                "PreToolUse": [{
+                  "matcher": "Write",
+                  "hooks": [
+                    { "type": "command", "command": "other.exe --keep" },
+                    { "type": "command", "commandWindows": "CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe legacy-pipe" }
+                  ]
+                }]
+              }
+            }
+            """);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(new AppDataPaths(Path.Combine(root, "app-data")), new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"), new RecordingDesktopStarter(), new PassThroughConfigurationValidator());
+            var profile = Profile.CreateDefault(now) with { WorkerPolicy = new WorkerPolicy(true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.SingleAgent) };
+            var project = new AgentProject("hooks-shared-group", "Hooks shared group", projectDirectory, false, now, now);
+
+            Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project])).Succeeded);
+            var migrated = await File.ReadAllTextAsync(hooksPath);
+            AssertManagedHookContract(migrated);
+            Assert.Contains("other.exe --keep", migrated, StringComparison.Ordinal);
+            Assert.DoesNotContain("legacy-pipe", migrated, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task Malformed_unrelated_hooks_are_not_overwritten()
     {
         var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
@@ -587,6 +628,7 @@ public sealed class CodexDesktopAppLauncherTests
         using var document = JsonDocument.Parse(json);
         var hooks = document.RootElement.GetProperty("hooks");
         AssertManagedHookGroup(hooks.GetProperty("PreToolUse"), "pre-tool-use");
+        AssertManagedHookGroup(hooks.GetProperty("PostToolUse"), "post-tool-use");
         AssertManagedHookGroup(hooks.GetProperty("Stop"), "stop");
     }
 

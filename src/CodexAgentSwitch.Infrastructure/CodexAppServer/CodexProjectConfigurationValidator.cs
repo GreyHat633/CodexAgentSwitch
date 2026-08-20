@@ -40,6 +40,8 @@ public sealed record CodexProjectConfigurationReport(
 {
     public bool StopConfigured { get; init; }
 
+    public bool PostToolUseConfigured { get; init; }
+
     public string? ValidationError { get; init; }
 
     public const string UserControlledReviewNotice =
@@ -66,11 +68,13 @@ public sealed class CodexProjectConfigurationValidator(AppDataPaths paths) : ICo
             }
 
             var preToolUse = HasValidManagedCommand(hookRoot, "PreToolUse", "pre-tool-use");
+            var postToolUse = HasValidManagedCommand(hookRoot, "PostToolUse", "post-tool-use");
             var stop = HasValidManagedCommand(hookRoot, "Stop", "stop");
             return new(true, preToolUse, CodexProjectConfigurationReport.UserControlledReviewNotice)
             {
                 StopConfigured = stop,
-                ValidationError = preToolUse && stop ? null : "CAS managed PreToolUse and Stop command hooks must include valid command, optional commandWindows, hook, and pipe fields.",
+                PostToolUseConfigured = postToolUse,
+                ValidationError = preToolUse && postToolUse && stop ? null : "CAS managed PreToolUse, PostToolUse, and Stop command hooks must include valid command, optional commandWindows, hook, and pipe fields.",
             };
         }
         catch (JsonException exception)
@@ -83,6 +87,7 @@ public sealed class CodexProjectConfigurationValidator(AppDataPaths paths) : ICo
         new(true, false, CodexProjectConfigurationReport.UserControlledReviewNotice)
         {
             StopConfigured = false,
+            PostToolUseConfigured = false,
             ValidationError = error,
         };
 

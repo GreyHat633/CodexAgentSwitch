@@ -346,7 +346,7 @@ public sealed class SchedulerIpcServerTests
     }
 
     [Fact]
-    public async Task PreToolUse_ipc_denies_definite_mutation_and_leaves_unknown_to_policy()
+    public async Task PreToolUse_ipc_fails_open_without_exact_actor_running_task_and_touched_path()
     {
         var root = Path.Combine(Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? Path.GetTempPath(), "pretool-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -362,10 +362,10 @@ public sealed class SchedulerIpcServerTests
             await using var server = new SchedulerIpcServer(scheduler, pipeName);
             await server.StartAsync();
             var denied = await SendRequestAsync(pipeName, $"{{\"method\":\"preToolUse\",\"payload\":{{\"sessionId\":\"s\",\"workingDirectory\":\"{root.Replace("\\", "\\\\")}\",\"toolName\":\"apply_patch\",\"toolInput\":{{\"patch\":\"x\"}}}}}}");
-            Assert.Contains("\"allowed\":false", denied, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"allowed\":true", denied, StringComparison.OrdinalIgnoreCase);
             var unknown = await SendRequestAsync(pipeName, $"{{\"method\":\"preToolUse\",\"payload\":{{\"sessionId\":\"s\",\"workingDirectory\":\"{root.Replace("\\", "\\\\")}\",\"toolName\":\"shell\",\"toolInput\":\"mystery-command\"}}}}");
             Assert.Contains("\"allowed\":true", unknown, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("RequiresSafetyPolicy", unknown, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"requiresSafetyPolicy\":false", unknown, StringComparison.OrdinalIgnoreCase);
         }
         finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
