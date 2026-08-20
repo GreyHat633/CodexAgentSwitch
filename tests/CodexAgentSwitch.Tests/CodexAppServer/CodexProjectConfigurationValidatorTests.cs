@@ -10,12 +10,41 @@ public sealed class CodexProjectConfigurationValidatorTests
     {
         var report = CodexProjectConfigurationValidator.ReportHooks(new Dictionary<string, string>
         {
-            ["hooks.json"] = "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"commandWindows\":\"ToolHost.exe\"}]}]}}",
+            ["hooks.json"] = "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test-pipe\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test-pipe\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test-pipe\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test-pipe\"}]}]}}",
         });
         Assert.True(report.HooksPresent);
         Assert.True(report.PreToolUseConfigured);
+        Assert.True(report.StopConfigured);
+        Assert.Null(report.ValidationError);
         Assert.Contains("trust", report.ReviewNotice, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("user-controlled", report.ReviewNotice, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("{\"hooks\":{\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test\"}]}]}}")]
+    [InlineData("{\"hooks\":{\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"   \"}]}]}}")]
+    [InlineData("{\"hooks\":{\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test\"}]}]}}")]
+    [InlineData("{ not-json")]
+    public void Hook_report_rejects_invalid_or_commandWindows_only_contracts(string hooks)
+    {
+        var report = CodexProjectConfigurationValidator.ReportHooks(new Dictionary<string, string> { ["hooks.json"] = hooks });
+
+        Assert.True(report.HooksPresent);
+        Assert.False(report.PreToolUseConfigured);
+        Assert.False(report.StopConfigured);
+        Assert.False(string.IsNullOrWhiteSpace(report.ValidationError));
+    }
+
+    [Fact]
+    public void Hook_report_accepts_command_without_optional_windows_override()
+    {
+        const string hooks = "{\"hooks\":{\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe test\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe test\"}]}]}}";
+
+        var report = CodexProjectConfigurationValidator.ReportHooks(new Dictionary<string, string> { ["hooks.json"] = hooks });
+
+        Assert.True(report.PreToolUseConfigured);
+        Assert.True(report.StopConfigured);
+        Assert.Null(report.ValidationError);
     }
 
     [Fact]
@@ -65,6 +94,43 @@ public sealed class CodexProjectConfigurationValidatorTests
             {
                 Directory.Delete(root, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "LiveCodexConfig")]
+    public async Task Current_codex_strict_config_accepts_a_project_layer_containing_the_valid_hook_fixture()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("CAS_RUN_CODEX_CONFIG_E2E"), "1", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        Assert.StartsWith("E:\\", testRoot, StringComparison.OrdinalIgnoreCase);
+        var root = Path.Combine(testRoot, $"codex-hook-contract-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var command = (await new CodexCommandLocator().LocateAsync()).Command
+                ?? throw new InvalidOperationException("当前测试环境没有可执行的 Codex CLI。");
+            var validator = new CodexProjectConfigurationValidator(new AppDataPaths(root));
+            var fixtures = Path.Combine(FindRepositoryRoot(), "tests", "Fixtures", "native-codex");
+            var projectConfiguration = await File.ReadAllTextAsync(Path.Combine(fixtures, "valid-project-whitelist.toml"));
+            const string validHooks = "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"apply_patch|Edit|Write\",\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe contract-test\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe contract-test\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe contract-test\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook stop --pipe contract-test\"}]}]}}";
+
+            // This proves the layered candidate remains loadable, but it is
+            // deliberately not a negative hook-parser oracle: app-server
+            // strict config does not reject commandWindows-only hook files.
+            await validator.ValidateLayeredAsync(command, new CodexConfigurationLayers(
+                projectConfiguration,
+                null,
+                new Dictionary<string, string> { ["hooks.json"] = validHooks }));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
 

@@ -3,6 +3,7 @@ using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Projects;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Common;
+using System.Text.Json;
 
 namespace CodexAgentSwitch.Tests.CodexAppServer;
 
@@ -49,6 +50,7 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("required = true", config, StringComparison.Ordinal);
             var hooks = await File.ReadAllTextAsync(Path.Combine(project, ".codex", "hooks.json"));
             Assert.Contains("\"matcher\": \"Bash|apply_patch|Edit|Write\"", hooks, StringComparison.Ordinal);
+            AssertManagedHookContract(hooks);
             Assert.Contains("\"commandWindows\"", hooks, StringComparison.Ordinal);
             Assert.Contains("\"Stop\"", hooks, StringComparison.Ordinal);
             Assert.Contains("--hook stop", hooks, StringComparison.OrdinalIgnoreCase);
@@ -236,6 +238,83 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.DoesNotContain("--hook stop", hooks, StringComparison.OrdinalIgnoreCase);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task Existing_commandWindows_only_managed_hooks_are_migrated_without_touching_unrelated_hooks()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-hooks-migration-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var codexDirectory = Path.Combine(projectDirectory, ".codex");
+        Directory.CreateDirectory(codexDirectory);
+        var hooksPath = Path.Combine(codexDirectory, "hooks.json");
+        const string oldHooks = """
+            {
+              "hooks": {
+                "PreToolUse": [
+                  { "matcher": "Other", "hooks": [{ "type": "command", "command": "other.exe --safe" }] },
+                  { "matcher": "Bash|apply_patch|Edit|Write", "hooks": [{ "type": "command", "commandWindows": "CodexAgentSwitch.ToolHost.exe --hook pre-tool-use --pipe legacy-pipe" }] }
+                ],
+                "Stop": [
+                  { "hooks": [{ "type": "command", "command": "other-stop.exe" }] },
+                  { "hooks": [{ "type": "command", "commandWindows": "CodexAgentSwitch.ToolHost.exe --hook stop --pipe legacy-pipe" }] }
+                ]
+              }
+            }
+            """;
+        await File.WriteAllTextAsync(hooksPath, oldHooks);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(new AppDataPaths(Path.Combine(root, "app-data")), new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"), new RecordingDesktopStarter(), new PassThroughConfigurationValidator());
+            var profile = Profile.CreateDefault(now) with { WorkerPolicy = new WorkerPolicy(true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.SingleAgent) };
+            var project = new AgentProject("hooks-migration", "Hooks migration", projectDirectory, false, now, now);
+
+            Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project])).Succeeded);
+            var migrated = await File.ReadAllTextAsync(hooksPath);
+            AssertManagedHookContract(migrated);
+            Assert.Contains("other.exe --safe", migrated, StringComparison.Ordinal);
+            Assert.Contains("other-stop.exe", migrated, StringComparison.Ordinal);
+            Assert.DoesNotContain("legacy-pipe", migrated, StringComparison.Ordinal);
+
+            Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project])).Succeeded);
+            Assert.Equal(migrated, await File.ReadAllTextAsync(hooksPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task Malformed_unrelated_hooks_are_not_overwritten()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT") ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-hooks-malformed-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var codexDirectory = Path.Combine(projectDirectory, ".codex");
+        Directory.CreateDirectory(codexDirectory);
+        var hooksPath = Path.Combine(codexDirectory, "hooks.json");
+        const string malformed = "{ not-json";
+        await File.WriteAllTextAsync(hooksPath, malformed);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(new AppDataPaths(Path.Combine(root, "app-data")), new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"), new RecordingDesktopStarter(), new PassThroughConfigurationValidator());
+            var profile = Profile.CreateDefault(now) with { WorkerPolicy = new WorkerPolicy(true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.SingleAgent) };
+            var project = new AgentProject("hooks-malformed", "Hooks malformed", projectDirectory, false, now, now);
+
+            var result = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("not valid JSON", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(malformed, await File.ReadAllTextAsync(hooksPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     [Fact]
@@ -502,6 +581,32 @@ public sealed class CodexDesktopAppLauncherTests
             new FixedLocator(),
             new PassThroughModelResolver(),
             validator);
+
+    private static void AssertManagedHookContract(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var hooks = document.RootElement.GetProperty("hooks");
+        AssertManagedHookGroup(hooks.GetProperty("PreToolUse"), "pre-tool-use");
+        AssertManagedHookGroup(hooks.GetProperty("Stop"), "stop");
+    }
+
+    private static void AssertManagedHookGroup(JsonElement groups, string expectedHook)
+    {
+        var handlers = groups.EnumerateArray()
+            .SelectMany(group => group.GetProperty("hooks").EnumerateArray())
+            .Where(handler => handler.TryGetProperty("command", out var command)
+                && command.ValueKind == JsonValueKind.String
+                && command.GetString()!.Contains("CodexAgentSwitch.ToolHost.exe", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var handler = Assert.Single(handlers);
+        Assert.Equal("command", handler.GetProperty("type").GetString());
+        var command = handler.GetProperty("command").GetString();
+        var windows = handler.GetProperty("commandWindows").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(command));
+        Assert.Equal(command, windows);
+        Assert.Contains($"--hook {expectedHook}", command, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("--pipe CodexAgentSwitch-Scheduler-", command, StringComparison.Ordinal);
+    }
 
     private sealed class RecordingDesktopStarter : ICodexDesktopProcessStarter
     {

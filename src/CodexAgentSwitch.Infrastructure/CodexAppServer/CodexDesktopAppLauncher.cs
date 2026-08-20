@@ -613,6 +613,8 @@ public sealed class CodexDesktopAppLauncher(
         }
 
         var command = Path.Combine(AppContext.BaseDirectory, "ToolHost", "CodexAgentSwitch.ToolHost.exe");
+        var preToolUseCommand = $"\"{command}\" --hook pre-tool-use --pipe {SchedulerEndpoint.PipeName}";
+        var stopCommand = $"\"{command}\" --hook stop --pipe {SchedulerEndpoint.PipeName}";
         var managed = new JsonObject
         {
             ["matcher"] = "Bash|apply_patch|Edit|Write",
@@ -621,7 +623,8 @@ public sealed class CodexDesktopAppLauncher(
                 new JsonObject
                 {
                     ["type"] = "command",
-                    ["commandWindows"] = $"\"{command}\" --hook pre-tool-use --pipe {SchedulerEndpoint.PipeName}",
+                    ["command"] = preToolUseCommand,
+                    ["commandWindows"] = preToolUseCommand,
                 },
             },
         };
@@ -633,7 +636,8 @@ public sealed class CodexDesktopAppLauncher(
                 new JsonObject
                 {
                     ["type"] = "command",
-                    ["commandWindows"] = $"\"{command}\" --hook stop --pipe {SchedulerEndpoint.PipeName}",
+                    ["command"] = stopCommand,
+                    ["commandWindows"] = stopCommand,
                 },
             },
         });
@@ -643,17 +647,59 @@ public sealed class CodexDesktopAppLauncher(
 
     private static bool IsManagedHookGroup(JsonNode? node)
     {
-        if (node is JsonObject direct && IsManagedHookCommand(direct["commandWindows"]?.GetValue<string>()))
+        if (node is JsonObject direct && IsManagedHookHandler(direct))
             return true;
         if (node is not JsonObject group || group["hooks"] is not JsonArray handlers) return false;
-        return handlers.OfType<JsonObject>().Any(handler =>
-            IsManagedHookCommand(handler["commandWindows"]?.GetValue<string>()));
+        return handlers.OfType<JsonObject>().Any(IsManagedHookHandler);
     }
 
-    private static bool IsManagedHookCommand(string? command) =>
-        command?.Contains("CodexAgentSwitch.ToolHost", StringComparison.OrdinalIgnoreCase) == true
-        && (command.Contains("--hook pre-tool-use", StringComparison.OrdinalIgnoreCase)
-            || command.Contains("--hook stop", StringComparison.OrdinalIgnoreCase));
+    private static bool IsManagedHookHandler(JsonObject handler) =>
+        IsManagedHookCommand(ReadString(handler["command"]))
+        || IsManagedHookCommand(ReadString(handler["commandWindows"]));
+
+    private static string? ReadString(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private static bool IsManagedHookCommand(string? command)
+    {
+        var input = command?.Trim();
+        if (string.IsNullOrEmpty(input)) return false;
+
+        string executable;
+        string arguments;
+        if (input[0] == '"')
+        {
+            var closingQuote = input.IndexOf('"', 1);
+            if (closingQuote <= 1) return false;
+            executable = input[1..closingQuote];
+            arguments = input[(closingQuote + 1)..];
+        }
+        else
+        {
+            var separator = input.IndexOfAny([' ', '\t']);
+            executable = separator < 0 ? input : input[..separator];
+            arguments = separator < 0 ? string.Empty : input[separator..];
+        }
+
+        return string.Equals(Path.GetFileName(executable), "CodexAgentSwitch.ToolHost.exe", StringComparison.OrdinalIgnoreCase)
+            && (HasArgumentPair(arguments, "--hook", "pre-tool-use")
+                || HasArgumentPair(arguments, "--hook", "stop"));
+    }
+
+    private static bool HasArgumentPair(string arguments, string name, string value)
+    {
+        var tokens = arguments.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        for (var index = 0; index + 1 < tokens.Length; index++)
+        {
+            if (string.Equals(tokens[index], name, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(tokens[index + 1], value, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static IReadOnlyDictionary<string, string>? BuildValidationProjectFiles(
         EffectiveWorkerDefinition worker,

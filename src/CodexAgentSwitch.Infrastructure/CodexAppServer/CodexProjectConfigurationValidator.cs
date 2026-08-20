@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using CodexAgentSwitch.Infrastructure.Common;
 
 namespace CodexAgentSwitch.Infrastructure.CodexAppServer;
@@ -37,6 +38,10 @@ public sealed record CodexProjectConfigurationReport(
     bool PreToolUseConfigured,
     string ReviewNotice)
 {
+    public bool StopConfigured { get; init; }
+
+    public string? ValidationError { get; init; }
+
     public const string UserControlledReviewNotice =
         "Project trust and exact hook-command review remain user-controlled; Agent Switch never auto-grants trust or hook hash trust.";
 }
@@ -46,9 +51,145 @@ public sealed class CodexProjectConfigurationValidator(AppDataPaths paths) : ICo
     public static CodexProjectConfigurationReport ReportHooks(IReadOnlyDictionary<string, string>? projectFiles)
     {
         var hooks = projectFiles?.TryGetValue("hooks.json", out var value) == true ? value : null;
-        var configured = hooks?.Contains("PreToolUse", StringComparison.OrdinalIgnoreCase) == true
-            && hooks.Contains("commandWindows", StringComparison.OrdinalIgnoreCase);
-        return new(hooks is not null, configured, CodexProjectConfigurationReport.UserControlledReviewNotice);
+        if (hooks is null)
+        {
+            return new(false, false, CodexProjectConfigurationReport.UserControlledReviewNotice);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(hooks);
+            if (!document.RootElement.TryGetProperty("hooks", out var hookRoot)
+                || hookRoot.ValueKind != JsonValueKind.Object)
+            {
+                return InvalidHookReport("hooks must be an object.");
+            }
+
+            var preToolUse = HasValidManagedCommand(hookRoot, "PreToolUse", "pre-tool-use");
+            var stop = HasValidManagedCommand(hookRoot, "Stop", "stop");
+            return new(true, preToolUse, CodexProjectConfigurationReport.UserControlledReviewNotice)
+            {
+                StopConfigured = stop,
+                ValidationError = preToolUse && stop ? null : "CAS managed PreToolUse and Stop command hooks must include valid command, optional commandWindows, hook, and pipe fields.",
+            };
+        }
+        catch (JsonException exception)
+        {
+            return InvalidHookReport($"hooks.json is invalid JSON: {exception.Message}");
+        }
+    }
+
+    private static CodexProjectConfigurationReport InvalidHookReport(string error) =>
+        new(true, false, CodexProjectConfigurationReport.UserControlledReviewNotice)
+        {
+            StopConfigured = false,
+            ValidationError = error,
+        };
+
+    private static bool HasValidManagedCommand(JsonElement hookRoot, string hookName, string expectedHook)
+    {
+        if (!hookRoot.TryGetProperty(hookName, out var groups) || groups.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var group in groups.EnumerateArray())
+        {
+            if (group.ValueKind != JsonValueKind.Object
+                || !group.TryGetProperty("hooks", out var handlers)
+                || handlers.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var handler in handlers.EnumerateArray())
+            {
+                if (IsValidManagedCommand(handler, expectedHook)) return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsValidManagedCommand(JsonElement handler, string expectedHook)
+    {
+        if (handler.ValueKind != JsonValueKind.Object
+            || !TryGetNonEmptyString(handler, "type", out var type)
+            || !string.Equals(type, "command", StringComparison.Ordinal)
+            || !TryGetNonEmptyString(handler, "command", out var command)
+            || !TryParseManagedCommand(command, expectedHook, out var pipe))
+        {
+            return false;
+        }
+
+        if (!handler.TryGetProperty("commandWindows", out var windows)) return true;
+        return windows.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(windows.GetString())
+            && TryParseManagedCommand(windows.GetString()!, expectedHook, out var windowsPipe)
+            && string.Equals(pipe, windowsPipe, StringComparison.Ordinal);
+    }
+
+    private static bool TryGetNonEmptyString(JsonElement element, string name, out string value)
+    {
+        value = string.Empty;
+        if (!element.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = property.GetString()?.Trim() ?? string.Empty;
+        return value.Length > 0;
+    }
+
+    private static bool TryParseManagedCommand(string command, string expectedHook, out string pipe)
+    {
+        pipe = string.Empty;
+        var tokens = TokenizeCommand(command);
+        if (tokens.Count < 5
+            || !string.Equals(Path.GetFileName(tokens[0]), "CodexAgentSwitch.ToolHost.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string? hook = null;
+        for (var index = 1; index + 1 < tokens.Count; index++)
+        {
+            if (string.Equals(tokens[index], "--hook", StringComparison.OrdinalIgnoreCase)) hook = tokens[++index];
+            else if (string.Equals(tokens[index], "--pipe", StringComparison.OrdinalIgnoreCase)) pipe = tokens[++index];
+        }
+
+        return string.Equals(hook, expectedHook, StringComparison.OrdinalIgnoreCase)
+            && pipe.Length > 0
+            && pipe.All(character => char.IsLetterOrDigit(character) || character is '-' or '_' or '.');
+    }
+
+    private static IReadOnlyList<string> TokenizeCommand(string command)
+    {
+        var tokens = new List<string>();
+        var current = new StringBuilder();
+        var quoted = false;
+        foreach (var character in command.Trim())
+        {
+            if (character == '"')
+            {
+                quoted = !quoted;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character) && !quoted)
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+                continue;
+            }
+
+            current.Append(character);
+        }
+        if (current.Length > 0) tokens.Add(current.ToString());
+        return quoted ? [] : tokens;
     }
 
     public async Task ValidateAsync(CodexCommand command, string candidateToml, CancellationToken cancellationToken = default)
