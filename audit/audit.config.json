@@ -1,0 +1,27 @@
+{
+  "Repo": "E:\\AISPace\\Codex Agent Switch Project",
+  "SessionsRoot": "E:\\AI\\CODEX\\.codex\\sessions",
+  "OutputRoot": ".\\reports",
+  "ModelRates": {
+    "gpt-5.6-sol": {
+      "Role": "Main",
+      "InputPer1M": 125.0,
+      "CachedInputPer1M": 12.5,
+      "OutputPer1M": 750.0,
+      "SolEquivalentMultiplier": 1.0
+    },
+    "gpt-5.6-luna": {
+      "Role": "Worker",
+      "InputPer1M": 25.0,
+      "CachedInputPer1M": 2.5,
+      "OutputPer1M": 150.0,
+      "SolEquivalentMultiplier": 5.0
+    }
+  },
+  "Audit": {
+    "PreVersionHitBufferMinutes": 10,
+    "PostFinalCommitBufferMinutes": 20,
+    "WorkerOverlapBufferMinutes": 10,
+    "SessionSelectionVersion": 2
+  }
+}

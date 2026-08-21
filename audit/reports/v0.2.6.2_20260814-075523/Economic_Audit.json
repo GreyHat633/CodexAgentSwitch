@@ -1,0 +1,117 @@
+﻿{
+    "SchemaVersion":  1,
+    "GeneratedAt":  "2026-08-14T07:55:23.0892311+08:00",
+    "AutoSelectedRefs":  true,
+    "Repo":  "E:\\AISPace\\Codex Agent Switch Project",
+    "SessionsRoot":  "E:\\AI\\CODEX\\.codex\\sessions",
+    "BaseRef":  "v0.2.6.1",
+    "FinalRef":  "v0.2.6.2",
+    "BaseCommit":  "729d0b49e0e006c9552a11373cac9cb95e94f61f",
+    "FinalCommit":  "6fd3d32bc2f121a594b8b784bbff7f5054c9ec5e",
+    "Window":  {
+                   "GitBroadStart":  "\/Date(1786583706000)\/",
+                   "GitBroadEnd":  "\/Date(1786663497000)\/",
+                   "AuditStart":  "\/Date(1786659715045)\/",
+                   "AuditEnd":  "\/Date(1786663497000)\/",
+                   "RelevanceMode":  "StrongDevelopmentEvidence"
+               },
+    "RelevantSessions":  [
+                             {
+                                 "File":  "E:\\AI\\CODEX\\.codex\\sessions\\2026\\08\\14\\rollout-2026-08-14T06-31-54-019ffd40-de1f-7271-a2a2-036dd7e4e565.jsonl",
+                                 "Name":  "rollout-2026-08-14T06-31-54-019ffd40-de1f-7271-a2a2-036dd7e4e565.jsonl",
+                                 "Model":  "gpt-5.6-sol",
+                                 "Role":  "Main",
+                                 "Start":  "\/Date(1786660315045)\/",
+                                 "End":  "\/Date(1786665182036)\/",
+                                 "RepoHit":  true,
+                                 "VersionHit":  true,
+                                 "CommitHit":  true,
+                                 "DevelopmentMutationHint":  true,
+                                 "SelectionReason":  "final-commit-anchor"
+                             },
+                             {
+                                 "File":  "E:\\AI\\CODEX\\.codex\\sessions\\2026\\08\\14\\rollout-2026-08-14T06-35-24-019ffd44-12c7-7861-9db1-57556f50a0c5.jsonl",
+                                 "Name":  "rollout-2026-08-14T06-35-24-019ffd44-12c7-7861-9db1-57556f50a0c5.jsonl",
+                                 "Model":  "gpt-5.6-luna",
+                                 "Role":  "Worker",
+                                 "Start":  "\/Date(1786660524999)\/",
+                                 "End":  "\/Date(1786660719030)\/",
+                                 "RepoHit":  true,
+                                 "VersionHit":  true,
+                                 "CommitHit":  false,
+                                 "DevelopmentMutationHint":  true,
+                                 "SelectionReason":  "explicit-worker-dev"
+                             },
+                             {
+                                 "File":  "E:\\AI\\CODEX\\.codex\\sessions\\2026\\08\\14\\rollout-2026-08-14T06-43-51-019ffd4b-d013-77e2-8b20-9df88b7f9ea6.jsonl",
+                                 "Name":  "rollout-2026-08-14T06-43-51-019ffd4b-d013-77e2-8b20-9df88b7f9ea6.jsonl",
+                                 "Model":  "gpt-5.6-luna",
+                                 "Role":  "Worker",
+                                 "Start":  "\/Date(1786661032253)\/",
+                                 "End":  "\/Date(1786661508171)\/",
+                                 "RepoHit":  true,
+                                 "VersionHit":  false,
+                                 "CommitHit":  false,
+                                 "DevelopmentMutationHint":  true,
+                                 "SelectionReason":  "worker-overlap"
+                             }
+                         ],
+    "Cost":  {
+                 "MainActual":  442.59,
+                 "WorkerActual":  19.91,
+                 "ActualCost":  462.49,
+                 "WorkerSolEquivalent":  99.55,
+                 "AllSolEquivalent":  542.13,
+                 "SolDisplacementPct":  18.4,
+                 "SavingPct":  14.7
+             },
+    "PaidPointsObserved":  {
+                               "BalanceEvents":  265,
+                               "ObservedDecrease":  0,
+                               "ObservedIncrease":  0,
+                               "TopupOrStaleBalanceDetected":  false
+                           },
+    "DelegationCoverage":  {
+                               "ChangedDevFiles":  17,
+                               "WorkerTouchedDevFiles":  5,
+                               "DevFileCoveragePct":  29.4,
+                               "ChangedDevLines":  997,
+                               "WorkerFootprintDevLines":  602,
+                               "DevLineCoveragePct":  60.4,
+                               "ChangedCoreFiles":  13,
+                               "WorkerTouchedCoreFiles":  3,
+                               "CoreFileCoveragePct":  23.1,
+                               "ChangedCoreLines":  518,
+                               "WorkerFootprintCoreLines":  292,
+                               "CoreLineCoveragePct":  56.4,
+                               "Confidence":  "Medium-High"
+                           },
+    "AdoptionEfficiency":  {
+                               "WorkerTouchedFiles":  6,
+                               "RetainedFiles":  5,
+                               "RetentionPct":  83.3,
+                               "DirectAdoptFiles":  0,
+                               "DirectAdoptionPct":  0,
+                               "MainAdjustedFiles":  5,
+                               "MainAdjustedPct":  83.3,
+                               "RevertedFiles":  1,
+                               "RevertedPct":  16.7,
+                               "Confidence":  "Medium"
+                           },
+    "MainBeforeFirstWorkerCostProxy":  37.16,
+    "UnknownPricedModels":  [
+
+                            ],
+    "Warnings":  [
+                     "Repository has uncommitted changes. Git-based coverage uses only v0.2.6.1..v0.2.6.2 and ignores current uncommitted changes."
+                 ],
+    "Notes":  [
+                  "Actual Cost / Sol Displacement use configured token-price rates and incremental token_count deltas.",
+                  "Reasoning tokens are already included in output cost and are not double-charged.",
+                  "Paid-point balances are account-level observations and are not assumed to equal normalized task cost.",
+                  "Delegation Coverage is a Git/session mutation-footprint proxy, not semantic workload percentage.",
+                  "Adoption Efficiency is a retention/direct-adjustment proxy; MainAdjusted does not mean Worker failure.",
+                  "MainBeforeFirstWorkerCostProxy is a mechanical pre-worker Main-cost proxy, not proof that all of it was orchestration overhead.",
+                  "No model/provider call is made by this audit."
+              ]
+}
