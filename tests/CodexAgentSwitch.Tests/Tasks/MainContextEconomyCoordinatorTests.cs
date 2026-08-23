@@ -19,6 +19,10 @@ public sealed class MainContextEconomyCoordinatorTests
         var snapshot = await coordinator.GetSnapshotAsync("thread-a");
         Assert.Equal(ContextEconomyState.Verifying, snapshot!.State);
         Assert.Equal(1, session.CompactionCalls);
+        Assert.False(string.IsNullOrWhiteSpace(snapshot.LastCompactionRequestId));
+        Assert.NotNull(snapshot.LastCompactionRequestedAt);
+        Assert.NotNull(snapshot.LastCompactionStartedAt);
+        Assert.NotNull(snapshot.LastCompactionCompletedAt);
     }
 
     [Fact]
@@ -76,14 +80,26 @@ public sealed class MainContextEconomyCoordinatorTests
     }
 
     [Fact]
-    public async Task Restarting_compacting_state_fails_closed()
+    public async Task Restarting_compacting_state_blocks_automatic_retry_until_terminal_evidence_exists()
     {
-        var store = new MemoryStore(new ContextEconomySnapshot("thread-a", ContextEconomyState.Compacting, 1, 0, [], [], "in-flight"));
+        var store = new MemoryStore(new ContextEconomySnapshot(
+            "thread-a",
+            ContextEconomyState.Compacting,
+            1,
+            0,
+            [],
+            [],
+            "in-flight",
+            LastCompactionRequestId: "request-before-crash"));
         var session = new FakeSession();
         var coordinator = new MainContextEconomyCoordinator(session, stateStore: store);
         await coordinator.BindThreadAsync("thread-a", session);
         var snapshot = await coordinator.GetSnapshotAsync("thread-a");
-        Assert.Equal(ContextEconomyState.CompactFailed, snapshot!.State);
+        Assert.Equal(ContextEconomyState.ContextProtectionBlocked, snapshot!.State);
+        Assert.Equal("request-before-crash", snapshot.LastCompactionRequestId);
+
+        await coordinator.ObserveTurnAsync("thread-a", Sample(90, 100), safeBoundary: true);
+        Assert.Equal(0, session.CompactionCalls);
     }
 
     [Fact]
@@ -136,6 +152,85 @@ public sealed class MainContextEconomyCoordinatorTests
         Assert.Equal(1, session.CompactionCalls);
     }
 
+    [Fact]
+    public async Task Control_guard_is_revalidated_immediately_before_compaction_rpc()
+    {
+        var session = new FakeSession { EmitLifecycle = true };
+        var coordinator = new MainContextEconomyCoordinator(
+            session,
+            new ContextEconomyOptions { CompactionTimeout = TimeSpan.FromSeconds(1) });
+        var guardCalls = 0;
+        await coordinator.BindThreadAsync(
+            "thread-a",
+            session,
+            _ =>
+            {
+                guardCalls++;
+                return Task.FromResult(ContextControlValidation.Reject("lease changed"));
+            });
+        await coordinator.ObserveTurnAsync("thread-a", Sample(20, 100));
+        await coordinator.ObserveTurnAsync("thread-a", Sample(20, 100));
+
+        var result = await coordinator.ObserveTurnAsync("thread-a", Sample(80, 100), safeBoundary: true);
+
+        Assert.Equal(1, guardCalls);
+        Assert.Equal(0, session.CompactionCalls);
+        Assert.Equal(ContextEconomyState.ContextProtectionBlocked, result.State);
+        Assert.False(result.Compaction!.Succeeded);
+        Assert.Contains("lease changed", result.Compaction.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Host_compaction_item_blocks_a_parallel_request_and_its_completion_starts_verification()
+    {
+        var session = new FakeSession { EmitLifecycle = true };
+        var coordinator = new MainContextEconomyCoordinator(
+            session,
+            new ContextEconomyOptions { CompactionTimeout = TimeSpan.FromSeconds(1) });
+        await coordinator.BindThreadAsync("thread-a", session);
+        await coordinator.ObserveTurnAsync("thread-a", Sample(20, 100));
+        await coordinator.ObserveTurnAsync("thread-a", Sample(20, 100));
+        await coordinator.ObserveTurnAsync("thread-a", Sample(70, 100));
+
+        await session.EmitAsync(new(MainAgentEventKind.CompactionStarted, "thread-a", "compact-host", null, "inProgress", null));
+        var delayed = await coordinator.ObserveTurnAsync("thread-a", Sample(80, 100), safeBoundary: true);
+        await session.EmitAsync(new(MainAgentEventKind.CompactionCompleted, "thread-a", "compact-host", null, "completed", null));
+        var snapshot = await coordinator.GetSnapshotAsync("thread-a");
+
+        Assert.False(delayed.CompactionRequested);
+        Assert.Equal(0, session.CompactionCalls);
+        Assert.Equal(ContextEconomyState.Verifying, snapshot!.State);
+        Assert.Equal(CompactionTrigger.HostAutomatic, snapshot.LastCompactionTrigger);
+    }
+
+    [Fact]
+    public async Task Realtime_updates_for_one_turn_replace_the_sample_before_safe_boundary()
+    {
+        var session = new FakeSession { EmitLifecycle = true };
+        var coordinator = new MainContextEconomyCoordinator(
+            session,
+            new ContextEconomyOptions { CompactionTimeout = TimeSpan.FromSeconds(1) });
+        await coordinator.BindThreadAsync("thread-a", session);
+        await coordinator.ObserveTurnAsync("thread-a", Sample(20, 100));
+        await coordinator.ObserveTurnAsync("thread-a", Sample(20, 100));
+
+        await coordinator.ObserveTurnAsync(
+            "thread-a",
+            Sample(60, 100) with { TurnId = "turn-live" },
+            safeBoundary: false);
+        var result = await coordinator.ObserveTurnAsync(
+            "thread-a",
+            Sample(80, 100) with { TurnId = "turn-live" },
+            safeBoundary: true);
+        var snapshot = await coordinator.GetSnapshotAsync("thread-a");
+
+        Assert.True(result.CompactionRequested);
+        Assert.Equal(3, snapshot!.Samples.Count);
+        Assert.Equal(80, snapshot.Samples[^1].InputTokens);
+        Assert.Equal("turn-live", snapshot.Samples[^1].TurnId);
+        Assert.Equal(1, session.CompactionCalls);
+    }
+
     private static ContextTurnSample Sample(long input, long window) => new(input, input / 2, input, window);
 
     private sealed class FakeSession : IMainAgentSession
@@ -171,6 +266,7 @@ public sealed class MainContextEconomyCoordinatorTests
             }
             return new(threadId, Acknowledge, JsonSerializer.SerializeToElement(new { acknowledged = Acknowledge }));
         }
+        public Task EmitAsync(MainAgentEvent value) => EventReceived?.Invoke(value) ?? Task.CompletedTask;
         private static MainAgentTurnResult Result(string thread, string turn) => new(thread, turn, ControlledTaskStatus.Completed, null, null, default);
     }
 

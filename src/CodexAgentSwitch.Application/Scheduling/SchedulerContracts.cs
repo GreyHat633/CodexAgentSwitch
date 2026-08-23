@@ -123,6 +123,16 @@ public sealed record SchedulerRuntimeDiagnostics(
     ContextEconomyRuntimeDiagnostics? ContextEconomy = null,
     HookRuntimeDiagnostics? Hooks = null);
 
+public enum HookLifecycleState
+{
+    FrozenDisabled,
+}
+
+public enum HardGateLifecycleState
+{
+    Disabled,
+}
+
 public sealed record HookRuntimeDiagnostics(
     DateTimeOffset? PreToolUseLastSeen,
     long PreToolUseSeenCount,
@@ -142,7 +152,9 @@ public sealed record HookRuntimeDiagnostics(
     long HardGateDeniedCount,
     DateTimeOffset? HardGateLastWouldDenyAt,
     DateTimeOffset? HardGateLastDenyAt,
-    HardGateEventDiagnostics? LastHardGateEvent);
+    HardGateEventDiagnostics? LastHardGateEvent,
+    HookLifecycleState LifecycleState = HookLifecycleState.FrozenDisabled,
+    HardGateLifecycleState HardGateState = HardGateLifecycleState.Disabled);
 
 public sealed record HardGateEventDiagnostics(
     DateTimeOffset Timestamp,

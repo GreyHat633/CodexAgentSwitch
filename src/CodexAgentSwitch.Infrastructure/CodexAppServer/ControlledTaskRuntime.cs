@@ -5,6 +5,8 @@ namespace CodexAgentSwitch.Infrastructure.CodexAppServer;
 
 public sealed class ControlledTaskRuntime(CodexRuntimeManager runtimeManager) : IControlledTaskRuntime
 {
+    public string? AppServerInstanceId => runtimeManager.InstanceId;
+
     public IMainAgentSession MainAgent => runtimeManager.MainAgent
         ?? throw new InvalidOperationException("Codex App Server 尚未启动。");
 

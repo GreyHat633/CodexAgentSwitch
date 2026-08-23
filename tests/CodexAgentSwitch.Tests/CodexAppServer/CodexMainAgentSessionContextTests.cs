@@ -47,6 +47,42 @@ public sealed class CodexMainAgentSessionContextTests
     }
 
     [Fact]
+    public async Task Start_and_resume_capture_the_official_thread_session_identity()
+    {
+        var client = new CodexAppServerClient(CodexCommand.Direct("unused"));
+        var sessionId = "app-session-root";
+        var session = new CodexMainAgentSession(client, new TestResolver(), (method, _, _) =>
+            Task.FromResult(JsonSerializer.SerializeToElement(new
+            {
+                thread = new { id = "thread-managed", sessionId },
+            })));
+
+        var threadId = await session.CreateThreadAsync("model", "E:\\work", ExecutionApprovalMode.Safe);
+        var created = session.GetThreadIdentity(threadId);
+        Assert.Equal("app-session-root", created!.SessionId);
+        Assert.Equal(Path.GetFullPath("E:\\work"), created.WorkingDirectory);
+
+        sessionId = "app-session-resumed";
+        await session.ResumeThreadAsync(threadId, "model", "E:\\work", ExecutionApprovalMode.Safe);
+        Assert.Equal("app-session-resumed", session.GetThreadIdentity(threadId)!.SessionId);
+    }
+
+    [Fact]
+    public async Task Missing_session_id_keeps_context_identity_unproved()
+    {
+        var client = new CodexAppServerClient(CodexCommand.Direct("unused"));
+        var session = new CodexMainAgentSession(client, new TestResolver(), (_, _, _) =>
+            Task.FromResult(JsonSerializer.SerializeToElement(new
+            {
+                thread = new { id = "thread-unproved" },
+            })));
+
+        var threadId = await session.CreateThreadAsync("model", "E:\\work", ExecutionApprovalMode.Safe);
+
+        Assert.Null(session.GetThreadIdentity(threadId));
+    }
+
+    [Fact]
     public async Task Rollover_replays_checkpoint_on_only_the_fresh_thread_and_rejects_bad_provenance()
     {
         var calls = new List<(string Method, JsonElement Parameters)>();
@@ -131,6 +167,100 @@ public sealed class CodexMainAgentSessionContextTests
 
         Assert.Equal([MainAgentEventKind.TraceItemStarted, MainAgentEventKind.TraceItem], events.Select(value => value.Kind));
         Assert.All(events, value => Assert.Equal(TaskMessageKind.ToolCall, value.MessageKind));
+    }
+
+    [Fact]
+    public async Task Official_token_usage_and_status_notifications_are_exposed_without_message_content()
+    {
+        var client = new CodexAppServerClient(CodexCommand.Direct("unused"));
+        var session = new CodexMainAgentSession(client, new TestResolver(), (method, _, _) =>
+            Task.FromResult(method == "turn/start"
+                ? JsonSerializer.SerializeToElement(new { turn = new { id = "turn-usage" } })
+                : JsonSerializer.SerializeToElement(new { accepted = true })));
+        var events = new List<MainAgentEvent>();
+        session.EventReceived += value => { events.Add(value); return Task.CompletedTask; };
+        await session.StartTurnAsync("thread-usage", "continue", "model", "medium", "E:\\work", ExecutionApprovalMode.Safe);
+
+        await InvokeNotification(session, "thread/tokenUsage/updated", new
+        {
+            threadId = "thread-usage",
+            turnId = "turn-usage",
+            tokenUsage = new
+            {
+                last = new
+                {
+                    inputTokens = 800,
+                    cachedInputTokens = 300,
+                    outputTokens = 40,
+                    reasoningOutputTokens = 20,
+                    totalTokens = 840,
+                },
+                total = new { inputTokens = 1200 },
+                modelContextWindow = 1000,
+            },
+        });
+        await InvokeNotification(session, "thread/status/changed", new
+        {
+            threadId = "thread-usage",
+            status = new { type = "idle" },
+        });
+
+        var usageEvent = Assert.Single(events, value => value.Kind == MainAgentEventKind.TokenUsageUpdated);
+        Assert.Equal(new MainAgentTokenUsage(800, 300, 40, 20, 840, 1000), usageEvent.TokenUsage);
+        Assert.Null(usageEvent.Text);
+        var statusEvent = Assert.Single(events, value => value.Kind == MainAgentEventKind.StatusChanged);
+        Assert.Equal("idle", statusEvent.Status);
+    }
+
+    [Fact]
+    public async Task Approval_resolution_is_exposed_as_a_safe_boundary_signal()
+    {
+        var session = new CodexMainAgentSession(
+            new CodexAppServerClient(CodexCommand.Direct("unused")),
+            new TestResolver(),
+            (_, _, _) => Task.FromResult(JsonSerializer.SerializeToElement(new { accepted = true })));
+        var events = new List<MainAgentEvent>();
+        session.EventReceived += value => { events.Add(value); return Task.CompletedTask; };
+
+        await InvokeNotification(session, "serverRequest/resolved", new
+        {
+            threadId = "thread-approval",
+            turnId = "turn-approval",
+            requestId = 7,
+        });
+
+        Assert.Equal(MainAgentEventKind.ApprovalResolved, Assert.Single(events).Kind);
+    }
+
+    [Fact]
+    public async Task Malformed_token_usage_without_input_tokens_is_ignored()
+    {
+        var session = new CodexMainAgentSession(
+            new CodexAppServerClient(CodexCommand.Direct("unused")),
+            new TestResolver(),
+            (method, _, _) => Task.FromResult(method == "turn/start"
+                ? JsonSerializer.SerializeToElement(new { turn = new { id = "turn-malformed" } })
+                : JsonSerializer.SerializeToElement(new { accepted = true })));
+        var events = new List<MainAgentEvent>();
+        session.EventReceived += value => { events.Add(value); return Task.CompletedTask; };
+
+        await session.StartTurnAsync(
+            "thread-malformed",
+            "prompt",
+            "gpt-test",
+            "medium",
+            Environment.CurrentDirectory,
+            ExecutionApprovalMode.Automatic);
+        events.Clear();
+
+        await InvokeNotification(session, "thread/tokenUsage/updated", new
+        {
+            threadId = "thread-malformed",
+            turnId = "turn-malformed",
+            tokenUsage = new { last = new { totalTokens = 42 }, modelContextWindow = 1000 },
+        });
+
+        Assert.Empty(events);
     }
 
     private static async Task InvokeNotification(CodexMainAgentSession session, string method, object parameters)

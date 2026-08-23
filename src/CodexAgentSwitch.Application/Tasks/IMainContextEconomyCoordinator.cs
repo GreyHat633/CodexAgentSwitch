@@ -11,7 +11,11 @@ public interface IMainContextEconomyStateStore
 
 public interface IMainContextEconomyCoordinator
 {
-    Task BindThreadAsync(string threadId, IMainAgentSession session, CancellationToken cancellationToken = default);
+    Task BindThreadAsync(
+        string threadId,
+        IMainAgentSession session,
+        Func<CancellationToken, Task<ContextControlValidation>>? controlGuard = null,
+        CancellationToken cancellationToken = default);
     Task<ContextEconomyObservationResult> ObserveTurnAsync(
         string threadId,
         ContextTurnSample sample,
@@ -28,4 +32,10 @@ public interface IMainContextEconomyCoordinator
         CancellationToken cancellationToken = default);
     Task<ContextEconomySnapshot?> GetSnapshotAsync(string threadId, CancellationToken cancellationToken = default);
     Task SaveAsync(CancellationToken cancellationToken = default);
+}
+
+public sealed record ContextControlValidation(bool Allowed, string Reason)
+{
+    public static ContextControlValidation Permit(string reason = "Control lease is valid.") => new(true, reason);
+    public static ContextControlValidation Reject(string reason) => new(false, reason);
 }

@@ -385,7 +385,7 @@ public sealed class CodexDesktopAppLauncher(
         var nextProjectInstructions = ReplaceManagedProjectInstructions(
             existingProjectInstructions,
             BuildManagedProjectInstructions(worker));
-        var nextHooks = BuildManagedHooks(existingHooks, profile.WorkerPolicy.Enabled && profile.WorkerPolicy.Source != WorkerSource.Disabled);
+        var nextHooks = RemoveManagedHooks(existingHooks);
         var existingAgents = new Dictionary<string, byte[]?>(StringComparer.Ordinal);
         foreach (var relativePath in ManagedWorkerAgentFiles)
         {
@@ -455,6 +455,7 @@ public sealed class CodexDesktopAppLauncher(
                 }
             }
 
+            var hooksMutationApplied = false;
             try
             {
                 foreach (var relativePath in ManagedWorkerAgentFiles)
@@ -480,14 +481,24 @@ public sealed class CodexDesktopAppLauncher(
 
                 if (hooksChanged)
                 {
+                    var currentHooks = File.Exists(hooksPath)
+                        ? await File.ReadAllTextAsync(hooksPath, cancellationToken)
+                        : null;
+                    if (!string.Equals(existingHooks, currentHooks, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "Existing .codex/hooks.json changed while CAS was preparing its migration; refusing to overwrite concurrent changes.");
+                    }
+
                     if (nextHooks is null)
                     {
                         if (File.Exists(hooksPath)) File.Delete(hooksPath);
                     }
                     else
                     {
-                        await File.WriteAllTextAsync(hooksPath, nextHooks, new UTF8Encoding(false), cancellationToken);
+                        await WriteTextAtomicallyAsync(hooksPath, nextHooks, cancellationToken);
                     }
+                    hooksMutationApplied = true;
                 }
 
                 if (projectChanged)
@@ -495,7 +506,7 @@ public sealed class CodexDesktopAppLauncher(
                     File.Move(temporaryPath, configurationPath, overwrite: true);
                 }
             }
-            catch
+            catch (Exception exception)
             {
                 foreach (var relativePath in ManagedWorkerAgentFiles)
                 {
@@ -512,11 +523,24 @@ public sealed class CodexDesktopAppLauncher(
                     existingProjectInstructions is null ? null : Encoding.UTF8.GetBytes(existingProjectInstructions),
                     existingProjectInstructions is null,
                     cancellationToken);
-                await RestoreOriginalFileAsync(
-                    hooksPath,
-                    existingHooks is null ? null : Encoding.UTF8.GetBytes(existingHooks),
-                    existingHooks is null,
-                    cancellationToken);
+                if (hooksMutationApplied)
+                {
+                    var currentHooks = File.Exists(hooksPath)
+                        ? await File.ReadAllTextAsync(hooksPath, cancellationToken)
+                        : null;
+                    if (!string.Equals(currentHooks, nextHooks, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "CAS could not roll back .codex/hooks.json because it changed after migration; the backup was retained for manual recovery.",
+                            exception);
+                    }
+
+                    await RestoreOriginalFileAsync(
+                        hooksPath,
+                        existingHooks is null ? null : Encoding.UTF8.GetBytes(existingHooks),
+                        existingHooks is null,
+                        cancellationToken);
+                }
                 throw;
             }
 
@@ -573,7 +597,7 @@ public sealed class CodexDesktopAppLauncher(
         return builder.AppendLine(ManagedEnd).ToString();
     }
 
-    private static string? BuildManagedHooks(string? existing, bool enabled)
+    private static string? RemoveManagedHooks(string? existing)
     {
         JsonObject root;
         try
@@ -601,60 +625,11 @@ public sealed class CodexDesktopAppLauncher(
         var stop = hooks["Stop"] as JsonArray ?? new JsonArray();
         hooks["Stop"] = stop;
         RemoveManagedHookHandlers(stop);
-        if (!enabled)
-        {
-            if (preToolUse.Count == 0) hooks.Remove("PreToolUse");
-            if (postToolUse.Count == 0) hooks.Remove("PostToolUse");
-            if (stop.Count == 0) hooks.Remove("Stop");
-            if (hooks.Count == 0) root.Remove("hooks");
-            return root.Count == 0 ? null : root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-        }
-
-        var command = Path.Combine(AppContext.BaseDirectory, "ToolHost", "CodexAgentSwitch.ToolHost.exe");
-        var preToolUseCommand = $"\"{command}\" --hook pre-tool-use --pipe {SchedulerEndpoint.PipeName}";
-        var postToolUseCommand = $"\"{command}\" --hook post-tool-use --pipe {SchedulerEndpoint.PipeName}";
-        var stopCommand = $"\"{command}\" --hook stop --pipe {SchedulerEndpoint.PipeName}";
-        var managed = new JsonObject
-        {
-            ["matcher"] = "Bash|apply_patch|Edit|Write",
-            ["hooks"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["type"] = "command",
-                    ["command"] = preToolUseCommand,
-                    ["commandWindows"] = preToolUseCommand,
-                },
-            },
-        };
-        preToolUse.Add(managed);
-        postToolUse.Add(new JsonObject
-        {
-            ["matcher"] = "apply_patch|Edit|Write",
-            ["hooks"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["type"] = "command",
-                    ["command"] = postToolUseCommand,
-                    ["commandWindows"] = postToolUseCommand,
-                },
-            },
-        });
-        stop.Add(new JsonObject
-        {
-            ["hooks"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["type"] = "command",
-                    ["command"] = stopCommand,
-                    ["commandWindows"] = stopCommand,
-                },
-            },
-        });
-
-        return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        if (preToolUse.Count == 0) hooks.Remove("PreToolUse");
+        if (postToolUse.Count == 0) hooks.Remove("PostToolUse");
+        if (stop.Count == 0) hooks.Remove("Stop");
+        if (hooks.Count == 0) root.Remove("hooks");
+        return root.Count == 0 ? null : root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
     private static void RemoveManagedHookHandlers(JsonArray groups)
@@ -777,7 +752,7 @@ public sealed class CodexDesktopAppLauncher(
     private static string BuildProactiveDelegationPolicy() => """
         For non-trivial development, run one Delegation Capability Preflight after minimal localization, then make the Initial Delegation Check before substantive implementation. Tiny or read-only work and user-forbidden delegation are exempt. Prefer WORKER for a clear, bounded, stable, verifiable, non-overlapping package; MAIN owns unresolved architecture or investigation, cross-module decisions, required review, and final integration.
 
-        Main supplies semantic lifecycle changes; Agent Switch owns mechanical state and enforcement. Queue relevant triggers—INITIAL_LOCALIZATION_COMPLETE, ARCHITECTURE_RESOLVED, WORKER_RESULT_RECEIVED, WORKER_REVIEW_COMPLETE, PHASE_CHANGE, BUILD_TEST_BOUNDED_FIXES, MODULE_COMPLETE, WORK_CONVERGED—and resolve MAIN vs WORKER once at the next natural reasoning boundary. A pending decision must be resolved before substantive mutation; the Hard Gate remains the backstop.
+        Main supplies semantic lifecycle changes; Agent Switch owns mechanical state and enforcement. Queue relevant triggers—INITIAL_LOCALIZATION_COMPLETE, ARCHITECTURE_RESOLVED, WORKER_RESULT_RECEIVED, WORKER_REVIEW_COMPLETE, PHASE_CHANGE, BUILD_TEST_BOUNDED_FIXES, MODULE_COMPLETE, WORK_CONVERGED—and resolve MAIN vs WORKER once at the next natural reasoning boundary. A pending decision must be resolved before substantive mutation; the ownership lease remains the mechanical backstop. Hooks and Hard Gate are FrozenDisabled in 0.2.7.0.
 
         Never duplicate DELEGATED or RUNNING Worker work. Review returned work to the package risk, adopt or reject it before relying on it, then reconsider remaining ownership after WORKER_REVIEW_COMPLETE.
         """;

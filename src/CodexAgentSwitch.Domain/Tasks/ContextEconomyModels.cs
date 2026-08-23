@@ -238,7 +238,8 @@ public sealed record ContextTurnSample(
     bool IsNormalMainTurn = true,
     bool IsLargeNewContext = false,
     DateTimeOffset? CapturedAt = null,
-    long? NativeInputTokens = null);
+    long? NativeInputTokens = null,
+    string? TurnId = null);
 
 public sealed record ContextPressureTelemetry(
     decimal? Pressure,
@@ -282,7 +283,11 @@ public sealed record ContextEconomySnapshot(
     long? PreCompactionInput = null,
     decimal? PostCompactionPressure = null,
     long? PostCompactionInput = null,
-    CompactionEffectivenessResult? LastEffectiveness = null)
+    CompactionEffectivenessResult? LastEffectiveness = null,
+    DateTimeOffset? LastCompactionRequestedAt = null,
+    DateTimeOffset? LastCompactionStartedAt = null,
+    DateTimeOffset? LastCompactionCompletedAt = null,
+    string? LastCompactionRequestId = null)
 {
     public ContextEconomySnapshot Normalize()
     {
@@ -311,7 +316,11 @@ public sealed record ContextEconomyCompactionResult(
     int Attempt,
     ContextEconomyState State,
     CompactionEffectivenessResult? Effectiveness,
-    string Reason);
+    string Reason,
+    DateTimeOffset? RequestedAt = null,
+    DateTimeOffset? StartedAt = null,
+    DateTimeOffset? CompletedAt = null,
+    string? RequestId = null);
 
 public sealed record StructuredCompactionObservation(
     string ThreadId,

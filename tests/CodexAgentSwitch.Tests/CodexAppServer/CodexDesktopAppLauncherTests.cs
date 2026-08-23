@@ -48,12 +48,7 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.DoesNotContain("developer_instructions", config, StringComparison.Ordinal);
             Assert.Contains("[mcp_servers.codex_agent_switch]", config, StringComparison.Ordinal);
             Assert.Contains("required = true", config, StringComparison.Ordinal);
-            var hooks = await File.ReadAllTextAsync(Path.Combine(project, ".codex", "hooks.json"));
-            Assert.Contains("\"matcher\": \"Bash|apply_patch|Edit|Write\"", hooks, StringComparison.Ordinal);
-            AssertManagedHookContract(hooks);
-            Assert.Contains("\"commandWindows\"", hooks, StringComparison.Ordinal);
-            Assert.Contains("\"Stop\"", hooks, StringComparison.Ordinal);
-            Assert.Contains("--hook stop", hooks, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(Path.Combine(project, ".codex", "hooks.json")));
             Assert.DoesNotContain("agents.default_subagent", config, StringComparison.OrdinalIgnoreCase);
             var projectInstructions = await File.ReadAllTextAsync(Path.Combine(project, "AGENTS.md"));
             Assert.Contains("Codex Agent Switch managed native worker routing", projectInstructions, StringComparison.Ordinal);
@@ -72,7 +67,8 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("WORKER_REVIEW_COMPLETE", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("BUILD_TEST_BOUNDED_FIXES", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("Queue relevant triggers", projectInstructions, StringComparison.Ordinal);
-            Assert.Contains("Hard Gate remains the backstop", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("ownership lease remains the mechanical backstop", projectInstructions, StringComparison.Ordinal);
+            Assert.Contains("Hooks and Hard Gate are FrozenDisabled", projectInstructions, StringComparison.Ordinal);
             Assert.Contains("Never duplicate DELEGATED or RUNNING Worker work", projectInstructions, StringComparison.Ordinal);
             Assert.DoesNotContain("cost-window", projectInstructions, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("lease metadata", projectInstructions, StringComparison.OrdinalIgnoreCase);
@@ -273,9 +269,9 @@ public sealed class CodexDesktopAppLauncherTests
 
             Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project])).Succeeded);
             var migrated = await File.ReadAllTextAsync(hooksPath);
-            AssertManagedHookContract(migrated);
             Assert.Contains("other.exe --safe", migrated, StringComparison.Ordinal);
             Assert.Contains("other-stop.exe", migrated, StringComparison.Ordinal);
+            Assert.DoesNotContain("CodexAgentSwitch.ToolHost", migrated, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("legacy-pipe", migrated, StringComparison.Ordinal);
 
             Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project])).Succeeded);
@@ -318,8 +314,8 @@ public sealed class CodexDesktopAppLauncherTests
 
             Assert.True(Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project])).Succeeded);
             var migrated = await File.ReadAllTextAsync(hooksPath);
-            AssertManagedHookContract(migrated);
             Assert.Contains("other.exe --keep", migrated, StringComparison.Ordinal);
+            Assert.DoesNotContain("CodexAgentSwitch.ToolHost", migrated, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("legacy-pipe", migrated, StringComparison.Ordinal);
         }
         finally
@@ -351,6 +347,42 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.False(result.Succeeded);
             Assert.Contains("not valid JSON", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(malformed, await File.ReadAllTextAsync(hooksPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task Concurrent_hooks_change_is_preserved_and_migration_fails_closed()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-hooks-concurrent-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var codexDirectory = Path.Combine(projectDirectory, ".codex");
+        Directory.CreateDirectory(codexDirectory);
+        var hooksPath = Path.Combine(codexDirectory, "hooks.json");
+        const string original = "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"commandWindows\":\"CodexAgentSwitch.ToolHost.exe --hook stop\"}]}]}}";
+        const string concurrent = "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"commandWindows\":\"third-party.exe\"}]}]}}";
+        await File.WriteAllTextAsync(hooksPath, original);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                new ConcurrentHookMutationValidator(hooksPath, concurrent));
+            var profile = Profile.CreateDefault(now);
+            var project = new AgentProject("hooks-concurrent", "Hooks concurrent", projectDirectory, false, now, now);
+
+            var result = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("changed while CAS was preparing", result.ErrorMessage, StringComparison.Ordinal);
+            Assert.Equal(concurrent, await File.ReadAllTextAsync(hooksPath));
         }
         finally
         {
@@ -706,6 +738,20 @@ public sealed class CodexDesktopAppLauncherTests
     {
         public Task ValidateAsync(CodexCommand command, string candidateToml, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("invalid type: map, expected a string");
+    }
+
+    private sealed class ConcurrentHookMutationValidator(string hooksPath, string replacement) : ICodexProjectConfigurationValidator
+    {
+        public Task ValidateAsync(CodexCommand command, string candidateToml, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public async Task ValidateLayeredAsync(
+            CodexCommand command,
+            CodexConfigurationLayers candidate,
+            CancellationToken cancellationToken = default)
+        {
+            await File.WriteAllTextAsync(hooksPath, replacement, cancellationToken);
+        }
     }
 
 }

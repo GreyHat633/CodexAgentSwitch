@@ -518,119 +518,24 @@ public sealed class WorkerScheduler(
         return repository.ListRepartitionsAsync(taskGroupId, cancellationToken);
     }
 
-    public async Task<PreToolUseResult> EvaluatePreToolUseAsync(PreToolUseRequest request, CancellationToken cancellationToken = default)
+    public Task<PreToolUseResult> EvaluatePreToolUseAsync(PreToolUseRequest request, CancellationToken cancellationToken = default)
     {
-        var now = clock.UtcNow.ToUniversalTime();
-        hookTelemetry.RecordPreToolUse(now);
         var tool = request.ToolName?.Trim() ?? string.Empty;
-        var resolution = HookMutationPathResolver.Resolve(tool, request.ToolInput, request.WorkingDirectory);
-        var classification = resolution.Supported ? MutationKind.Mutation.ToString() : MutationKind.Unknown.ToString();
-        if (!IsMainActor(request.AgentType, request.AgentId))
-            return Allow("Actor is not the exact main_turn contract; fail open.");
-        if (!resolution.Supported)
-            return Allow("Operation is not an exact-path structured mutation; fail open.");
-        if (!resolution.Resolved)
-            return Allow("Target path was not resolved exactly; fail open.");
-
-        var lease = leaseRepository is null ? null : await leaseRepository.GetActiveForWorkingDirectoryAsync(request.WorkingDirectory, cancellationToken);
-        if (lease?.Status != WorkPackageLeaseStatus.WORKER_OWNED)
-            return Allow("Worker lease is not RUNNING; fail open.");
-
-        WorkerTouchSnapshot[] candidates;
-        lock (workerTouchLock)
-        {
-            RemoveTerminalWorkerTouchesLocked();
-            var cwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
-            candidates = workerTouches.Values.Where(state =>
-                string.Equals(state.SessionId, request.SessionId, StringComparison.Ordinal)
-                && string.Equals(state.WorkingDirectory, cwd, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(state.TaskId, lease.PackageId, StringComparison.Ordinal)
-                && tasks.TryGetValue(state.TaskId, out var task)
-                && task.State == DelegationState.Running).Select(state => state.Snapshot()).ToArray();
-        }
-        if (candidates.Length != 1)
-            return Allow("A unique RUNNING Worker touch state was not resolved; fail open.");
-
-        var candidate = candidates[0];
-        var wouldDeny = resolution.Paths.Any(path => candidate.Paths.Contains(path));
-        var denied = enforceHardGate && wouldDeny;
-        hookTelemetry.RecordHardGate(new HardGateEventDiagnostics(
-            now,
-            candidate.ProjectId,
+        return Task.FromResult(new PreToolUseResult(
             request.SessionId,
-            candidate.TaskId,
-            lease.PackageId,
-            DelegationState.Running.ToString(),
             tool,
-            resolution.Paths,
-            candidate.FirstTouchedAt,
-            candidate.Paths.Count,
+            request.WorkingDirectory,
+            HookLifecycleState.FrozenDisabled.ToString(),
             true,
-            true,
-            true,
-            true,
-            wouldDeny,
-            wouldDeny,
-            denied,
-            enforceHardGate ? "ENFORCE" : "SHADOW"));
-        var reason = $"Hard Gate exact inputs: Actor=MAIN; WorkerState=RUNNING; SupportedOperation=true; TargetPathResolved=true; TargetInWorkerTouchedPaths={wouldDeny.ToString().ToLowerInvariant()}; Mode={(enforceHardGate ? "ENFORCE" : "SHADOW")}.";
-        return new(request.SessionId, tool, request.WorkingDirectory, classification, !denied, false, reason,
-            true, wouldDeny, denied, candidate.TaskId, resolution.Paths);
-
-        PreToolUseResult Allow(string reason) => new(
-            request.SessionId, tool, request.WorkingDirectory, classification, true, false, reason,
-            false, false, false, null, resolution.Paths);
+            false,
+            "Hooks are FrozenDisabled in 0.2.7.0; Hard Gate is Disabled and the request was not inspected."));
     }
 
-    public async Task<PostToolUseResult> ObservePostToolUseAsync(PostToolUseRequest request, CancellationToken cancellationToken = default)
+    public Task<PostToolUseResult> ObservePostToolUseAsync(PostToolUseRequest request, CancellationToken cancellationToken = default)
     {
-        var now = clock.UtcNow.ToUniversalTime();
-        hookTelemetry.RecordPostToolUse(now);
-        if (!IsWorkerActor(request.AgentType, request.AgentId))
-            return new(false, "Actor is not the exact delegated_subagent contract; ignored.");
-        if (!ToolResponseIndicatesSuccess(request.ToolResponse))
-            return new(false, "PostToolUse did not provide an explicit successful mutation result; ignored.");
-        var resolution = HookMutationPathResolver.Resolve(request.ToolName, request.ToolInput, request.WorkingDirectory);
-        if (!resolution.Supported || !resolution.Resolved)
-            return new(false, resolution.Reason);
-        if (leaseRepository is null)
-            return new(false, "Worker lease repository is unavailable.");
-        var lease = await leaseRepository.GetActiveForWorkingDirectoryAsync(request.WorkingDirectory, cancellationToken);
-        if (lease?.Status != WorkPackageLeaseStatus.WORKER_OWNED)
-            return new(false, "Worker lease is not RUNNING.");
-
-        var cwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
-        var candidates = tasks.Values.Where(task =>
-            task.Transport == WorkerTransport.NativeCustomAgent
-            && task.State is DelegationState.Delegated or DelegationState.Running
-            && string.Equals(WorkPackageLease.NormalizePath(task.Packet.WorkingDirectory), cwd, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (candidates.Length != 1)
-            return new(false, "A unique active native Worker task was not resolved.");
-
-        var candidate = candidates[0];
-        if (!string.Equals(candidate.Packet.TaskId, lease.PackageId, StringComparison.Ordinal))
-            return new(false, "The active native Worker task does not match the active Worker lease.");
-        if (candidate.State == DelegationState.Delegated)
-        {
-            candidate = candidate with { State = DelegationState.Running, StartedAt = candidate.StartedAt ?? now, UpdatedAt = now };
-            tasks[candidate.Packet.TaskId] = candidate;
-            await repository.UpsertAsync(candidate, cancellationToken);
-            Publish();
-        }
-
-        lock (workerTouchLock)
-        {
-            if (workerTouches.TryGetValue(candidate.Packet.TaskId, out var existing)
-                && (!string.Equals(existing.SessionId, request.SessionId, StringComparison.Ordinal)
-                    || !string.Equals(existing.AgentId, request.AgentId, StringComparison.Ordinal)))
-                return new(false, "Worker task is already bound to another session or agent; ignored.");
-
-            var state = existing ?? new WorkerTouchState(
-                candidate.Packet.TaskId, candidate.Packet.ProjectId, request.SessionId, request.AgentId!, cwd, now);
-            state.Add(resolution.Paths);
-            workerTouches[candidate.Packet.TaskId] = state;
-        }
-        return new(true, "Exact Worker mutation paths recorded.", candidate.Packet.TaskId, resolution.Paths);
+        return Task.FromResult(new PostToolUseResult(
+            false,
+            "Hooks are FrozenDisabled in 0.2.7.0; mutation telemetry was not inspected or recorded."));
     }
 
     private static bool IsMainActor(string? agentType, string? agentId) =>
@@ -663,84 +568,18 @@ public sealed class WorkerScheduler(
         return false;
     }
 
-    public async Task<MainContextBoundaryResult> ObserveMainContextBoundaryAsync(
+    public Task<MainContextBoundaryResult> ObserveMainContextBoundaryAsync(
         MainContextBoundaryRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (contextRuntime is null || contextEconomy is null || usageSource is null)
-            return RecordBoundary(BoundaryFailure(request.ThreadId, "Context economy runtime is unavailable."));
-        if (string.IsNullOrWhiteSpace(request.ThreadId)
-            || !string.Equals(request.ThreadId, request.SessionId, StringComparison.Ordinal)
-            || !string.Equals(request.Source, "vscode", StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(request.Boundary, "stop", StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrWhiteSpace(request.WorkingDirectory))
-            return RecordBoundary(BoundaryFailure(request.ThreadId, "The explicit source=vscode Stop binding is missing or inconsistent."));
-        var cwd = WorkPackageLease.NormalizePath(request.WorkingDirectory);
-        if (tasks.Values.Any(item =>
-            string.Equals(WorkPackageLease.NormalizePath(item.Packet.WorkingDirectory), cwd, StringComparison.OrdinalIgnoreCase)
-            && item.State is DelegationState.ResultPending or DelegationState.ResultReceived
-                or DelegationState.Blocked or DelegationState.Reviewing))
-            return RecordBoundary(BoundaryFailure(request.ThreadId, "A Worker terminal result still requires Main review; compaction boundary deferred."));
-
-        var usage = usageSource.Read(cancellationToken)
-            .Where(item => string.Equals(item.SessionId, request.SessionId, StringComparison.Ordinal)
-                && string.Equals(item.SessionSource, "vscode", StringComparison.OrdinalIgnoreCase)
-                && string.Equals(NormalizeOptional(item.Cwd), cwd, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(item => item.EndedAt ?? item.StartedAt)
-            .FirstOrDefault();
-        if (usage?.LatestInputTokens is null)
-            return RecordBoundary(new(request.ThreadId, false, false, ContextEconomyState.Idle, false, false,
-                "No exact source=vscode usage sample is available for this thread and cwd."));
-
-        try
-        {
-            await contextRuntime.EnsureStartedAsync(cancellationToken);
-            await contextRuntime.MainAgent.BindExistingThreadAsync(
-                request.ThreadId,
-                request.SessionId,
-                "vscode",
-                request.WorkingDirectory,
-                cancellationToken);
-            await contextEconomy.BindThreadAsync(request.ThreadId, contextRuntime.MainAgent, cancellationToken);
-            if (usage.LastStructuredCompactedAt is { } compactedAt)
-            {
-                var snapshot = await contextEconomy.GetSnapshotAsync(request.ThreadId, cancellationToken);
-                if (snapshot?.StructuredCompactedAt is null || compactedAt > snapshot.StructuredCompactedAt)
-                {
-                    await contextEconomy.ObserveStructuredCompactionAsync(
-                        request.ThreadId,
-                        CompactionTrigger.HostAutomatic,
-                        compactedAt,
-                        BuildPreCompactionSamples(usage, compactedAt),
-                        cancellationToken);
-                }
-            }
-            var observation = await contextEconomy.ObserveTurnAsync(
-                request.ThreadId,
-                new ContextTurnSample(
-                    usage.LatestInputTokens.Value,
-                    usage.LatestCachedInputTokens ?? 0,
-                    null,
-                    usage.ContextWindowTokens,
-                    CapturedAt: usage.EndedAt ?? usage.StartedAt,
-                    NativeInputTokens: usage.LatestInputTokens.Value),
-                safeBoundary: true,
-                cancellationToken);
-            var current = await contextEconomy.GetSnapshotAsync(request.ThreadId, cancellationToken);
-            var result = new MainContextBoundaryResult(
-                request.ThreadId,
-                true,
-                true,
-                observation.State,
-                observation.CompactionRequested,
-                observation.Compaction?.Succeeded == true,
-                observation.Compaction?.Reason ?? observation.Decision.Reason);
-            return RecordBoundary(result, usage, current, observation);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-        {
-            return RecordBoundary(BoundaryFailure(request.ThreadId, exception.Message), usage);
-        }
+        return Task.FromResult(new MainContextBoundaryResult(
+            request.ThreadId,
+            false,
+            false,
+            ContextEconomyState.Idle,
+            false,
+            false,
+            "Hook boundaries are FrozenDisabled in 0.2.7.0; managed context is driven only by its owned task session."));
     }
 
     private static MainContextBoundaryResult BoundaryFailure(string threadId, string reason) =>

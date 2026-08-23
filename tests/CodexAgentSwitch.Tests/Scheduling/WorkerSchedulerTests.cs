@@ -430,8 +430,9 @@ public sealed class WorkerSchedulerTests
             AgentId: "worker-agent-1", AgentType: "delegated_subagent"));
 
         Assert.False(failedPost.Recorded);
-        Assert.True(post.Recorded);
-        Assert.Equal(DelegationState.Running, (await scheduler.ListAsync()).Single().State);
+        Assert.False(post.Recorded);
+        Assert.Contains("FrozenDisabled", post.Reason, StringComparison.Ordinal);
+        Assert.Equal(DelegationState.Delegated, (await scheduler.ListAsync()).Single().State);
         var same = await scheduler.EvaluatePreToolUseAsync(new PreToolUseRequest(
             "session-1", root, "Write", "{\"file_path\":\"SRC\\\\target.cs\"}",
             AgentType: "main_turn"));
@@ -443,11 +444,11 @@ public sealed class WorkerSchedulerTests
             AgentType: "main_turn"));
 
         Assert.True(same.Allowed);
-        Assert.True(same.ShadowEvaluated);
-        Assert.True(same.WouldDeny);
+        Assert.False(same.ShadowEvaluated);
+        Assert.False(same.WouldDeny);
         Assert.False(same.Denied);
         Assert.True(different.Allowed);
-        Assert.True(different.ShadowEvaluated);
+        Assert.False(different.ShadowEvaluated);
         Assert.False(different.WouldDeny);
         Assert.True(bash.Allowed);
         Assert.False(bash.ShadowEvaluated);
@@ -461,16 +462,14 @@ public sealed class WorkerSchedulerTests
         Assert.False(terminal.ShadowEvaluated);
 
         var hooks = (await scheduler.GetRuntimeDiagnosticsAsync()).Hooks!;
-        Assert.Equal(4, hooks.PreToolUseSeenCount);
-        Assert.Equal(2, hooks.PostToolUseSeenCount);
-        Assert.Equal(2, hooks.HardGateShadowEvaluatedCount);
-        Assert.Equal(1, hooks.HardGateWouldDenyCount);
+        Assert.Equal(HookLifecycleState.FrozenDisabled, hooks.LifecycleState);
+        Assert.Equal(HardGateLifecycleState.Disabled, hooks.HardGateState);
+        Assert.Equal(0, hooks.PreToolUseSeenCount);
+        Assert.Equal(0, hooks.PostToolUseSeenCount);
+        Assert.Equal(0, hooks.HardGateShadowEvaluatedCount);
+        Assert.Equal(0, hooks.HardGateWouldDenyCount);
         Assert.Equal(0, hooks.HardGateDeniedCount);
-        Assert.Equal(packet.TaskId, hooks.LastHardGateEvent!.WorkerTaskId);
-        Assert.Equal("project-1", hooks.LastHardGateEvent.ProjectId);
-        Assert.Equal("session-1", hooks.LastHardGateEvent.SessionId);
-        Assert.Equal("SHADOW", hooks.LastHardGateEvent.Mode);
-        Assert.False(hooks.LastHardGateEvent.TargetInWorkerTouchedPaths);
+        Assert.Null(hooks.LastHardGateEvent);
     }
 
     [Fact]
@@ -490,7 +489,7 @@ public sealed class WorkerSchedulerTests
             leaseRepository: leases, enforceHardGate: true);
         await scheduler.StartAsync();
         await PrepareNativeWorkerAsync(scheduler, packet);
-        Assert.True((await scheduler.ObservePostToolUseAsync(new PostToolUseRequest(
+        Assert.False((await scheduler.ObservePostToolUseAsync(new PostToolUseRequest(
             "session-1", root, "apply_patch",
             "{\"patch\":\"*** Begin Patch\\n*** Update File: src/Target.cs\\n@@\\n-old\\n+new\\n*** End Patch\"}",
             "{\"success\":true}",
@@ -504,13 +503,15 @@ public sealed class WorkerSchedulerTests
             "session-2", root, "Write", "{\"file_path\":\"src\\\\Target.cs\"}",
             AgentType: "main_turn"));
 
-        Assert.False(denied.Allowed);
-        Assert.True(denied.Denied);
-        Assert.True(denied.WouldDeny);
+        Assert.True(denied.Allowed);
+        Assert.False(denied.Denied);
+        Assert.False(denied.WouldDeny);
+        Assert.Contains("Hard Gate is Disabled", denied.Reason, StringComparison.Ordinal);
         Assert.True(otherSession.Allowed);
         Assert.False(otherSession.ShadowEvaluated);
         var hooks = (await scheduler.GetRuntimeDiagnosticsAsync()).Hooks!;
-        Assert.Equal(1, hooks.HardGateDeniedCount);
+        Assert.Equal(HardGateLifecycleState.Disabled, hooks.HardGateState);
+        Assert.Equal(0, hooks.HardGateDeniedCount);
     }
 
     [Fact]
@@ -535,7 +536,7 @@ public sealed class WorkerSchedulerTests
             AgentId: "worker-agent-1", AgentType: "delegated_subagent"));
 
         Assert.False(post.Recorded);
-        Assert.Contains("unique", post.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("FrozenDisabled", post.Reason, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -558,7 +559,7 @@ public sealed class WorkerSchedulerTests
             AgentId: "worker-agent-1", AgentType: "delegated_subagent"));
 
         Assert.False(post.Recorded);
-        Assert.Contains("lease", post.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("FrozenDisabled", post.Reason, StringComparison.Ordinal);
         Assert.Equal(DelegationState.Delegated, (await scheduler.ListAsync()).Single().State);
     }
 

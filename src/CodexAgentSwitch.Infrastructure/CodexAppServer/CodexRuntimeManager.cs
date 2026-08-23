@@ -21,6 +21,8 @@ public sealed class CodexRuntimeManager(
 
     public CodexMainAgentSession? MainAgent { get; private set; }
 
+    public string? InstanceId { get; private set; }
+
     public CodexRuntimeState State { get; private set; } = new(false, false, null, null, "尚未检测 Codex。");
 
     public async Task<CodexRuntimeState> DetectAsync(CancellationToken cancellationToken = default)
@@ -55,6 +57,7 @@ public sealed class CodexRuntimeManager(
             {
                 await newClient.StartAsync(cancellationToken);
                 client = newClient;
+                InstanceId = Guid.NewGuid().ToString("D");
                 MainAgent = new CodexMainAgentSession(newClient);
                 Adapter = new NativeCodexWorkerAdapter(newClient, clock);
                 State = new CodexRuntimeState(true, true, discovery.Version, schema, "Codex App Server 已启动并完成协议握手。");
@@ -62,6 +65,10 @@ public sealed class CodexRuntimeManager(
             catch
             {
                 await newClient.DisposeAsync();
+                client = null;
+                InstanceId = null;
+                MainAgent = null;
+                Adapter = null;
                 throw;
             }
 
@@ -82,6 +89,7 @@ public sealed class CodexRuntimeManager(
             {
                 await client.DisposeAsync();
                 client = null;
+                InstanceId = null;
                 Adapter = null;
                 MainAgent = null;
                 State = State with { AppServerRunning = false, Message = "Codex App Server 已停止。" };

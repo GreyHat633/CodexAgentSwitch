@@ -50,14 +50,14 @@ public sealed class CodexProjectConfigurationValidatorTests
     }
 
     [Fact]
-    public void ToolHost_pre_hook_failure_is_fail_open_while_explicit_gate_denial_remains_supported()
+    public void ToolHost_hook_entry_is_frozen_fail_open_and_contains_no_denial_branch()
     {
         var path = Path.Combine(FindRepositoryRoot(), "src", "CodexAgentSwitch.ToolHost", "Program.cs");
         var source = File.ReadAllText(path);
-        Assert.Contains("permissionDecision = \"deny\"", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("Agent Switch ownership gate is unavailable; retry after Scheduler recovery.", source, StringComparison.Ordinal);
-        Assert.Contains("Infrastructure, parsing, actor, or", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("permissionDecision = \"ask\"", source, StringComparison.Ordinal);
+        Assert.Contains("RunFrozenHookNoOpAsync", source, StringComparison.Ordinal);
+        Assert.Contains("without parsing, telemetry", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RunPreToolUseHookAsync", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("permissionDecision", source, StringComparison.Ordinal);
     }
     [Fact]
     [Trait("Category", "LiveCodexConfig")]

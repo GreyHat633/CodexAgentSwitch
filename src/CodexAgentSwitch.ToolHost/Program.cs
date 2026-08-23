@@ -14,17 +14,9 @@ var hook = ReadArgument(args, "--hook");
 // mechanically invalidates it.
 var cachedToolDefinitions = ToolDefinitions();
 var toolDiscoveryCount = 0;
-if (string.Equals(hook, "pre-tool-use", StringComparison.OrdinalIgnoreCase))
+if (hook is not null)
 {
-    await RunPreToolUseHookAsync(pipeName);
-}
-else if (string.Equals(hook, "post-tool-use", StringComparison.OrdinalIgnoreCase))
-{
-    await RunPostToolUseHookAsync(pipeName);
-}
-else if (string.Equals(hook, "stop", StringComparison.OrdinalIgnoreCase))
-{
-    await RunStopHookAsync(pipeName);
+    await RunFrozenHookNoOpAsync(hook);
 }
 else
 {
@@ -57,7 +49,7 @@ while (await Console.In.ReadLineAsync() is { } line)
                         ? requestedProtocol.GetString() ?? "2025-06-18"
                         : "2025-06-18",
                 capabilities = new { tools = new { listChanged = false } },
-                serverInfo = new { name = "codex-agent-switch", version = "0.2.6.4" },
+                serverInfo = new { name = "codex-agent-switch", version = "0.2.7.0" },
             },
             "ping" => new { },
             "tools/list" => ListTools(),
@@ -78,6 +70,25 @@ while (await Console.In.ReadLineAsync() is { } line)
 }
 }
 
+static async Task RunFrozenHookNoOpAsync(string hook)
+{
+    // 0.2.7.0 freezes the legacy Hook lifecycle. Consume the one-shot payload
+    // for protocol compatibility, then fail open without parsing, telemetry,
+    // filesystem writes, or a Scheduler connection.
+    _ = await Console.In.ReadLineAsync();
+    var eventName = hook.ToLowerInvariant() switch
+    {
+        "pre-tool-use" => "PreToolUse",
+        "post-tool-use" => "PostToolUse",
+        "stop" => "Stop",
+        _ => null,
+    };
+    if (eventName is not null)
+    {
+        await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = eventName } });
+    }
+}
+
 object ListTools()
 {
     toolDiscoveryCount++;
@@ -87,192 +98,6 @@ object ListTools()
         discovery = new { count = toolDiscoveryCount, cacheHit = toolDiscoveryCount > 1 },
     };
 }
-
-static async Task RunStopHookAsync(string pipeName)
-{
-    var line = await Console.In.ReadLineAsync();
-    if (string.IsNullOrWhiteSpace(line)) return;
-    var sessionId = string.Empty;
-    var cwd = Environment.CurrentDirectory;
-    var stage = "parse-input";
-    try
-    {
-        using var document = JsonDocument.Parse(line);
-        var root = document.RootElement;
-        sessionId = ReadJsonString(root, "session_id") ?? ReadJsonString(root, "sessionId") ?? string.Empty;
-        cwd = ReadJsonString(root, "cwd") ?? ReadJsonString(root, "workingDirectory") ?? Environment.CurrentDirectory;
-        stage = "scheduler-send";
-        var result = await SendAsync(pipeName, "mainContextBoundary", new
-        {
-            sessionId,
-            threadId = sessionId,
-            workingDirectory = cwd,
-            source = "vscode",
-            boundary = "stop",
-        });
-        var bindingAccepted = ReadJsonBool(result, "bindingAccepted");
-        var compactionRequested = ReadJsonBool(result, "compactionRequested");
-        var compactionSucceeded = ReadJsonBool(result, "compactionSucceeded");
-        if (bindingAccepted == false || compactionRequested == true || compactionSucceeded == true)
-            WriteStopHookDiagnostic(pipeName, sessionId, cwd, "scheduler-result", null, result);
-    }
-    catch (Exception exception)
-    {
-        WriteStopHookDiagnostic(pipeName, sessionId, cwd, stage, exception);
-    }
-
-    await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = "Stop" } });
-}
-
-static void WriteStopHookDiagnostic(
-    string pipeName,
-    string sessionId,
-    string workingDirectory,
-    string stage,
-    Exception? exception,
-    JsonElement? result = null)
-{
-    try
-    {
-        var dataRoot = Environment.GetEnvironmentVariable("CAS_DATA_ROOT");
-        if (string.IsNullOrWhiteSpace(dataRoot)) dataRoot = Path.Combine(AppContext.BaseDirectory, "data");
-        var logsDirectory = Path.Combine(Path.GetFullPath(dataRoot), "logs");
-        Directory.CreateDirectory(logsDirectory);
-        var path = Path.Combine(logsDirectory, "context-economy-stop-hook.jsonl");
-        var boundary = result.GetValueOrDefault();
-        var record = new Dictionary<string, object?>
-        {
-            ["Timestamp"] = DateTimeOffset.UtcNow,
-            ["Hook"] = "Stop",
-            ["SessionId"] = sessionId,
-            ["WorkingDirectory"] = workingDirectory,
-            ["PipeName"] = pipeName,
-            ["Stage"] = stage,
-            ["ExceptionType"] = exception?.GetType().Name,
-            ["Message"] = SanitizeDiagnosticMessage(exception?.Message ?? ReadJsonString(boundary, "reason")),
-            ["BindingAccepted"] = ReadJsonBool(boundary, "bindingAccepted"),
-            ["TelemetryAvailable"] = ReadJsonBool(boundary, "telemetryAvailable"),
-            ["State"] = ReadJsonScalar(boundary, "state"),
-            ["Reason"] = SanitizeDiagnosticMessage(ReadJsonString(boundary, "reason")),
-            ["CompactionRequested"] = ReadJsonBool(boundary, "compactionRequested"),
-            ["CompactionSucceeded"] = ReadJsonBool(boundary, "compactionSucceeded"),
-        };
-        using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-        using var output = new StreamWriter(stream, new UTF8Encoding(false));
-        output.WriteLine(JsonSerializer.Serialize(record));
-    }
-    catch
-    {
-        // Diagnostics are best-effort; Stop must remain fail-open even if logging fails.
-    }
-}
-
-static bool? ReadJsonBool(JsonElement element, string name) =>
-    element.ValueKind == JsonValueKind.Object
-    && element.TryGetProperty(name, out var value)
-    && value.ValueKind is JsonValueKind.True or JsonValueKind.False
-        ? value.GetBoolean()
-        : null;
-
-static string? ReadJsonScalar(JsonElement element, string name)
-{
-    if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(name, out var value)) return null;
-    return value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
-}
-
-static string? SanitizeDiagnosticMessage(string? value)
-{
-    if (string.IsNullOrWhiteSpace(value)) return null;
-    var sanitized = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
-    return sanitized.Length <= 512 ? sanitized : sanitized[..512];
-}
-
-static async Task RunPreToolUseHookAsync(string pipeName)
-{
-    var line = await Console.In.ReadLineAsync();
-    if (string.IsNullOrWhiteSpace(line)) return;
-    try
-    {
-        using var document = JsonDocument.Parse(line);
-        var root = document.RootElement;
-        var sessionId = ReadJsonString(root, "session_id") ?? ReadJsonString(root, "sessionId") ?? string.Empty;
-        var cwd = ReadJsonString(root, "cwd") ?? ReadJsonString(root, "workingDirectory") ?? Environment.CurrentDirectory;
-        var toolName = ReadJsonString(root, "tool_name") ?? ReadJsonString(root, "toolName") ?? string.Empty;
-        var input = root.TryGetProperty("tool_input", out var toolInput) ? toolInput.GetRawText() : root.TryGetProperty("toolInput", out var inputValue) ? inputValue.GetRawText() : null;
-        var result = await SendAsync(pipeName, "preToolUse", new
-        {
-            sessionId,
-            workingDirectory = cwd,
-            toolName,
-            toolInput = input,
-            turnId = ReadJsonString(root, "turn_id") ?? ReadJsonString(root, "turnId"),
-            agentId = ReadJsonString(root, "agent_id") ?? ReadJsonString(root, "agentId"),
-            agentType = ReadJsonString(root, "agent_type") ?? ReadJsonString(root, "agentType"),
-            toolUseId = ReadJsonString(root, "tool_use_id") ?? ReadJsonString(root, "toolUseId"),
-        });
-        var denied = result.TryGetProperty("allowed", out var allowed) && !allowed.GetBoolean();
-        if (denied)
-        {
-            await WriteResponseAsync(new
-            {
-                hookSpecificOutput = new
-                {
-                    hookEventName = "PreToolUse",
-                    permissionDecision = "deny",
-                    permissionDecisionReason = result.TryGetProperty("reason", out var reason) ? reason.GetString() : "Agent Switch ownership gate denied the mutation.",
-                },
-            });
-        }
-        else
-        {
-            await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = "PreToolUse" } });
-        }
-    }
-    catch (Exception)
-    {
-        // Hard Gate is a last-resort fuse. Infrastructure, parsing, actor, or
-        // telemetry failures must never block normal development.
-        await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = "PreToolUse" } });
-    }
-}
-
-static async Task RunPostToolUseHookAsync(string pipeName)
-{
-    var line = await Console.In.ReadLineAsync();
-    if (string.IsNullOrWhiteSpace(line)) return;
-    try
-    {
-        using var document = JsonDocument.Parse(line);
-        var root = document.RootElement;
-        var input = root.TryGetProperty("tool_input", out var toolInput) ? toolInput.GetRawText() : root.TryGetProperty("toolInput", out var inputValue) ? inputValue.GetRawText() : null;
-        var response = root.TryGetProperty("tool_response", out var toolResponse) ? toolResponse.GetRawText() : root.TryGetProperty("toolResponse", out var responseValue) ? responseValue.GetRawText() : null;
-        await SendAsync(pipeName, "postToolUse", new
-        {
-            sessionId = ReadJsonString(root, "session_id") ?? ReadJsonString(root, "sessionId") ?? string.Empty,
-            workingDirectory = ReadJsonString(root, "cwd") ?? ReadJsonString(root, "workingDirectory") ?? Environment.CurrentDirectory,
-            toolName = ReadJsonString(root, "tool_name") ?? ReadJsonString(root, "toolName") ?? string.Empty,
-            toolInput = input,
-            toolResponse = response,
-            turnId = ReadJsonString(root, "turn_id") ?? ReadJsonString(root, "turnId"),
-            agentId = ReadJsonString(root, "agent_id") ?? ReadJsonString(root, "agentId"),
-            agentType = ReadJsonString(root, "agent_type") ?? ReadJsonString(root, "agentType"),
-            toolUseId = ReadJsonString(root, "tool_use_id") ?? ReadJsonString(root, "toolUseId"),
-        });
-    }
-    catch
-    {
-        // PostToolUse is observability only and always fails open.
-    }
-
-    await WriteResponseAsync(new { hookSpecificOutput = new { hookEventName = "PostToolUse" } });
-}
-
-static string? ReadJsonString(JsonElement element, string name) =>
-    element.ValueKind == JsonValueKind.Object
-    && element.TryGetProperty(name, out var value)
-    && value.ValueKind == JsonValueKind.String
-        ? value.GetString()
-        : null;
 
 static async Task<object> CallToolAsync(JsonElement parameters, string pipeName)
 {

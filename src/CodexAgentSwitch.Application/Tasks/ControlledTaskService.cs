@@ -32,6 +32,8 @@ public sealed class ControlledTaskService
     private readonly SessionContextBudget contextBudget;
     private readonly MainCostGuardCoordinator mainCostGuards;
     private readonly IMainContextEconomyCoordinator? contextEconomy;
+    private readonly IManagedContextSessionStore? managedContextSessions;
+    private readonly ManagedProjectContextPolicy managedContextPolicy;
     private readonly ContinuationCorrelationTracker? continuationCorrelation;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> active = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, MainContextEpoch> contextEpochs = new(StringComparer.Ordinal);
@@ -51,7 +53,9 @@ public sealed class ControlledTaskService
         SessionContextBudget? contextBudget = null,
         MainCostGuardCoordinator? mainCostGuards = null,
         IMainContextEconomyCoordinator? contextEconomy = null,
-        ContinuationCorrelationTracker? continuationCorrelation = null)
+        ContinuationCorrelationTracker? continuationCorrelation = null,
+        IManagedContextSessionStore? managedContextSessions = null,
+        ManagedProjectContextPolicy? managedContextPolicy = null)
     {
         this.tasks = tasks;
         this.profiles = profiles;
@@ -67,6 +71,8 @@ public sealed class ControlledTaskService
         this.mainCostGuards = mainCostGuards ?? new MainCostGuardCoordinator();
         this.contextEconomy = contextEconomy;
         this.continuationCorrelation = continuationCorrelation;
+        this.managedContextSessions = managedContextSessions;
+        this.managedContextPolicy = managedContextPolicy ?? new ManagedProjectContextPolicy();
     }
 
     public event Func<ControlledTaskSession, Task>? TaskChanged;
@@ -118,6 +124,10 @@ public sealed class ControlledTaskService
             throw new InvalidOperationException("运行中的对话不能删除，请先停止生成。");
         }
 
+        await TransitionManagedContextAsync(
+            taskId,
+            ManagedContextOwnershipState.Released,
+            cancellationToken);
         await tasks.DeleteAsync(taskId, cancellationToken);
     }
 
@@ -410,6 +420,7 @@ public sealed class ControlledTaskService
 
     public async Task RecoverAsync(CancellationToken cancellationToken = default)
     {
+        await InvalidateManagedContextLeasesForRecoveryAsync(cancellationToken);
         foreach (var session in await tasks.ListAsync(cancellationToken))
         {
             if (!IsRunning(session.Status))
@@ -464,10 +475,18 @@ public sealed class ControlledTaskService
             }
             catch (OperationCanceledException)
             {
+                await TransitionManagedContextAsync(
+                    taskId,
+                    ManagedContextOwnershipState.Released,
+                    CancellationToken.None);
                 await FailAsync(taskId, localTurnId, ControlledTaskStatus.Interrupted, "任务已取消。", CancellationToken.None);
             }
             catch (Exception exception)
             {
+                await TransitionManagedContextAsync(
+                    taskId,
+                    ManagedContextOwnershipState.Faulted,
+                    CancellationToken.None);
                 await FailAsync(taskId, localTurnId, ControlledTaskStatus.Failed, exception.Message, CancellationToken.None);
             }
             finally
@@ -560,9 +579,32 @@ public sealed class ControlledTaskService
                 cancellationToken);
         }
 
+        var managedContext = await TryAcquireManagedContextAsync(session, mainThreadId, cancellationToken);
         var ledger = await EnsureLedgerAsync(session, cancellationToken);
-        if (contextEconomy is not null)
-            await contextEconomy.BindThreadAsync(mainThreadId, runtime.MainAgent, cancellationToken);
+        if (contextEconomy is not null && managedContext is not null)
+        {
+            var expectedLeaseId = managedContext.OwnershipLeaseId;
+            try
+            {
+                await contextEconomy.BindThreadAsync(
+                    mainThreadId,
+                    runtime.MainAgent,
+                    guardCancellation => ValidateManagedContextControlAsync(
+                        session.Id,
+                        mainThreadId,
+                        expectedLeaseId,
+                        guardCancellation),
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                await TransitionManagedContextAsync(
+                    session.Id,
+                    ManagedContextOwnershipState.Faulted,
+                    CancellationToken.None);
+                managedContext = null;
+            }
+        }
 
         var effectiveDecision = decision;
         if (decision.Kind == DelegationDecisionKind.InvokeWorker && !decision.Forced)
@@ -630,32 +672,107 @@ public sealed class ControlledTaskService
         continuationCorrelation?.MainContinuationStarted(taskId, localTurnId, mainThreadId, handle.TurnId);
         await SetServerTurnAsync(taskId, localTurnId, handle.TurnId, cancellationToken);
 
+        MainAgentTokenUsage? latestTokenUsage = null;
+        var activeItems = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        var approvalPending = false;
+        var turnCompleted = false;
+        var contextMonitorHealthy = managedContext is not null;
+        string? threadStatus = null;
+        var idleObserved = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
         async Task Handler(MainAgentEvent activity)
         {
-            if (activity.ThreadId != mainThreadId || activity.TurnId != handle.TurnId)
+            if (activity.ThreadId != mainThreadId)
+            {
+                return;
+            }
+
+            if (activity.Kind == MainAgentEventKind.StatusChanged)
+            {
+                threadStatus = activity.Status;
+                if (string.Equals(threadStatus, "idle", StringComparison.OrdinalIgnoreCase))
+                    idleObserved.TrySetResult(true);
+                return;
+            }
+            if (activity.TurnId != handle.TurnId)
             {
                 return;
             }
 
             continuationCorrelation?.Observe(taskId, localTurnId, activity);
 
-            if (activity.Kind == MainAgentEventKind.OutputDelta && !string.IsNullOrEmpty(activity.Text))
+            if (activity.Kind == MainAgentEventKind.TurnStarted)
+            {
+                threadStatus = "active";
+            }
+            else if (activity.Kind == MainAgentEventKind.TokenUsageUpdated && activity.TokenUsage is { } usage)
+            {
+                latestTokenUsage = usage;
+                if (contextEconomy is not null && managedContext is not null && contextMonitorHealthy)
+                {
+                    try
+                    {
+                        await contextEconomy.ObserveTurnAsync(
+                            mainThreadId,
+                            ToContextSample(usage, handle.TurnId, clock.UtcNow),
+                            safeBoundary: false,
+                            CancellationToken.None);
+                        managedContext = await TryRecordManagedTokenUsageAsync(managedContext, CancellationToken.None);
+                        if (managedContext is null)
+                        {
+                            contextMonitorHealthy = false;
+                            await TransitionManagedContextAsync(
+                                taskId,
+                                ManagedContextOwnershipState.Faulted,
+                                CancellationToken.None);
+                        }
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        contextMonitorHealthy = false;
+                        await TransitionManagedContextAsync(
+                            taskId,
+                            ManagedContextOwnershipState.Faulted,
+                            CancellationToken.None);
+                    }
+                }
+            }
+            else if (activity.Kind == MainAgentEventKind.TraceItemStarted)
+            {
+                if (ReadItemId(activity.RawEvent) is { } itemId)
+                    activeItems[itemId] = 0;
+            }
+            else if (activity.Kind == MainAgentEventKind.OutputDelta && !string.IsNullOrEmpty(activity.Text))
             {
                 await AppendMainOutputAsync(taskId, localTurnId, activity.Text, false, CancellationToken.None);
             }
-            else if (activity.Kind == MainAgentEventKind.TraceItem && !string.IsNullOrWhiteSpace(activity.Text))
+            else if (activity.Kind == MainAgentEventKind.TraceItem)
             {
-                await AppendTraceAsync(
-                    taskId,
-                    localTurnId,
-                    activity.Text,
-                    activity.MessageKind ?? TaskMessageKind.ToolCall,
-                    activity.Status,
-                    CancellationToken.None);
+                if (ReadItemId(activity.RawEvent) is { } itemId)
+                    activeItems.TryRemove(itemId, out _);
+                if (!string.IsNullOrWhiteSpace(activity.Text))
+                {
+                    await AppendTraceAsync(
+                        taskId,
+                        localTurnId,
+                        activity.Text,
+                        activity.MessageKind ?? TaskMessageKind.ToolCall,
+                        activity.Status,
+                        CancellationToken.None);
+                }
             }
             else if (activity.Kind == MainAgentEventKind.ApprovalRequested)
             {
+                approvalPending = true;
                 await UpdateStatusAsync(taskId, localTurnId, ControlledTaskStatus.WaitingForApproval, activity.Text, CancellationToken.None);
+            }
+            else if (activity.Kind == MainAgentEventKind.ApprovalResolved)
+            {
+                approvalPending = false;
+            }
+            else if (activity.Kind == MainAgentEventKind.TurnCompleted)
+            {
+                turnCompleted = true;
             }
         }
 
@@ -664,6 +781,20 @@ public sealed class ControlledTaskService
         try
         {
             mainResult = await runtime.MainAgent.WaitForTurnAsync(mainThreadId, handle.TurnId, cancellationToken);
+            if (contextMonitorHealthy
+                && turnCompleted
+                && !string.Equals(threadStatus, "idle", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await idleObserved.Task.WaitAsync(TimeSpan.FromSeconds(1), cancellationToken);
+                }
+                catch (TimeoutException)
+                {
+                    // Missing idle telemetry leaves the boundary unproved. The
+                    // user's completed turn continues without auto-compaction.
+                }
+            }
         }
         finally
         {
@@ -677,16 +808,398 @@ public sealed class ControlledTaskService
             new WorkerResult(localTurnId, ToWorkerStatus(mainResult.Status), mainResult.FinalText, mainResult.RawTurn, [], []),
             new WorkerUsageContext("native-codex", snapshot.MainAgent.ModelId, snapshot.Budget.Currency, null));
         await usageLedger.AppendUsageAsync(mainUsage, cancellationToken);
-        if (contextEconomy is not null && mainUsage.InputTokens.Value is > 0)
+        var safeBoundary = contextMonitorHealthy
+            && turnCompleted
+            && string.Equals(threadStatus, "idle", StringComparison.OrdinalIgnoreCase)
+            && activeItems.IsEmpty
+            && !approvalPending
+            && mainResult.Status is ControlledTaskStatus.Completed or ControlledTaskStatus.Failed or ControlledTaskStatus.Interrupted;
+        ContextEconomyObservationResult? contextObservation = null;
+        if (contextEconomy is not null && managedContext is not null && contextMonitorHealthy)
         {
-            await contextEconomy.ObserveTurnAsync(
-                mainThreadId,
-                new ContextTurnSample(mainUsage.InputTokens.Value.Value, 0, CapturedAt: mainUsage.CapturedAt),
-                safeBoundary: true,
+            try
+            {
+                if (latestTokenUsage is not null)
+                {
+                    contextObservation = await contextEconomy.ObserveTurnAsync(
+                        mainThreadId,
+                        ToContextSample(latestTokenUsage, handle.TurnId, clock.UtcNow),
+                        safeBoundary,
+                        cancellationToken);
+                }
+                else if (mainUsage.InputTokens.Value is > 0)
+                {
+                    contextObservation = await contextEconomy.ObserveTurnAsync(
+                        mainThreadId,
+                        new ContextTurnSample(
+                            mainUsage.InputTokens.Value.Value,
+                            0,
+                            CapturedAt: mainUsage.CapturedAt,
+                            NativeInputTokens: mainUsage.InputTokens.Value.Value,
+                            TurnId: handle.TurnId),
+                        safeBoundary,
+                        cancellationToken);
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                contextMonitorHealthy = false;
+                safeBoundary = false;
+                await TransitionManagedContextAsync(
+                    taskId,
+                    ManagedContextOwnershipState.Faulted,
+                    CancellationToken.None);
+            }
+        }
+        if (managedContext is not null && managedContextSessions is not null)
+        {
+            var ownershipState = contextMonitorHealthy
+                ? contextObservation?.Compaction is { Succeeded: true }
+                    ? ManagedContextOwnershipState.Verifying
+                    : contextObservation?.Compaction is not null
+                        ? ManagedContextOwnershipState.Faulted
+                        : ManagedContextOwnershipState.Idle
+                : ManagedContextOwnershipState.Faulted;
+            managedContext = await TryFinalizeManagedContextAsync(
+                managedContext,
+                ownershipState,
+                safeBoundary,
+                contextObservation?.Compaction,
+                contextObservation?.State is ContextEconomyState.Cooldown or ContextEconomyState.Ineffective,
                 cancellationToken);
+            if (managedContext is null)
+            {
+                contextMonitorHealthy = false;
+            }
         }
         ledger = ledger with { CompletedAt = clock.UtcNow, UpdatedAt = clock.UtcNow };
         await usageLedger.UpsertTaskGroupAsync(ledger, cancellationToken);
+    }
+
+    private async Task<ManagedContextSession?> TryAcquireManagedContextAsync(
+        ControlledTaskSession session,
+        string threadId,
+        CancellationToken cancellationToken)
+    {
+        if (contextEconomy is null
+            || managedContextSessions is null
+            || projectRepository is null
+            || string.IsNullOrWhiteSpace(session.ProjectId))
+        {
+            return null;
+        }
+
+        var project = await projectRepository.GetAsync(session.ProjectId, cancellationToken);
+        var enrollment = managedContextPolicy.EvaluateEnrollment(project, session);
+        if (!enrollment.Allowed)
+        {
+            try
+            {
+                var prior = await managedContextSessions.LoadByTaskSessionAsync(session.Id, cancellationToken);
+                if (prior is not null && prior.OwnershipState is not ManagedContextOwnershipState.Released)
+                {
+                    await managedContextSessions.UpsertAsync(prior with
+                    {
+                        OwnershipState = ManagedContextOwnershipState.Released,
+                        UpdatedAt = clock.UtcNow,
+                    }, cancellationToken);
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException) { }
+            return null;
+        }
+
+        var identity = runtime.MainAgent.GetThreadIdentity(threadId);
+        var appServerInstanceId = runtime.AppServerInstanceId;
+        if (identity is null || string.IsNullOrWhiteSpace(appServerInstanceId))
+        {
+            return null;
+        }
+
+        ManagedContextSession? previous;
+        try
+        {
+            previous = await managedContextSessions.LoadByTaskSessionAsync(session.Id, cancellationToken);
+            if (previous is not null
+                && (!string.Equals(previous.AppServerInstanceId, appServerInstanceId, StringComparison.Ordinal)
+                    || !string.Equals(previous.ThreadId, threadId, StringComparison.Ordinal)
+                    || !string.Equals(previous.SessionId, identity.SessionId, StringComparison.Ordinal))
+                && previous.OwnershipState is not (ManagedContextOwnershipState.Released or ManagedContextOwnershipState.Lost))
+            {
+                await managedContextSessions.UpsertAsync(previous with
+                {
+                    OwnershipState = ManagedContextOwnershipState.Lost,
+                    UpdatedAt = clock.UtcNow,
+                }, cancellationToken);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // A stale or unavailable ownership store can never authorize
+            // context control, but it must not stop the user's main task.
+            return null;
+        }
+        var preserveLease = previous is not null
+            && string.Equals(previous.ThreadId, threadId, StringComparison.Ordinal)
+            && string.Equals(previous.SessionId, identity.SessionId, StringComparison.Ordinal)
+            && string.Equals(previous.AppServerInstanceId, appServerInstanceId, StringComparison.Ordinal)
+            && previous.OwnershipState is ManagedContextOwnershipState.Owned
+                or ManagedContextOwnershipState.Idle
+                or ManagedContextOwnershipState.Verifying;
+        var binding = new ManagedContextSession(
+            project!.Id,
+            enrollment.CanonicalProjectRoot!,
+            threadId,
+            identity.SessionId,
+            session.Id,
+            appServerInstanceId,
+            preserveLease ? previous!.OwnershipLeaseId : Guid.NewGuid().ToString("D"),
+            ManagedContextOwnershipState.Owned,
+            UpdatedAt: clock.UtcNow);
+        var access = managedContextPolicy.EvaluateControl(
+            project,
+            session,
+            binding,
+            appServerInstanceId,
+            identity);
+        if (!access.Allowed)
+        {
+            return null;
+        }
+
+        try
+        {
+            await managedContextSessions.UpsertAsync(binding, cancellationToken);
+            return binding;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Ownership persistence is a control prerequisite. Failure is
+            // fail-closed for Context Economy but must not stop the user task.
+            return null;
+        }
+    }
+
+    private async Task InvalidateManagedContextLeasesForRecoveryAsync(CancellationToken cancellationToken)
+    {
+        if (managedContextSessions is null) return;
+        IReadOnlyList<ManagedContextSession> bindings;
+        try
+        {
+            bindings = await managedContextSessions.ListAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return;
+        }
+
+        foreach (var binding in bindings)
+        {
+            if (binding.OwnershipState is ManagedContextOwnershipState.Released
+                or ManagedContextOwnershipState.Lost
+                or ManagedContextOwnershipState.Faulted)
+            {
+                continue;
+            }
+
+            try
+            {
+                await managedContextSessions.TryUpdateLeaseAsync(
+                    binding with
+                    {
+                        OwnershipState = ManagedContextOwnershipState.Lost,
+                        UpdatedAt = clock.UtcNow,
+                    },
+                    binding.OwnershipLeaseId,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Startup recovery never guesses ownership after a persistence
+                // failure. The task recovery path remains available to users.
+            }
+        }
+    }
+
+    private async Task TransitionManagedContextAsync(
+        string taskSessionId,
+        ManagedContextOwnershipState state,
+        CancellationToken cancellationToken)
+    {
+        if (managedContextSessions is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var binding = await managedContextSessions.LoadByTaskSessionAsync(taskSessionId, cancellationToken);
+            if (binding is null)
+            {
+                return;
+            }
+
+            await managedContextSessions.UpsertAsync(binding with
+            {
+                OwnershipState = state,
+                UpdatedAt = clock.UtcNow,
+            }, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Lifecycle persistence is fail-closed for context control and
+            // best-effort for the user's task/deletion path.
+        }
+    }
+
+    private async Task<ManagedContextSession?> TryRecordManagedTokenUsageAsync(
+        ManagedContextSession binding,
+        CancellationToken cancellationToken)
+    {
+        if (managedContextSessions is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var current = await managedContextSessions.LoadByTaskSessionAsync(binding.TaskSessionId, cancellationToken);
+            if (!MatchesControllableLease(current, binding.OwnershipLeaseId)) return null;
+            var updated = current! with
+            {
+                OwnershipState = ManagedContextOwnershipState.Owned,
+                LastTokenUsageAt = clock.UtcNow,
+                UpdatedAt = clock.UtcNow,
+            };
+            return await managedContextSessions.TryUpdateLeaseAsync(
+                updated,
+                binding.OwnershipLeaseId,
+                cancellationToken)
+                ? updated
+                : null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<ManagedContextSession?> TryFinalizeManagedContextAsync(
+        ManagedContextSession binding,
+        ManagedContextOwnershipState state,
+        bool safeBoundary,
+        ContextEconomyCompactionResult? compaction,
+        bool verified,
+        CancellationToken cancellationToken)
+    {
+        if (managedContextSessions is null) return null;
+        try
+        {
+            var current = await managedContextSessions.LoadByTaskSessionAsync(binding.TaskSessionId, cancellationToken);
+            if (!MatchesControllableLease(current, binding.OwnershipLeaseId)) return null;
+            var updated = current! with
+            {
+                OwnershipState = state,
+                LastSafeBoundaryAt = safeBoundary ? clock.UtcNow : current.LastSafeBoundaryAt,
+                LastCompactionAt = compaction is { Succeeded: true }
+                    ? compaction.CompletedAt ?? clock.UtcNow
+                    : current.LastCompactionAt,
+                LastCompactionRequestedAt = compaction?.RequestedAt ?? current.LastCompactionRequestedAt,
+                LastCompactionStartedAt = compaction?.StartedAt ?? current.LastCompactionStartedAt,
+                LastCompactionCompletedAt = compaction?.CompletedAt ?? current.LastCompactionCompletedAt,
+                LastCompactionRequestId = compaction?.RequestId ?? current.LastCompactionRequestId,
+                LastVerifiedAt = verified ? clock.UtcNow : current.LastVerifiedAt,
+                UpdatedAt = clock.UtcNow,
+            };
+            return await managedContextSessions.TryUpdateLeaseAsync(
+                updated,
+                binding.OwnershipLeaseId,
+                cancellationToken)
+                ? updated
+                : null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<ContextControlValidation> ValidateManagedContextControlAsync(
+        string taskSessionId,
+        string threadId,
+        string expectedLeaseId,
+        CancellationToken cancellationToken)
+    {
+        if (managedContextSessions is null || projectRepository is null)
+            return ContextControlValidation.Reject("Managed ownership dependencies are unavailable.");
+        try
+        {
+            var task = await tasks.GetAsync(taskSessionId, cancellationToken);
+            var binding = await managedContextSessions.LoadByTaskSessionAsync(taskSessionId, cancellationToken);
+            if (task is null || binding is null)
+                return ContextControlValidation.Reject("Managed task or ownership binding no longer exists.");
+            if (!string.Equals(binding.OwnershipLeaseId, expectedLeaseId, StringComparison.Ordinal))
+                return ContextControlValidation.Reject("Ownership lease changed before compaction.");
+            if (!string.Equals(binding.ThreadId, threadId, StringComparison.Ordinal))
+                return ContextControlValidation.Reject("Bound thread changed before compaction.");
+
+            var project = string.IsNullOrWhiteSpace(task.ProjectId)
+                ? null
+                : await projectRepository.GetAsync(task.ProjectId, cancellationToken);
+            var access = managedContextPolicy.EvaluateControl(
+                project,
+                task,
+                binding,
+                runtime.AppServerInstanceId ?? string.Empty,
+                runtime.MainAgent.GetThreadIdentity(threadId));
+            if (access.Allowed) return ContextControlValidation.Permit(access.Message);
+
+            var lost = binding with
+            {
+                OwnershipState = ManagedContextOwnershipState.Lost,
+                UpdatedAt = clock.UtcNow,
+            };
+            await managedContextSessions.TryUpdateLeaseAsync(lost, expectedLeaseId, cancellationToken);
+            return ContextControlValidation.Reject($"{access.Code}: {access.Message}");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            return ContextControlValidation.Reject($"Ownership validation failed: {exception.Message}");
+        }
+    }
+
+    private static bool MatchesControllableLease(ManagedContextSession? binding, string expectedLeaseId) =>
+        binding is not null
+        && string.Equals(binding.OwnershipLeaseId, expectedLeaseId, StringComparison.Ordinal)
+        && binding.OwnershipState is ManagedContextOwnershipState.Owned or ManagedContextOwnershipState.Idle;
+
+    private static ContextTurnSample ToContextSample(
+        MainAgentTokenUsage usage,
+        string turnId,
+        DateTimeOffset capturedAt) => new(
+            usage.InputTokens,
+            usage.CachedInputTokens,
+            ContextWindowTokens: usage.ModelContextWindow,
+            CapturedAt: capturedAt,
+            NativeInputTokens: usage.InputTokens,
+            TurnId: turnId);
+
+    private static string? ReadItemId(JsonElement? rawEvent)
+    {
+        if (rawEvent is not { ValueKind: JsonValueKind.Object } value
+            || !value.TryGetProperty("item", out var item)
+            || item.ValueKind != JsonValueKind.Object
+            || !item.TryGetProperty("id", out var id)
+            || id.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return id.GetString();
     }
 
     private async Task<(ControlledTaskSession Session, string MainThreadId, TaskGroupLedger Ledger)> PrepareMainContextAsync(

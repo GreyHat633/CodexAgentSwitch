@@ -41,6 +41,7 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
     public async Task BindThreadAsync(
         string threadId,
         IMainAgentSession session,
+        Func<CancellationToken, Task<ContextControlValidation>>? controlGuard = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
@@ -48,6 +49,7 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         var context = threads.GetOrAdd(threadId, id => new ThreadContext(id, session));
         if (!ReferenceEquals(context.Session, session))
             throw new InvalidOperationException($"Thread '{threadId}' is already bound to another session.");
+        context.SetControlGuard(controlGuard);
         Subscribe(session);
         await context.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -71,18 +73,30 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         await context.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (context.State.CooldownRemaining > 0 && sample.IsNormalMainTurn)
+            var replaceCurrentTurn = !string.IsNullOrWhiteSpace(sample.TurnId)
+                && context.State.Samples.LastOrDefault()?.TurnId is { } previousTurnId
+                && string.Equals(previousTurnId, sample.TurnId, StringComparison.Ordinal);
+            if (context.State.CooldownRemaining > 0 && sample.IsNormalMainTurn && !replaceCurrentTurn)
             {
                 context.State.CooldownRemaining--;
                 if (context.State.CooldownRemaining == 0 && context.State.State == ContextEconomyState.Cooldown)
                     context.State.State = stateMachine.Transition(ContextEconomyState.Cooldown, ContextEconomyTransition.CooldownExpired);
             }
 
-            context.State.Samples.Add(sample);
+            if (replaceCurrentTurn)
+                context.State.Samples[^1] = sample;
+            else
+                context.State.Samples.Add(sample);
             Trim(context.State.Samples);
             if (context.State.State is ContextEconomyState.Verifying or ContextEconomyState.VerifyDeferred)
             {
-                context.State.PostCompactionSamples.Add(sample);
+                var replacePostCompactionTurn = !string.IsNullOrWhiteSpace(sample.TurnId)
+                    && context.State.PostCompactionSamples.LastOrDefault()?.TurnId is { } previousPostTurnId
+                    && string.Equals(previousPostTurnId, sample.TurnId, StringComparison.Ordinal);
+                if (replacePostCompactionTurn)
+                    context.State.PostCompactionSamples[^1] = sample;
+                else
+                    context.State.PostCompactionSamples.Add(sample);
                 Trim(context.State.PostCompactionSamples);
                 // Evaluate a rolling 2-3 turn window; a one-off large context is
                 // deferred until it naturally leaves that verification window.
@@ -119,7 +133,8 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
             // A large post-compaction context is explicitly verification-deferred;
             // do not let its transient pressure immediately schedule another request.
             var deferPolicy = sample.IsLargeNewContext && context.State.State == ContextEconomyState.VerifyDeferred;
-            if (!deferPolicy)
+            var protectionBlocked = context.State.State == ContextEconomyState.ContextProtectionBlocked;
+            if (!deferPolicy && !protectionBlocked)
             {
                 if (decision.Band == ContextPressureBand.HardProtection)
                     context.State.State = stateMachine.Transition(context.State.State, ContextEconomyTransition.HardProtectionDetected);
@@ -131,7 +146,7 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
 
             ContextEconomyCompactionResult? compaction = null;
             var shouldCompact = safeBoundary && context.State.State is ContextEconomyState.Candidate or ContextEconomyState.PendingSafeBoundary or ContextEconomyState.CompactFailed or ContextEconomyState.Ineffective;
-            if (shouldCompact && context.State.CooldownRemaining == 0)
+            if (shouldCompact && context.State.CooldownRemaining == 0 && !context.HasActiveCompaction)
                 compaction = await CompactLockedAsync(context, cancellationToken).ConfigureAwait(false);
             await SaveLockedAsync(context, cancellationToken).ConfigureAwait(false);
             return new(decision, context.State.State, compaction is not null, compaction);
@@ -149,6 +164,7 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         {
             if (context.State.CooldownRemaining > 0 || context.State.State is not (ContextEconomyState.Candidate or ContextEconomyState.PendingSafeBoundary or ContextEconomyState.CompactFailed or ContextEconomyState.Ineffective))
                 return null;
+            if (context.HasActiveCompaction) return null;
             var result = await CompactLockedAsync(context, cancellationToken).ConfigureAwait(false);
             await SaveLockedAsync(context, cancellationToken).ConfigureAwait(false);
             return result;
@@ -191,6 +207,7 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
             context.State.PostCompactionInput = null;
             context.State.PostCompactionPressure = null;
             context.State.StructuredCompactedAt = compactedAt;
+            context.State.LastCompactionCompletedAt = compactedAt;
             context.State.LastCompactionTrigger = activeTransaction ? CompactionTrigger.AgentSwitch : trigger;
             context.State.State = ContextEconomyState.Verifying;
             context.State.Attempts = 0;
@@ -237,6 +254,14 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         ContextEconomyCompactionResult? result = null;
         while (context.State.Attempts < options.MaxCompactionAttemptsPerEpisode)
         {
+            var control = await context.ValidateControlAsync(cancellationToken).ConfigureAwait(false);
+            if (!control.Allowed)
+            {
+                context.State.State = ContextEconomyState.ContextProtectionBlocked;
+                context.State.LastReason = $"Compaction control rejected: {control.Reason}";
+                return new(false, false, false, context.State.Attempts, context.State.State, null, context.State.LastReason);
+            }
+
             context.State.Attempts++;
             var attempt = context.State.Attempts;
             context.State.State = stateMachine.Transition(context.State.State, ContextEconomyTransition.SafeBoundaryReached);
@@ -245,6 +270,8 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
             context.State.PreCompactionPressure = context.State.LastTelemetry?.Pressure;
             context.State.PostCompactionSamples.Clear();
             context.State.LastCompactionTrigger = CompactionTrigger.AgentSwitch;
+            context.State.LastCompactionRequestAt = DateTimeOffset.UtcNow;
+            context.State.LastCompactionRequestId = Guid.NewGuid().ToString("D");
             var lifecycle = context.BeginLifecycle();
             try
             {
@@ -266,7 +293,18 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
                     {
                         var terminal = await lifecycle.WaitAsync(options.CompactionTimeout, cancellationToken).ConfigureAwait(false);
                         result = terminal
-                            ? new(true, true, true, attempt, ContextEconomyState.Verifying, null, "Compaction completed on the bound thread.")
+                            ? new(
+                                true,
+                                true,
+                                true,
+                                attempt,
+                                ContextEconomyState.Verifying,
+                                null,
+                                "Compaction completed on the bound thread.",
+                                context.State.LastCompactionRequestAt,
+                                lifecycle.StartedAt,
+                                lifecycle.CompletedAt,
+                                context.State.LastCompactionRequestId)
                             : Failed(context, attempt, true, false, "Compaction acknowledgement timed out before a same-thread terminal lifecycle.");
                     }
                 }
@@ -279,8 +317,19 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
             {
                 result = Failed(context, attempt, false, false, $"Compaction failed: {ex.Message}");
             }
-            finally { context.EndLifecycle(lifecycle); }
-            var finalResult = result ?? Failed(context, attempt, false, false, "Compaction did not produce a result.");
+            finally
+            {
+                context.State.LastCompactionStartedAt = lifecycle.StartedAt ?? context.State.LastCompactionStartedAt;
+                context.State.LastCompactionCompletedAt = lifecycle.CompletedAt ?? context.State.LastCompactionCompletedAt;
+                context.EndLifecycle(lifecycle);
+            }
+            var finalResult = (result ?? Failed(context, attempt, false, false, "Compaction did not produce a result.")) with
+            {
+                RequestedAt = context.State.LastCompactionRequestAt,
+                StartedAt = lifecycle.StartedAt ?? context.State.LastCompactionStartedAt,
+                CompletedAt = lifecycle.CompletedAt ?? context.State.LastCompactionCompletedAt,
+                RequestId = context.State.LastCompactionRequestId,
+            };
             context.State.LastReason = finalResult.Reason;
             if (finalResult.Succeeded)
             {
@@ -298,7 +347,18 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
     }
 
     private static ContextEconomyCompactionResult Failed(ThreadContext context, int attempt, bool ack, bool terminal, string reason) =>
-        new(false, ack, terminal, attempt, ContextEconomyState.CompactFailed, null, reason);
+        new(
+            false,
+            ack,
+            terminal,
+            attempt,
+            ContextEconomyState.CompactFailed,
+            null,
+            reason,
+            context.State.LastCompactionRequestAt,
+            context.State.LastCompactionStartedAt,
+            context.State.LastCompactionCompletedAt,
+            context.State.LastCompactionRequestId);
 
     private async Task<ThreadContext> RequireContextAsync(string threadId, CancellationToken cancellationToken)
     {
@@ -306,7 +366,7 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         if (threads.TryGetValue(threadId, out var context) && context.Loaded) return context;
         if (defaultSession is null)
             throw new InvalidOperationException($"Thread '{threadId}' is not bound. Call BindThreadAsync first.");
-        await BindThreadAsync(threadId, defaultSession, cancellationToken).ConfigureAwait(false);
+        await BindThreadAsync(threadId, defaultSession, cancellationToken: cancellationToken).ConfigureAwait(false);
         return threads[threadId];
     }
 
@@ -326,11 +386,19 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         });
     }
 
-    private Task OnEventAsync(MainAgentEvent value)
+    private async Task OnEventAsync(MainAgentEvent value)
     {
         if (threads.TryGetValue(value.ThreadId, out var context))
-            context.AcceptLifecycle(value);
-        return Task.CompletedTask;
+        {
+            var belongsToActiveRequest = context.AcceptLifecycle(value);
+            if (value.Kind == MainAgentEventKind.CompactionCompleted && !belongsToActiveRequest)
+            {
+                await ObserveStructuredCompactionAsync(
+                    value.ThreadId,
+                    CompactionTrigger.HostAutomatic,
+                    DateTimeOffset.UtcNow).ConfigureAwait(false);
+            }
+        }
     }
 
     private static void Trim(List<ContextTurnSample> samples)
@@ -360,6 +428,33 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         private LifecycleWait? Lifecycle { get; set; }
         private bool CompactionRequestStarted { get; set; }
         private bool StructuredCompactionQueued { get; set; }
+        private bool CompactionActive { get; set; }
+        private Func<CancellationToken, Task<ContextControlValidation>>? ControlGuard { get; set; }
+
+        public void SetControlGuard(Func<CancellationToken, Task<ContextControlValidation>>? controlGuard)
+        {
+            lock (LifecycleSync) ControlGuard = controlGuard;
+        }
+
+        public async Task<ContextControlValidation> ValidateControlAsync(CancellationToken cancellationToken)
+        {
+            Func<CancellationToken, Task<ContextControlValidation>>? guard;
+            lock (LifecycleSync) guard = ControlGuard;
+            if (guard is null) return ContextControlValidation.Permit();
+            try
+            {
+                return await guard(cancellationToken).ConfigureAwait(false)
+                    ?? ContextControlValidation.Reject("Control guard returned no result.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                return ContextControlValidation.Reject($"Control guard failed: {exception.Message}");
+            }
+        }
 
         public LifecycleWait BeginLifecycle()
         {
@@ -406,9 +501,21 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
             lock (LifecycleSync) StructuredCompactionQueued = false;
         }
 
-        public void AcceptLifecycle(MainAgentEvent value)
+        public bool HasActiveCompaction
         {
-            lock (LifecycleSync) Lifecycle?.Accept(value);
+            get { lock (LifecycleSync) return CompactionActive; }
+        }
+
+        public bool AcceptLifecycle(MainAgentEvent value)
+        {
+            lock (LifecycleSync)
+            {
+                if (value.Kind == MainAgentEventKind.CompactionStarted) CompactionActive = true;
+                else if (value.Kind == MainAgentEventKind.CompactionCompleted) CompactionActive = false;
+                var belongsToActiveRequest = Lifecycle is not null;
+                Lifecycle?.Accept(value);
+                return belongsToActiveRequest;
+            }
         }
 
         public void EndLifecycle(LifecycleWait lifecycle)
@@ -424,7 +531,7 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         public void Restore(ContextEconomySnapshot snapshot)
         {
             State.State = snapshot.State == ContextEconomyState.Compacting
-                ? ContextEconomyState.CompactFailed
+                ? ContextEconomyState.ContextProtectionBlocked
                 : snapshot.State;
             State.Attempts = snapshot.Attempts;
             State.CooldownRemaining = snapshot.CooldownRemaining;
@@ -439,12 +546,20 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
             State.PostCompactionPressure = snapshot.PostCompactionPressure;
             State.PostCompactionInput = snapshot.PostCompactionInput;
             State.LastEffectiveness = snapshot.LastEffectiveness;
+            State.LastCompactionRequestAt = snapshot.LastCompactionRequestedAt;
+            State.LastCompactionStartedAt = snapshot.LastCompactionStartedAt;
+            State.LastCompactionCompletedAt = snapshot.LastCompactionCompletedAt;
+            State.LastCompactionRequestId = snapshot.LastCompactionRequestId;
+            if (snapshot.State == ContextEconomyState.Compacting)
+                State.LastReason = "Previous compaction outcome is unresolved after restart; automatic retry is blocked.";
         }
 
         public ContextEconomySnapshot ToSnapshot() => new(ThreadId, State.State, State.Attempts, State.CooldownRemaining,
             State.Samples.ToArray(), State.PreCompactionSamples.ToArray(), State.LastReason, State.PostCompactionSamples.ToArray(), DateTimeOffset.UtcNow,
             State.LastCompactionTrigger, State.StructuredCompactedAt, State.PreCompactionPressure, State.PreCompactionInput,
-            State.PostCompactionPressure, State.PostCompactionInput, State.LastEffectiveness);
+            State.PostCompactionPressure, State.PostCompactionInput, State.LastEffectiveness,
+            State.LastCompactionRequestAt, State.LastCompactionStartedAt, State.LastCompactionCompletedAt,
+            State.LastCompactionRequestId);
     }
 
     private sealed class MutableState
@@ -464,6 +579,10 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         public long? PreCompactionInput { get; set; }
         public decimal? PostCompactionPressure { get; set; }
         public long? PostCompactionInput { get; set; }
+        public DateTimeOffset? LastCompactionRequestAt { get; set; }
+        public DateTimeOffset? LastCompactionStartedAt { get; set; }
+        public DateTimeOffset? LastCompactionCompletedAt { get; set; }
+        public string? LastCompactionRequestId { get; set; }
     }
 
     private sealed class LifecycleWait
@@ -472,17 +591,28 @@ public sealed class MainContextEconomyCoordinator : IMainContextEconomyCoordinat
         private int started;
 
         public bool IsCompleted => completion.Task.IsCompleted;
+        public DateTimeOffset? StartedAt { get; private set; }
+        public DateTimeOffset? CompletedAt { get; private set; }
 
         public void Accept(MainAgentEvent value)
         {
-            if (value.Kind == MainAgentEventKind.CompactionStarted) Interlocked.Exchange(ref started, 1);
+            if (value.Kind == MainAgentEventKind.CompactionStarted)
+            {
+                StartedAt ??= DateTimeOffset.UtcNow;
+                Interlocked.Exchange(ref started, 1);
+            }
             else if (value.Kind == MainAgentEventKind.CompactionCompleted && Volatile.Read(ref started) == 1)
+            {
+                CompletedAt ??= DateTimeOffset.UtcNow;
                 completion.TrySetResult(true);
+            }
         }
 
         public void AcceptStructuredCompacted()
         {
             Interlocked.Exchange(ref started, 1);
+            StartedAt ??= DateTimeOffset.UtcNow;
+            CompletedAt ??= DateTimeOffset.UtcNow;
             completion.TrySetResult(true);
         }
 

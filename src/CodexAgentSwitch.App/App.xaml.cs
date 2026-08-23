@@ -76,12 +76,14 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<MainCostGuardCoordinator>();
         services.AddSingleton(new ContextEconomyOptions());
         services.AddSingleton<IMainContextEconomyStateStore, SqliteMainContextEconomyStateStore>();
+        services.AddSingleton<IManagedContextSessionStore, SqliteManagedContextSessionStore>();
         services.AddSingleton<IMainContextEconomyCoordinator, MainContextEconomyCoordinator>();
         services.AddSingleton<SafeWorkerDeletionCoordinator>();
         services.AddSingleton<ProfileValidator>();
         services.AddSingleton<ProfileService>();
         services.AddSingleton<ProfileMigrationService>();
         services.AddSingleton<ProjectService>();
+        services.AddSingleton<ManagedProjectContextPolicy>();
         services.AddSingleton<CodexCommandLocator>();
         services.AddSingleton<ICodexModelResolver, CodexModelResolver>();
         services.AddSingleton<INativeCodexProcessStarter, NativeCodexProcessStarter>();

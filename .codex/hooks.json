@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Windows\\System32\\cmd.exe /d /c E:\\AISPace\\hook-probe.cmd",
+            "commandWindows": "C:\\Windows\\System32\\cmd.exe /d /c E:\\AISPace\\hook-probe.cmd"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -12,6 +12,8 @@ public enum MainAgentEventKind
     TraceItemStarted,
     TraceItem,
     ApprovalRequested,
+    ApprovalResolved,
+    TokenUsageUpdated,
     TurnCompleted,
     CompactionStarted,
     CompactionCompleted,
@@ -24,11 +26,25 @@ public sealed record MainAgentEvent(
     string? Text,
     string? Status,
     JsonElement? RawEvent,
-    TaskMessageKind? MessageKind = null);
+    TaskMessageKind? MessageKind = null,
+    MainAgentTokenUsage? TokenUsage = null);
+
+public sealed record MainAgentTokenUsage(
+    long InputTokens,
+    long CachedInputTokens,
+    long OutputTokens,
+    long ReasoningOutputTokens,
+    long TotalTokens,
+    long? ModelContextWindow);
 
 public sealed record MainAgentTurnHandle(string ThreadId, string TurnId);
 
 public sealed record MainAgentCompactionHandle(string ThreadId, bool RequestAccepted, JsonElement RawResponse);
+
+public sealed record MainAgentThreadIdentity(
+    string ThreadId,
+    string SessionId,
+    string WorkingDirectory);
 
 public sealed record MainThreadBindingResult(
     string ThreadId,
@@ -52,6 +68,8 @@ public sealed record MainAgentTurnResult(
 public interface IMainAgentSession
 {
     event Func<MainAgentEvent, Task>? EventReceived;
+
+    MainAgentThreadIdentity? GetThreadIdentity(string threadId) => null;
 
     Task<string> CreateThreadAsync(
         string modelId,

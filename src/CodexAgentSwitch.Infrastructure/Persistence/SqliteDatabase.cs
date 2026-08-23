@@ -143,6 +143,25 @@ public sealed class SqliteDatabase(string databasePath)
                 payload_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS managed_context_sessions (
+                task_session_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                canonical_project_root TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                app_server_instance_id TEXT NOT NULL,
+                ownership_lease_id TEXT NOT NULL,
+                ownership_state INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_managed_context_sessions_thread
+                ON managed_context_sessions(thread_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_managed_context_sessions_lease
+                ON managed_context_sessions(ownership_lease_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_managed_context_sessions_provenance
+                ON managed_context_sessions(project_id, thread_id, session_id);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
         // Keep upgrades idempotent for databases created before lease metadata

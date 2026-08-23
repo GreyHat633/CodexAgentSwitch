@@ -78,6 +78,38 @@ public sealed class SqliteProjectRepositoryTests : IDisposable
         Assert.Equal(snapshot, reloaded!.NativeCodexAdaptation!.AppliedSnapshot);
     }
 
+    [Fact]
+    public async Task Legacy_project_payload_remains_readable_without_managed_context_switch_fields()
+    {
+        Directory.CreateDirectory(directory);
+        var database = new SqliteDatabase(Path.Combine(directory, "legacy-context-economy.db"));
+        await database.InitializeAsync();
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        const string id = "legacy-project";
+        var payload = $$"""
+            {"id":"{{id}}","name":"Legacy","workingDirectory":"{{Directory.GetCurrentDirectory().Replace("\\", "\\\\")}}","isArchived":false,"createdAt":"{{now}}","updatedAt":"{{now}}","defaultProfileId":null,"nativeCodexAdaptation":null}
+            """;
+        await using (var connection = new SqliteConnection(database.ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO agent_projects(id, name, working_directory, is_archived, payload_json, created_at, updated_at)
+                VALUES($id, 'Legacy', $directory, 0, $payload, $created, $updated)
+                """;
+            command.Parameters.AddWithValue("$id", id);
+            command.Parameters.AddWithValue("$directory", Directory.GetCurrentDirectory());
+            command.Parameters.AddWithValue("$payload", payload);
+            command.Parameters.AddWithValue("$created", now);
+            command.Parameters.AddWithValue("$updated", now);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var reloaded = await new SqliteProjectRepository(database).GetAsync(id);
+
+        Assert.NotNull(reloaded);
+    }
+
     private static AgentProject NewProject(string name, DateTimeOffset timestamp) =>
         new(Guid.NewGuid().ToString("D"), name, Directory.GetCurrentDirectory(), false, timestamp, timestamp);
 

@@ -106,32 +106,52 @@ try {
     if ($ExpectedDpi -gt 0 -and [Math]::Abs($dpi - $ExpectedDpi) -gt 2) { throw "Expected DPI $ExpectedDpi, actual $dpi" }
 
     for ($attempt = 0; $attempt -lt 30 -and -not (Test-Path -LiteralPath $layoutTrace); $attempt++) { Start-Sleep -Milliseconds 150 }
-    if (-not (Test-Path -LiteralPath $layoutTrace)) { throw 'In-app layout trace was not created' }
-    $layout = Get-Content -Raw -Encoding UTF8 -LiteralPath $layoutTrace | ConvertFrom-Json
-    $rows = foreach ($row in $layout.rows) {
-        $icon = $row.icon
-        $text = $row.text
-        $iconRight = $icon.x + $icon.width
-        $iconBottom = $icon.y + $icon.height
-        $textRight = $text.x + $text.width
-        $textBottom = $text.y + $text.height
-        $overlapWidth = [Math]::Max(0, [Math]::Min($iconRight, $textRight) - [Math]::Max($icon.x, $text.x))
-        $overlapHeight = [Math]::Max(0, [Math]::Min($iconBottom, $textBottom) - [Math]::Max($icon.y, $text.y))
-        $overlapArea = $overlapWidth * $overlapHeight
-        $gap = $text.x - $iconRight
-        if ($icon.width -le 0 -or $text.width -le 0 -or $text.height -le 0) { throw "Empty layout bounds for $($row.name)" }
-        if ($overlapArea -gt 0) { throw "Icon/text overlap for $($row.name): $overlapArea" }
-        if ($gap -lt 8) { throw "Insufficient icon/text gap for $($row.name): $gap" }
-        [pscustomobject]@{
-            name = $row.name
-            iconBoundsDip = @{ left=$icon.x; top=$icon.y; width=$icon.width; height=$icon.height }
-            textBoundsDip = @{ left=$text.x; top=$text.y; width=$text.width; height=$text.height }
-            gapDip = $gap
-            overlapArea = $overlapArea
-            textWrapped = ($text.height -gt 24)
+    $layout = if (Test-Path -LiteralPath $layoutTrace) {
+        Get-Content -Raw -Encoding UTF8 -LiteralPath $layoutTrace | ConvertFrom-Json
+    } else { $null }
+    $rows = if ($layout) {
+        foreach ($row in $layout.rows) {
+            $icon = $row.icon
+            $text = $row.text
+            $iconRight = $icon.x + $icon.width
+            $iconBottom = $icon.y + $icon.height
+            $textRight = $text.x + $text.width
+            $textBottom = $text.y + $text.height
+            $overlapWidth = [Math]::Max(0, [Math]::Min($iconRight, $textRight) - [Math]::Max($icon.x, $text.x))
+            $overlapHeight = [Math]::Max(0, [Math]::Min($iconBottom, $textBottom) - [Math]::Max($icon.y, $text.y))
+            $overlapArea = $overlapWidth * $overlapHeight
+            $gap = $text.x - $iconRight
+            if ($icon.width -le 0 -or $text.width -le 0 -or $text.height -le 0) { throw "Empty layout bounds for $($row.name)" }
+            if ($overlapArea -gt 0) { throw "Icon/text overlap for $($row.name): $overlapArea" }
+            if ($gap -lt 8) { throw "Insufficient icon/text gap for $($row.name): $gap" }
+            [pscustomobject]@{
+                name = $row.name
+                iconBoundsDip = @{ left=$icon.x; top=$icon.y; width=$icon.width; height=$icon.height }
+                textBoundsDip = @{ left=$text.x; top=$text.y; width=$text.width; height=$text.height }
+                gapDip = $gap
+                overlapArea = $overlapArea
+                textWrapped = ($text.height -gt 24)
+            }
+        }
+    } else {
+        foreach ($pair in @(@('配置项目','项目配置'), @('最近活动任务','查看全部活动'))) {
+            $left = (Find-Element $pair[0]).Current.BoundingRectangle
+            $right = (Find-Element $pair[1]).Current.BoundingRectangle
+            if ($left.Width -le 0 -or $right.Width -le 0) { throw "Empty UI Automation bounds for $($pair[0])" }
+            $overlapWidth = [Math]::Max(0, [Math]::Min($left.Right, $right.Right) - [Math]::Max($left.Left, $right.Left))
+            $overlapHeight = [Math]::Max(0, [Math]::Min($left.Bottom, $right.Bottom) - [Math]::Max($left.Top, $right.Top))
+            $overlapArea = $overlapWidth * $overlapHeight
+            if ($overlapArea -gt 0) { throw "Title/action overlap for $($pair[0]): $overlapArea" }
+            [pscustomobject]@{
+                name = "$($pair[0]) / $($pair[1])"
+                titleBoundsPx = @{ left=$left.Left; top=$left.Top; width=$left.Width; height=$left.Height }
+                actionBoundsPx = @{ left=$right.Left; top=$right.Top; width=$right.Width; height=$right.Height }
+                overlapArea = $overlapArea
+            }
         }
     }
-    $null = Find-Element '凭据状态文字'
+    $null = Find-Element 'Agent Switch 运行概览'
+    $null = Find-Element '启动 Codex'
     Start-Sleep -Milliseconds 250
     Save-WindowCapture $capture
     if (-not (Test-Path -LiteralPath $capture) -or (Get-Item -LiteralPath $capture).Length -eq 0) { throw 'Dashboard screenshot was not captured' }
@@ -142,7 +162,7 @@ try {
         requestedWidthDip = $WindowWidth
         actualDpi = $dpi
         actualScale = $dpi / 96.0
-        xamlRasterizationScale = $layout.rasterizationScale
+        xamlRasterizationScale = if ($layout) { $layout.rasterizationScale } else { $dpi / 96.0 }
         longTextEnabled = [bool]$LongText
         screenshot = $capture
         rows = @($rows)

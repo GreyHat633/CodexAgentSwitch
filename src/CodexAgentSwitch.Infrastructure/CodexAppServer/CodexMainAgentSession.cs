@@ -13,6 +13,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
     private readonly Func<string, object?, CancellationToken, Task<JsonElement>> request;
     private readonly ConcurrentDictionary<string, TurnRuntime> turns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingApproval> approvals = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, MainAgentThreadIdentity> threadIdentities = new(StringComparer.Ordinal);
 
     public CodexMainAgentSession(
         CodexAppServerClient client,
@@ -27,6 +28,9 @@ public sealed class CodexMainAgentSession : IMainAgentSession
     }
 
     public event Func<MainAgentEvent, Task>? EventReceived;
+
+    public MainAgentThreadIdentity? GetThreadIdentity(string threadId) =>
+        threadIdentities.GetValueOrDefault(threadId);
 
     public async Task<MainAgentCompactionHandle> CompactThreadAsync(
         string threadId,
@@ -65,6 +69,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         }
         if (!string.Equals(status, "idle", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"The requested Main thread is not idle after binding (status={status}).");
+        CaptureThreadIdentity(thread, workingDirectory);
         return new(threadId, expectedSessionId, expectedSource, Path.GetFullPath(workingDirectory), status, resumed, thread.Clone());
     }
 
@@ -143,8 +148,12 @@ public sealed class CodexMainAgentSession : IMainAgentSession
                 serviceName = "codex-agent-switch",
             },
             cancellationToken);
-        return response.GetProperty("thread").GetProperty("id").GetString()
+        if (!response.TryGetProperty("thread", out var thread) || thread.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("thread/start did not return thread metadata.");
+        var threadId = ReadString(thread, "id")
             ?? throw new InvalidDataException("thread/start did not return a thread id.");
+        CaptureThreadIdentity(thread, workingDirectory);
+        return threadId;
     }
 
     public async Task ResumeThreadAsync(
@@ -155,7 +164,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         CancellationToken cancellationToken = default)
     {
         var model = await modelResolver.ResolveAsync(client, modelId, cancellationToken);
-        await request(
+        var response = await request(
             "thread/resume",
             new
             {
@@ -166,6 +175,20 @@ public sealed class CodexMainAgentSession : IMainAgentSession
                 sandbox = SandboxMode(approvalMode),
             },
             cancellationToken);
+        if (response.TryGetProperty("thread", out var thread) && thread.ValueKind == JsonValueKind.Object)
+            CaptureThreadIdentity(thread, workingDirectory);
+    }
+
+    private void CaptureThreadIdentity(JsonElement thread, string workingDirectory)
+    {
+        var threadId = ReadString(thread, "id");
+        var sessionId = ReadString(thread, "sessionId");
+        if (string.IsNullOrWhiteSpace(threadId) || string.IsNullOrWhiteSpace(sessionId))
+            return;
+        threadIdentities[threadId] = new(
+            threadId,
+            sessionId,
+            Path.GetFullPath(workingDirectory));
     }
 
     public async Task<MainAgentTurnHandle> StartTurnAsync(
@@ -296,6 +319,47 @@ public sealed class CodexMainAgentSession : IMainAgentSession
             }
             return;
         }
+        if (threadId is not null && method == "thread/tokenUsage/updated" && turnId is not null)
+        {
+            var usage = ReadTokenUsage(parameters);
+            if (usage is not null && turns.ContainsKey(Key(threadId, turnId)) && EventReceived is not null)
+            {
+                await EventReceived.Invoke(new MainAgentEvent(
+                    MainAgentEventKind.TokenUsageUpdated,
+                    threadId,
+                    turnId,
+                    null,
+                    null,
+                    parameters.Clone(),
+                    TokenUsage: usage));
+            }
+            return;
+        }
+        if (threadId is not null && method == "serverRequest/resolved" && EventReceived is not null)
+        {
+            await EventReceived.Invoke(new MainAgentEvent(
+                MainAgentEventKind.ApprovalResolved,
+                threadId,
+                turnId ?? string.Empty,
+                null,
+                "resolved",
+                parameters.Clone()));
+            return;
+        }
+        if (threadId is not null && method == "thread/status/changed")
+        {
+            if (EventReceived is not null)
+            {
+                await EventReceived.Invoke(new MainAgentEvent(
+                    MainAgentEventKind.StatusChanged,
+                    threadId,
+                    turnId ?? string.Empty,
+                    null,
+                    ReadStatus(parameters),
+                    parameters.Clone()));
+            }
+            return;
+        }
         if (threadId is null || turnId is null || !turns.TryGetValue(Key(threadId, turnId), out var runtime))
         {
             return;
@@ -307,7 +371,6 @@ public sealed class CodexMainAgentSession : IMainAgentSession
             "item/agentMessage/delta" => new(MainAgentEventKind.OutputDelta, threadId, turnId, ReadDelta(parameters), null, parameters.Clone()),
             "item/started" => CreateTraceEvent(threadId, turnId, parameters, started: true),
             "item/completed" => CreateTraceEvent(threadId, turnId, parameters, started: false),
-            "thread/status/changed" => new(MainAgentEventKind.StatusChanged, threadId, turnId, null, ReadStatus(parameters), parameters.Clone()),
             "turn/completed" => new(MainAgentEventKind.TurnCompleted, threadId, turnId, ExtractAgentText(turn), ReadStatus(turn), parameters.Clone()),
             _ => null,
         };
@@ -346,6 +409,43 @@ public sealed class CodexMainAgentSession : IMainAgentSession
 
     private static string? ReadDelta(JsonElement parameters) =>
         parameters.TryGetProperty("delta", out var delta) ? delta.GetString() : null;
+
+    private static MainAgentTokenUsage? ReadTokenUsage(JsonElement parameters)
+    {
+        if (!parameters.TryGetProperty("tokenUsage", out var usage)
+            || usage.ValueKind != JsonValueKind.Object
+            || !usage.TryGetProperty("last", out var last)
+            || last.ValueKind != JsonValueKind.Object
+            || !TryReadInt64(last, "inputTokens", out var inputTokens)
+            || inputTokens < 0)
+        {
+            return null;
+        }
+
+        return new(
+            inputTokens,
+            ReadInt64(last, "cachedInputTokens"),
+            ReadInt64(last, "outputTokens"),
+            ReadInt64(last, "reasoningOutputTokens"),
+            ReadInt64(last, "totalTokens"),
+            ReadNullableInt64(usage, "modelContextWindow"));
+    }
+
+    private static long ReadInt64(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.TryGetInt64(out var result) ? result : 0;
+
+    private static bool TryReadInt64(JsonElement element, string name, out long result)
+    {
+        result = 0;
+        return element.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt64(out result);
+    }
+
+    private static long? ReadNullableInt64(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var result)
+            ? result
+            : null;
 
     private static MainAgentEvent? CreateTraceEvent(string threadId, string turnId, JsonElement parameters, bool started)
     {

@@ -1,99 +1,41 @@
 using System.Diagnostics;
 using System.IO.Pipes;
-using System.Text;
-using System.Text.Json;
 
 namespace CodexAgentSwitch.Tests.ToolHost;
 
 public sealed class StopHookIntegrationTests
 {
     [Fact]
-    public async Task Scheduler_success_returns_supported_stop_response()
+    public async Task Historical_stop_hook_is_fail_open_without_connecting_scheduler_or_writing_diagnostics()
     {
-        var root = CreateTestDirectory("success");
-        var pipeName = "cas-stop-success-" + Guid.NewGuid().ToString("N");
+        var root = CreateTestDirectory();
+        var pipeName = "cas-stop-frozen-" + Guid.NewGuid().ToString("N");
         try
         {
-            string? requestLine = null;
-            var server = RunServerAsync(pipeName, line =>
-            {
-                requestLine = line;
-                return JsonSerializer.Serialize(new
-                {
-                    ok = true,
-                    result = new
-                    {
-                        threadId = "session-success",
-                        bindingAccepted = true,
-                        telemetryAvailable = true,
-                        state = 0,
-                        compactionRequested = false,
-                        compactionSucceeded = false,
-                        reason = "Observed.",
-                    },
-                });
-            });
+            await using var pipe = new NamedPipeServerStream(
+                pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            using var waitCancellation = new CancellationTokenSource();
+            var connection = pipe.WaitForConnectionAsync(waitCancellation.Token);
 
             var result = await RunToolHostAsync(pipeName, root,
-                "{\"session_id\":\"session-success\",\"cwd\":\"E:\\\\AISPace\\\\hook-success\"}");
-            await server;
+                "{\"session_id\":\"session-frozen\",\"cwd\":\"E:\\\\AISPace\\\\hook-frozen\",\"prompt\":\"TOP-SECRET-PROMPT\"}");
 
             Assert.Equal(0, result.ExitCode);
-            Assert.Contains("\"hookEventName\":\"Stop\"", result.StandardOutput);
-            using var request = JsonDocument.Parse(requestLine!);
-            Assert.Equal("mainContextBoundary", request.RootElement.GetProperty("method").GetString());
-            Assert.Equal("session-success", request.RootElement.GetProperty("payload").GetProperty("threadId").GetString());
+            Assert.Contains("\"hookEventName\":\"Stop\"", result.StandardOutput, StringComparison.Ordinal);
+            Assert.False(pipe.IsConnected);
+            Assert.False(File.Exists(Path.Combine(root, "logs", "context-economy-stop-hook.jsonl")));
+            waitCancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await connection);
         }
-        finally { Directory.Delete(root, true); }
-    }
-
-    [Fact]
-    public async Task Scheduler_failure_is_diagnosed_and_stop_remains_fail_open()
-    {
-        var root = CreateTestDirectory("failure");
-        var pipeName = "cas-stop-failure-" + Guid.NewGuid().ToString("N");
-        try
+        finally
         {
-            var server = RunServerAsync(pipeName, _ => JsonSerializer.Serialize(new
-            {
-                ok = false,
-                error = "simulated scheduler failure",
-            }));
-
-            var result = await RunToolHostAsync(pipeName, root,
-                "{\"session_id\":\"session-failure\",\"cwd\":\"E:\\\\AISPace\\\\hook-failure\",\"prompt\":\"TOP-SECRET-PROMPT\"}");
-            await server;
-
-            Assert.Equal(0, result.ExitCode);
-            Assert.Contains("\"hookEventName\":\"Stop\"", result.StandardOutput);
-            var path = Path.Combine(root, "logs", "context-economy-stop-hook.jsonl");
-            var diagnostic = File.ReadAllText(path);
-            Assert.Contains("\"Hook\":\"Stop\"", diagnostic);
-            Assert.Contains("\"SessionId\":\"session-failure\"", diagnostic);
-            Assert.Contains("\"PipeName\":\"" + pipeName + "\"", diagnostic);
-            Assert.Contains("\"Stage\":\"scheduler-send\"", diagnostic);
-            Assert.Contains("\"ExceptionType\":\"InvalidOperationException\"", diagnostic);
-            Assert.Contains("simulated scheduler failure", diagnostic);
-            Assert.DoesNotContain("TOP-SECRET-PROMPT", diagnostic);
+            Directory.Delete(root, true);
         }
-        finally { Directory.Delete(root, true); }
-    }
-
-    private static async Task RunServerAsync(string pipeName, Func<string, string> respond)
-    {
-        await using var pipe = new NamedPipeServerStream(
-            pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        await pipe.WaitForConnectionAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
-        await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
-        var request = await reader.ReadLineAsync() ?? throw new IOException("ToolHost did not send a request.");
-        await writer.WriteLineAsync(respond(request));
     }
 
     private static async Task<ProcessResult> RunToolHostAsync(string pipeName, string dataRoot, string input)
     {
-        var executable = FindToolHostExecutable();
-        var start = new ProcessStartInfo(executable)
+        var start = new ProcessStartInfo(FindToolHostExecutable())
         {
             UseShellExecute = false,
             RedirectStandardInput = true,
@@ -120,15 +62,14 @@ public sealed class StopHookIntegrationTests
         var root = FindRepositoryRoot();
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name ?? "Debug";
         var bin = Path.Combine(root, "src", "CodexAgentSwitch.ToolHost", "bin", configuration);
-        return Directory.EnumerateFiles(bin, "CodexAgentSwitch.ToolHost.exe", SearchOption.AllDirectories)
-            .Single();
+        return Directory.EnumerateFiles(bin, "CodexAgentSwitch.ToolHost.exe", SearchOption.AllDirectories).Single();
     }
 
-    private static string CreateTestDirectory(string name)
+    private static string CreateTestDirectory()
     {
         var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
             ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
-        var root = Path.Combine(testRoot, $"stop-hook-{name}-{Guid.NewGuid():N}");
+        var root = Path.Combine(testRoot, $"stop-hook-frozen-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         return root;
     }

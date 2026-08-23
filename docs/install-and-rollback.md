@@ -6,6 +6,8 @@ Extract the complete `CodexAgentSwitch-Setup-Bundle-win10-x64.zip` to an E-drive
 
 An upgrade first moves the complete old installation to a timestamped `.backup-*` directory, installs the new payload, then moves the existing `data` directory back. A failure restores the old directory. Setup creates a per-user Start Menu shortcut after the payload is committed. “可恢复卸载” moves the installation to `.removed-*`; by default it does not erase user data or credentials. The UI has a separate, clearly labelled option to delete local `data`; Windows credentials always require the dedicated credential-clear command.
 
+For 0.2.7.0 upgrades, Context Economy is automatically available to active CAS projects with a valid applied configuration; there is no separate enable switch. Historical CAS Hook entries are cleaned only for registered projects during reconcile; third-party Hook entries are preserved and the prior configuration is backed up. Rolling back to 0.2.6.x keeps the SQLite data, but 0.2.6.x does not understand the managed-session controls; close all CAS tasks first before rollback.
+
 Silent acceptance example:
 
 ```powershell
