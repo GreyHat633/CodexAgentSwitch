@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CodexAgentSwitch.Application.NativeCodex;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Projects;
@@ -79,6 +80,8 @@ public sealed class CodexDesktopAppLauncher(
     ICodexModelResolver modelResolver,
     ICodexProjectConfigurationValidator configurationValidator) : ICodexDesktopLauncher
 {
+    private const int DefaultAutoCompactTokenLimit = 150_000;
+    private const string AutoCompactTokenLimitKey = "model_auto_compact_token_limit";
     private const string ManagedStart = "# >>> Codex Agent Switch managed profile >>>";
     private const string ManagedEnd = "# <<< Codex Agent Switch managed profile <<<";
     private const string ProjectInstructionsStart = "<!-- >>> Codex Agent Switch managed native worker routing >>> -->";
@@ -194,7 +197,9 @@ public sealed class CodexDesktopAppLauncher(
 
         var configuration = await WriteProjectConfigurationAsync(profile, cwd, null, command, cancellationToken);
         var target = StartDesktop(discovery);
-        var summary = "已写入项目级 Codex 配置并启动官方图形桌面应用。请在桌面应用中打开同一项目目录以加载该方案。";
+        var summary = configuration.UserAutoCompactTokenLimitPreserved
+            ? "已写入项目级 Codex 配置并启动官方图形桌面应用。项目现有 model_auto_compact_token_limit 优先于 CAS 默认值；请在桌面应用中打开同一项目目录以加载该方案。"
+            : "已写入项目级 Codex 配置并启动官方图形桌面应用。请在桌面应用中打开同一项目目录以加载该方案。";
         return new CodexDesktopLaunchResult(target, cwd, configuration.Path, false, summary);
     }
 
@@ -258,7 +263,7 @@ public sealed class CodexDesktopAppLauncher(
                     write.Changed,
                     write.Path,
                     write.BackupPath,
-                    write.Changed ? "已写入 Agent Switch 管理的项目配置。" : "配置已是当前方案，无需更新。",
+                    BuildAdaptationSummary(write.Changed, write.UserAutoCompactTokenLimitPreserved),
                     ConfigurationFingerprint: write.ConfigurationFingerprint));
             }
             catch (Exception exception)
@@ -378,10 +383,10 @@ public sealed class CodexDesktopAppLauncher(
         var managedAgent = worker.Kind == EffectiveWorkerKind.NativeAgent && worker.CanRunInNativeCodex
             ? BuildNativeAgentConfiguration(worker)
             : null;
-        var block = BuildManagedConfiguration(profile, worker);
-        var next = existing is null
-            ? block
-            : ReplaceManagedBlock(existing, block);
+        var userOwnedConfiguration = IsolateUserOwnedConfiguration(existing);
+        var userAutoCompactTokenLimitPreserved = HasUserOwnedAutoCompactTokenLimit(userOwnedConfiguration);
+        var block = BuildManagedConfiguration(profile, worker, !userAutoCompactTokenLimitPreserved);
+        var next = MergeManagedConfiguration(userOwnedConfiguration, block);
         var nextProjectInstructions = ReplaceManagedProjectInstructions(
             existingProjectInstructions,
             BuildManagedProjectInstructions(worker));
@@ -398,7 +403,14 @@ public sealed class CodexDesktopAppLauncher(
         var agentChanged = HasWorkerAgentChanges(existingAgents, worker.ConfigFile, managedAgent);
         if (!projectChanged && !projectInstructionsChanged && !agentChanged && !hooksChanged)
         {
-            return new ProjectConfigurationWrite(configurationPath, false, false, null, existing is not null, Fingerprint(next));
+            return new ProjectConfigurationWrite(
+                configurationPath,
+                false,
+                false,
+                null,
+                existing is not null,
+                Fingerprint(next),
+                userAutoCompactTokenLimitPreserved);
         }
 
         // The candidate lives only beside its target long enough to ensure the
@@ -544,7 +556,14 @@ public sealed class CodexDesktopAppLauncher(
                 throw;
             }
 
-            return new ProjectConfigurationWrite(configurationPath, false, projectChanged || projectInstructionsChanged || agentChanged || hooksChanged, backupPath, existing is not null, Fingerprint(next));
+            return new ProjectConfigurationWrite(
+                configurationPath,
+                false,
+                projectChanged || projectInstructionsChanged || agentChanged || hooksChanged,
+                backupPath,
+                existing is not null,
+                Fingerprint(next),
+                userAutoCompactTokenLimitPreserved);
         }
         finally
         {
@@ -555,15 +574,24 @@ public sealed class CodexDesktopAppLauncher(
         }
     }
 
-    private static string BuildManagedConfiguration(Profile profile, EffectiveWorkerDefinition worker)
+    private static string BuildManagedConfiguration(
+        Profile profile,
+        EffectiveWorkerDefinition worker,
+        bool includeDefaultAutoCompactTokenLimit)
     {
         var approval = ExecutionApprovalPolicy.Resolve(profile.ApprovalMode);
         var builder = new StringBuilder()
             .AppendLine(ManagedStart)
             .AppendLine("# Generated from the active Codex Agent Switch profile. Do not place credentials in this file.")
             .AppendLine($"model = {Toml(profile.MainAgent.ModelId)}")
-            .AppendLine($"model_reasoning_effort = {Toml(profile.MainAgent.ReasoningEffort)}")
-            .AppendLine($"approval_policy = {Toml(approval.ApprovalPolicy)}")
+            .AppendLine($"model_reasoning_effort = {Toml(profile.MainAgent.ReasoningEffort)}");
+
+        if (includeDefaultAutoCompactTokenLimit)
+        {
+            builder.AppendLine($"{AutoCompactTokenLimitKey} = {DefaultAutoCompactTokenLimit}");
+        }
+
+        builder.AppendLine($"approval_policy = {Toml(approval.ApprovalPolicy)}")
             .AppendLine($"sandbox_mode = {Toml(approval.SandboxMode)}")
             .AppendLine($"agents.enabled = {(worker.CanRunInNativeCodex && worker.Kind == EffectiveWorkerKind.NativeAgent ? "true" : "false")}");
 
@@ -595,6 +623,206 @@ public sealed class CodexDesktopAppLauncher(
         }
 
         return builder.AppendLine(ManagedEnd).ToString();
+    }
+
+    private static string? IsolateUserOwnedConfiguration(string? existing)
+    {
+        if (existing is null)
+        {
+            return null;
+        }
+
+        if (existing.Contains(ManagedStart, StringComparison.Ordinal))
+        {
+            return RemoveManagedBlock(existing);
+        }
+
+        if (existing.Contains(ManagedEnd, StringComparison.Ordinal))
+        {
+            throw AutoCompactMergeException();
+        }
+
+        return existing;
+    }
+
+    private static string MergeManagedConfiguration(string? userOwned, string block)
+    {
+        if (string.IsNullOrWhiteSpace(userOwned))
+        {
+            return block;
+        }
+
+        var firstTable = Regex.Match(userOwned, @"(?m)^[\t ]*\[");
+        if (!firstTable.Success)
+        {
+            return string.Concat(userOwned.TrimEnd(), Environment.NewLine, Environment.NewLine, block);
+        }
+
+        var topLevel = userOwned[..firstTable.Index].TrimEnd();
+        var tables = userOwned[firstTable.Index..].TrimStart('\r', '\n');
+        return topLevel.Length == 0
+            ? string.Concat(block, Environment.NewLine, tables)
+            : string.Concat(topLevel, Environment.NewLine, Environment.NewLine, block, Environment.NewLine, tables);
+    }
+
+    private static bool HasUserOwnedAutoCompactTokenLimit(string? userOwned)
+    {
+        if (string.IsNullOrWhiteSpace(userOwned))
+        {
+            return false;
+        }
+
+        if (userOwned.Contains(ManagedStart, StringComparison.Ordinal)
+            || userOwned.Contains(ManagedEnd, StringComparison.Ordinal))
+        {
+            throw AutoCompactMergeException();
+        }
+
+        var topLevel = true;
+        var definitions = 0;
+        string? multilineDelimiter = null;
+        foreach (var rawLine in userOwned.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            if (multilineDelimiter is not null)
+            {
+                if (rawLine.Contains(AutoCompactTokenLimitKey, StringComparison.Ordinal))
+                {
+                    throw AutoCompactMergeException();
+                }
+
+                if (rawLine.Contains(multilineDelimiter, StringComparison.Ordinal))
+                {
+                    multilineDelimiter = null;
+                }
+                continue;
+            }
+
+            var line = StripTomlComment(rawLine).Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            if (line[0] == '[')
+            {
+                topLevel = false;
+                var header = line.Trim('[', ']', ' ', '\t');
+                if (IsTargetRootKey(header))
+                {
+                    throw AutoCompactMergeException();
+                }
+                continue;
+            }
+
+            var separator = line.IndexOf('=');
+            if (separator < 0)
+            {
+                if (line.Contains(AutoCompactTokenLimitKey, StringComparison.Ordinal))
+                {
+                    throw AutoCompactMergeException();
+                }
+                continue;
+            }
+
+            var key = line[..separator].Trim();
+            multilineDelimiter = FindUnclosedTomlMultilineDelimiter(line[(separator + 1)..]);
+            if (!IsExactTargetKey(key))
+            {
+                if (IsTargetRootKey(key))
+                {
+                    throw AutoCompactMergeException();
+                }
+                continue;
+            }
+
+            if (topLevel)
+            {
+                definitions++;
+            }
+        }
+
+        if (definitions > 1)
+        {
+            throw AutoCompactMergeException();
+        }
+
+        return definitions == 1;
+    }
+
+    private static string? FindUnclosedTomlMultilineDelimiter(string value)
+    {
+        foreach (var delimiter in new[] { "\"\"\"", "'''" })
+        {
+            var occurrences = value.Split(delimiter, StringSplitOptions.None).Length - 1;
+            if (occurrences % 2 != 0)
+            {
+                return delimiter;
+            }
+        }
+
+        return null;
+    }
+
+    private static string StripTomlComment(string line)
+    {
+        var quote = '\0';
+        var escaped = false;
+        for (var index = 0; index < line.Length; index++)
+        {
+            var current = line[index];
+            if (quote != '\0')
+            {
+                if (quote == '"' && current == '\\' && !escaped)
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (current == quote && !escaped)
+                {
+                    quote = '\0';
+                }
+                escaped = false;
+                continue;
+            }
+
+            if (current is '"' or '\'')
+            {
+                quote = current;
+            }
+            else if (current == '#')
+            {
+                return line[..index];
+            }
+        }
+
+        return line;
+    }
+
+    private static bool IsExactTargetKey(string key) =>
+        string.Equals(key, AutoCompactTokenLimitKey, StringComparison.Ordinal)
+        || string.Equals(key, $"\"{AutoCompactTokenLimitKey}\"", StringComparison.Ordinal)
+        || string.Equals(key, $"'{AutoCompactTokenLimitKey}'", StringComparison.Ordinal);
+
+    private static bool IsTargetRootKey(string key)
+    {
+        var root = key.Split('.', 2, StringSplitOptions.TrimEntries)[0];
+        return IsExactTargetKey(root);
+    }
+
+    private static InvalidOperationException AutoCompactMergeException() =>
+        new($"项目配置中已存在无法安全合并的 {AutoCompactTokenLimitKey}。CAS 未修改该项目，请检查 .codex/config.toml。");
+
+    private static string BuildAdaptationSummary(bool changed, bool userAutoCompactTokenLimitPreserved)
+    {
+        if (userAutoCompactTokenLimitPreserved)
+        {
+            return changed
+                ? "已写入 Agent Switch 管理的项目配置；项目现有 model_auto_compact_token_limit 优先于 CAS 默认值。"
+                : "配置已是当前方案；项目现有 model_auto_compact_token_limit 优先于 CAS 默认值。";
+        }
+
+        return changed ? "已写入 Agent Switch 管理的项目配置。" : "配置已是当前方案，无需更新。";
     }
 
     private static string? RemoveManagedHooks(string? existing)
@@ -957,9 +1185,6 @@ public sealed class CodexDesktopAppLauncher(
         }
     }
 
-    private static string ReplaceManagedBlock(string existing, string block)
-        => ReplaceManagedBlock(existing, block, ManagedStart, ManagedEnd);
-
     private static string ReplaceManagedBlock(string existing, string block, string startMarker, string endMarker)
     {
         var start = existing.IndexOf(startMarker, StringComparison.Ordinal);
@@ -1080,5 +1305,6 @@ public sealed class CodexDesktopAppLauncher(
         bool Changed,
         string? BackupPath,
         bool OriginalConfigurationExisted,
-        string ConfigurationFingerprint);
+        string ConfigurationFingerprint,
+        bool UserAutoCompactTokenLimitPreserved);
 }

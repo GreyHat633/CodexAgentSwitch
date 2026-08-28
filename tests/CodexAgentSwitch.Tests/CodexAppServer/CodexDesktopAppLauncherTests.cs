@@ -41,6 +41,7 @@ public sealed class CodexDesktopAppLauncherTests
             var config = await File.ReadAllTextAsync(result.ConfigurationPath);
             Assert.Contains("# >>> Codex Agent Switch managed profile >>>", config);
             Assert.Contains("model = \"gpt-5.6-terra\"", config);
+            Assert.Contains("model_auto_compact_token_limit = 150000", config, StringComparison.Ordinal);
             Assert.DoesNotContain("codex.exe", config, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("model_provider", config, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("model_providers", config, StringComparison.OrdinalIgnoreCase);
@@ -90,6 +91,187 @@ public sealed class CodexDesktopAppLauncherTests
             {
                 Directory.Delete(root, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public async Task Default_auto_compact_threshold_is_idempotent_and_restore_removes_the_generated_configuration()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-auto-compact-default-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        Directory.CreateDirectory(projectDirectory);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                new PassThroughConfigurationValidator());
+            var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
+            var profile = Profile.CreateDefault(now);
+
+            var first = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
+            var second = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
+
+            Assert.True(first.Succeeded, first.ErrorMessage);
+            Assert.True(second.Succeeded, second.ErrorMessage);
+            Assert.False(second.Changed);
+            var config = await File.ReadAllTextAsync(first.ConfigurationPath);
+            Assert.Equal(1, config.Split("model_auto_compact_token_limit", StringSplitOptions.None).Length - 1);
+            Assert.Contains("model_reasoning_effort", config, StringComparison.Ordinal);
+            Assert.True(
+                config.IndexOf("model_reasoning_effort", StringComparison.Ordinal)
+                    < config.IndexOf("model_auto_compact_token_limit = 150000", StringComparison.Ordinal));
+            Assert.True(
+                config.IndexOf("model_auto_compact_token_limit = 150000", StringComparison.Ordinal)
+                    < config.IndexOf("approval_policy", StringComparison.Ordinal));
+
+            var restore = await launcher.RestoreProjectConfigurationAsync(project with
+            {
+                NativeCodexAdaptation = new NativeCodexProjectAdaptation(
+                    profile.Id, profile.Name, first.ConfigurationPath, first.BackupPath, now, "test", true),
+            });
+
+            Assert.True(restore.Succeeded, restore.ErrorMessage);
+            Assert.False(File.Exists(first.ConfigurationPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task User_auto_compact_threshold_takes_priority_and_survives_restore()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-auto-compact-override-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var codexDirectory = Path.Combine(projectDirectory, ".codex");
+        Directory.CreateDirectory(codexDirectory);
+        const string original = "model_auto_compact_token_limit = 120000\nweb_search = \"live\"\n\n[features]\nmulti_agent = true\n";
+        var configurationPath = Path.Combine(codexDirectory, "config.toml");
+        await File.WriteAllTextAsync(configurationPath, original);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var validator = new PassThroughConfigurationValidator();
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                validator);
+            var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
+            var profile = Profile.CreateDefault(now);
+
+            var applied = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
+
+            Assert.True(applied.Succeeded, applied.ErrorMessage);
+            Assert.Contains("优先于 CAS 默认值", applied.Summary, StringComparison.Ordinal);
+            var config = await File.ReadAllTextAsync(configurationPath);
+            Assert.Contains("model_auto_compact_token_limit = 120000", config, StringComparison.Ordinal);
+            Assert.DoesNotContain("model_auto_compact_token_limit = 150000", config, StringComparison.Ordinal);
+            Assert.Equal(1, config.Split("model_auto_compact_token_limit", StringSplitOptions.None).Length - 1);
+            Assert.Contains("web_search = \"live\"", config, StringComparison.Ordinal);
+            Assert.Contains("[features]", config, StringComparison.Ordinal);
+            Assert.True(
+                config.IndexOf("model_auto_compact_token_limit = 120000", StringComparison.Ordinal)
+                    < config.IndexOf("# >>> Codex Agent Switch managed profile >>>", StringComparison.Ordinal));
+            Assert.True(
+                config.IndexOf("# >>> Codex Agent Switch managed profile >>>", StringComparison.Ordinal)
+                    < config.IndexOf("[features]", StringComparison.Ordinal));
+            Assert.Single(validator.Candidates);
+
+            var restore = await launcher.RestoreProjectConfigurationAsync(project with
+            {
+                NativeCodexAdaptation = new NativeCodexProjectAdaptation(
+                    profile.Id, profile.Name, applied.ConfigurationPath, applied.BackupPath, now, "test", true),
+            });
+
+            Assert.True(restore.Succeeded, restore.ErrorMessage);
+            Assert.Equal(original, await File.ReadAllTextAsync(configurationPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Previous_managed_auto_compact_threshold_is_upgraded_without_changing_user_content()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-auto-compact-upgrade-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var codexDirectory = Path.Combine(projectDirectory, ".codex");
+        Directory.CreateDirectory(codexDirectory);
+        const string original = "custom_setting = true\n\n# >>> Codex Agent Switch managed profile >>>\nmodel_auto_compact_token_limit = 90000\n# <<< Codex Agent Switch managed profile <<<\n";
+        var configurationPath = Path.Combine(codexDirectory, "config.toml");
+        await File.WriteAllTextAsync(configurationPath, original);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                new PassThroughConfigurationValidator());
+            var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
+
+            var applied = Assert.Single(await launcher.ApplyToProjectsAsync(Profile.CreateDefault(now), [project]));
+
+            Assert.True(applied.Succeeded, applied.ErrorMessage);
+            var config = await File.ReadAllTextAsync(configurationPath);
+            Assert.Contains("custom_setting = true", config, StringComparison.Ordinal);
+            Assert.Contains("model_auto_compact_token_limit = 150000", config, StringComparison.Ordinal);
+            Assert.DoesNotContain("model_auto_compact_token_limit = 90000", config, StringComparison.Ordinal);
+            Assert.Equal(1, config.Split("model_auto_compact_token_limit", StringSplitOptions.None).Length - 1);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Ambiguous_user_auto_compact_threshold_fails_closed_without_validation_or_write()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-auto-compact-ambiguous-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var codexDirectory = Path.Combine(projectDirectory, ".codex");
+        Directory.CreateDirectory(codexDirectory);
+        const string original = "model_auto_compact_token_limit = 120000\nmodel_auto_compact_token_limit = 130000\n";
+        var configurationPath = Path.Combine(codexDirectory, "config.toml");
+        await File.WriteAllTextAsync(configurationPath, original);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var validator = new PassThroughConfigurationValidator();
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                validator);
+            var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
+
+            var result = Assert.Single(await launcher.ApplyToProjectsAsync(Profile.CreateDefault(now), [project]));
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("无法安全合并", result.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("CAS 未修改该项目", result.ErrorMessage, StringComparison.Ordinal);
+            Assert.Equal(original, await File.ReadAllTextAsync(configurationPath));
+            Assert.Empty(validator.Candidates);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
 
@@ -461,10 +643,14 @@ public sealed class CodexDesktopAppLauncherTests
         var root = Path.Combine(testRoot, $"desktop-batch-{Guid.NewGuid():N}");
         var first = Path.Combine(root, "first");
         var second = Path.Combine(root, "second");
+        var unmanaged = Path.Combine(root, "unmanaged");
         Directory.CreateDirectory(Path.Combine(first, ".codex"));
         Directory.CreateDirectory(second);
-        const string original = "custom_user_setting = true\n";
+        Directory.CreateDirectory(Path.Combine(unmanaged, ".codex"));
+        const string original = "web_search = \"live\"\ncustom_setting = true\n\n[features]\nmulti_agent = true\n";
+        const string unmanagedOriginal = "custom_unmanaged_setting = true\n";
         await File.WriteAllTextAsync(Path.Combine(first, ".codex", "config.toml"), original);
+        await File.WriteAllTextAsync(Path.Combine(unmanaged, ".codex", "config.toml"), unmanagedOriginal);
         try
         {
             var starter = new RecordingDesktopStarter();
@@ -491,9 +677,17 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.NotNull(firstResult.BackupPath);
             Assert.Equal(original, await File.ReadAllTextAsync(firstResult.BackupPath!));
             var firstConfig = await File.ReadAllTextAsync(firstResult.ConfigurationPath);
-            Assert.Contains(original.Trim(), firstConfig, StringComparison.Ordinal);
+            Assert.Contains("web_search = \"live\"", firstConfig, StringComparison.Ordinal);
+            Assert.Contains("custom_setting = true", firstConfig, StringComparison.Ordinal);
+            Assert.Contains("[features]", firstConfig, StringComparison.Ordinal);
+            Assert.Contains("multi_agent = true", firstConfig, StringComparison.Ordinal);
             Assert.Contains("# >>> Codex Agent Switch managed profile >>>", firstConfig, StringComparison.Ordinal);
+            Assert.Contains("model_auto_compact_token_limit = 150000", firstConfig, StringComparison.Ordinal);
+            Assert.True(
+                firstConfig.IndexOf("model_auto_compact_token_limit = 150000", StringComparison.Ordinal)
+                    < firstConfig.IndexOf("[features]", StringComparison.Ordinal));
             Assert.False(File.Exists(Path.Combine(missingProject.WorkingDirectory, ".codex", "config.toml")));
+            Assert.Equal(unmanagedOriginal, await File.ReadAllTextAsync(Path.Combine(unmanaged, ".codex", "config.toml")));
 
             var restore = await launcher.RestoreProjectConfigurationAsync(firstProject with
             {
