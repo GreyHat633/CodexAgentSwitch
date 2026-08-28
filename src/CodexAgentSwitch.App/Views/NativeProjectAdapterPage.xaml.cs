@@ -306,7 +306,8 @@ public sealed partial class NativeProjectAdapterPage : Page
                         definition.MaxWorkers,
                         definition.RoutingMode.ToString(),
                         definition.Kind == EffectiveWorkerKind.ExternalAgent ? "SchedulerRequired" : definition.Capability.ToString(),
-                        item.ConfigurationFingerprint ?? string.Empty));
+                        item.ConfigurationFingerprint ?? string.Empty,
+                        profile.AutoCompactTokenLimit));
                 await projects.RecordNativeCodexAdaptationAsync(item.Project.Id, adaptation);
             }
 
@@ -314,7 +315,7 @@ public sealed partial class NativeProjectAdapterPage : Page
             foreach (var item in projectResults)
             {
                 ResultItems.Add(item.Succeeded
-                    ? $"{item.Project.Name}：{(item.Changed ? "成功写入" : "无需更新")} · {item.ConfigurationPath}"
+                    ? $"{item.Project.Name}：{(item.Changed ? "成功写入" : "无需更新")} · {item.Summary} · {item.ConfigurationPath}"
                     : $"{item.Project.Name}：失败 · {item.ErrorMessage}");
             }
 
@@ -464,7 +465,15 @@ public sealed partial class NativeProjectAdapterPage : Page
     private void ShowError(string title, string message) => ShowInfo(title, message, InfoBarSeverity.Error);
 
     private static string ProfileSummary(Profile profile) =>
-        $"{profile.MainAgent.ModelId} / {profile.MainAgent.ReasoningEffort} · {WorkerSourceText(profile.WorkerPolicy.Source)} · {RoutingText(profile.WorkerPolicy.RoutingMode)}";
+        $"{profile.MainAgent.ModelId} / {profile.MainAgent.ReasoningEffort} · {WorkerSourceText(profile.WorkerPolicy.Source)} · 上下文压缩：{AutoCompactText(profile.AutoCompactTokenLimit)}";
+
+    private static string AutoCompactText(int? limit) => limit switch
+    {
+        150_000 => "节省 · 150K",
+        180_000 => "均衡 · 180K",
+        200_000 => "连续 · 200K",
+        _ => "默认 · 约218K",
+    };
 
     private static string WorkerSourceText(WorkerSource source) => source == WorkerSource.ExternalProvider ? "外部服务商" : "原生 Worker";
 
@@ -540,7 +549,7 @@ public sealed class NativeProjectItem : INotifyPropertyChanged
             : $"当前状态：已应用历史方案“{adaptation.ProfileName}” · 需重新应用后保存完整快照 · 原始配置：{(originalConfigurationExists ? "有" : "无")}";
         AppliedApplication = snapshot is null
             ? adaptation is null ? "已应用：未配置" : $"已应用：{adaptation.ConfigurationSummary}"
-            : $"已应用：{snapshot.MainModel} {snapshot.MainReasoningEffort} → {snapshot.WorkerModel ?? snapshot.ProviderId ?? "未启用 Worker"} {snapshot.WorkerReasoningEffort} · {snapshot.RoutingMode}";
+            : $"已应用：{snapshot.MainModel} {snapshot.MainReasoningEffort} → {snapshot.WorkerModel ?? snapshot.ProviderId ?? "未启用 Worker"} {snapshot.WorkerReasoningEffort} · 上下文压缩：{AutoCompactText(snapshot.AutoCompactTokenLimit)}";
         AppliedAtText = adaptation is null ? "上次应用：无" : $"上次应用：{adaptation.AppliedAt.ToLocalTime():yyyy-MM-dd HH:mm}";
     }
 
@@ -556,6 +565,14 @@ public sealed class NativeProjectItem : INotifyPropertyChanged
     public string PlannedApplication { get; }
     public string AppliedApplication { get; }
     public string AppliedAtText { get; }
+
+    private static string AutoCompactText(int? limit) => limit switch
+    {
+        150_000 => "节省 · 150K",
+        180_000 => "均衡 · 180K",
+        200_000 => "连续 · 200K",
+        _ => "默认 · 约218K",
+    };
     public Brush CardBackground => isSelected ? new SolidColorBrush(Windows.UI.Color.FromArgb(20, 0, 120, 212)) : new SolidColorBrush(Windows.UI.Color.FromArgb(0, 0, 0, 0));
     public Brush CardBorder => isSelected ? new SolidColorBrush(Windows.UI.Color.FromArgb(220, 0, 120, 212)) : new SolidColorBrush(Windows.UI.Color.FromArgb(30, 127, 127, 127));
 

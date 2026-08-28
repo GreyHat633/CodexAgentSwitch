@@ -138,6 +138,7 @@ public static class ProfileDataMigration
             Budget = normalizedBudget,
             ApprovalMode = approval,
             ExternalWorkerPermission = externalWorkerPermission,
+            AutoCompactTokenLimit = NormalizeAutoCompactTokenLimit(profile.AutoCompactTokenLimit),
             SchemaVersion = Profile.CurrentSchemaVersion,
             RepairMessage = null,
             UpdatedAt = profile.SchemaVersion == Profile.CurrentSchemaVersion ? profile.UpdatedAt : now,
@@ -205,6 +206,10 @@ public static class ProfileDataMigration
             ? mode
             : RoutingMode.Economic;
     }
+
+    private static int? NormalizeAutoCompactTokenLimit(int? value) => value is 150_000 or 180_000 or 200_000
+        ? value
+        : null;
 
     private static decimal? NonNegative(decimal? value) => value is < 0 ? null : value;
 

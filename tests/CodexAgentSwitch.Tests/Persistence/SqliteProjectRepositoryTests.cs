@@ -65,7 +65,7 @@ public sealed class SqliteProjectRepositoryTests : IDisposable
         var snapshot = new NativeCodexAppliedSnapshot(
             Guid.NewGuid(), "Sol + Luna", "gpt-5.6-sol", "high", "NativeAgent",
             "cas_luna_worker", "gpt-5.6-luna", "openai", "medium", 3,
-            "Economic", "Validated", "ABC123");
+            "Economic", "Validated", "ABC123", 200_000);
         await new SqliteProjectRepository(database).UpsertAsync(project with
         {
             NativeCodexAdaptation = new NativeCodexProjectAdaptation(
@@ -76,6 +76,7 @@ public sealed class SqliteProjectRepositoryTests : IDisposable
         var reloaded = await new SqliteProjectRepository(database).GetAsync(project.Id);
 
         Assert.Equal(snapshot, reloaded!.NativeCodexAdaptation!.AppliedSnapshot);
+        Assert.Equal(200_000, reloaded.NativeCodexAdaptation.AppliedSnapshot!.AutoCompactTokenLimit);
     }
 
     [Fact]

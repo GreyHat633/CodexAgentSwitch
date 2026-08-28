@@ -62,6 +62,14 @@ public sealed class ProfileValidator
             issues.Add(new("profile.native_worker.required", "启用 Native Worker 时必须选择 Sol、Terra 或 Luna。", "WorkerPolicy.PreferredProviderId"));
         }
 
+        if (profile.AutoCompactTokenLimit is not (null or 150_000 or 180_000 or 200_000))
+        {
+            issues.Add(new(
+                "profile.auto_compact.invalid",
+                "自动压缩阈值必须为默认、150K、180K 或 200K。",
+                nameof(profile.AutoCompactTokenLimit)));
+        }
+
         ValidateNonNegative(profile.Budget.PerTask, "Budget.PerTask", issues);
         ValidateNonNegative(profile.Budget.Daily, "Budget.Daily", issues);
         ValidateNonNegative(profile.Budget.Monthly, "Budget.Monthly", issues);

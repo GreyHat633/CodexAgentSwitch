@@ -210,8 +210,11 @@ try {
     Select-Combo '原生工作代理选择' 1
     Select-Combo 'Worker 推理强度' 3
     Set-Text '最大工作代理数量' '2'
-    Select-Combo '路由模式' 1
-    $null = Find-Element '路由模式说明'
+    Assert-Absent '路由模式'
+    Select-Combo '上下文压缩' 2
+    $null = Find-Element '上下文压缩说明'
+    $autoCompactCapture = Save-Capture 'profile-auto-compact.png'
+    Add-Pass '上下文压缩' "visible Routing Mode selector absent; Continuous 200K selected; capture=$autoCompactCapture" $dpi
     Select-Combo '回退策略' 2
     Set-Text '单任务预算' '1.25'
     Set-Text '每日预算' '5'
@@ -234,6 +237,8 @@ try {
     if ($exportText -match '(?i)apiKey|credentialReference|secretValue') { throw 'Export contains a credential field' }
     $exportProfile = $exportText | ConvertFrom-Json
     if ($exportProfile.profile.workerPolicy.reasoningEffort -ne 'xhigh') { throw 'Worker reasoning effort was not persisted independently' }
+    if ($exportProfile.profile.autoCompactTokenLimit -ne 200000) { throw 'Profile auto-compaction preset was not persisted' }
+    if ($null -eq $exportProfile.profile.workerPolicy.routingMode) { throw 'Hidden RoutingMode compatibility was not preserved' }
     Add-Pass 'Worker 推理强度' 'xhigh selection persisted in workerPolicy.reasoningEffort independently from the main agent' $dpi
     Add-Pass '导出' "credential-free export=$($export.FullName)" $dpi
 

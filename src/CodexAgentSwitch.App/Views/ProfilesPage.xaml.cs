@@ -115,8 +115,9 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
             : $"{profile.MainAgent.ModelId} / 推理强度{ReasoningLabel(profile.MainAgent.ReasoningEffort)} · "
               + $"{ApprovalLabel(profile.ApprovalMode)} · "
               + (profile.WorkerPolicy.Enabled
-                  ? $"工作代理 {profile.WorkerPolicy.MaxWorkers} 个 · {RoutingLabel(profile.WorkerPolicy.RoutingMode)}"
-                  : "未启用工作代理 · 单代理模式");
+                  ? $"工作代理 {profile.WorkerPolicy.MaxWorkers} 个 · "
+                  : "未启用工作代理 · ")
+              + $"上下文压缩：{AutoCompactLabel(profile.AutoCompactTokenLimit)}";
     }
 
     private static string ApprovalLabel(ExecutionApprovalMode mode) => mode switch
@@ -386,6 +387,14 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         RoutingMode.Manual => "手动模式",
         RoutingMode.Single => "单代理模式",
         _ => mode.ToString(),
+    };
+
+    private static string AutoCompactLabel(int? limit) => limit switch
+    {
+        150_000 => "节省 · 150K",
+        180_000 => "均衡 · 180K",
+        200_000 => "连续 · 200K",
+        _ => "默认 · 约218K",
     };
 
     private async Task ApplyModeAsync(ProfileService service, Profile current, string name, string effort, bool enabled, WorkerSource source, int maxWorkers, RoutingMode routingMode)

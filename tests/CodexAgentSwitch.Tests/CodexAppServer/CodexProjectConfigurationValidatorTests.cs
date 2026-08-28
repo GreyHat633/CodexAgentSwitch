@@ -100,6 +100,41 @@ public sealed class CodexProjectConfigurationValidatorTests
         }
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(150_000)]
+    [InlineData(180_000)]
+    [InlineData(200_000)]
+    [Trait("Category", "LiveCodexConfig")]
+    public async Task Current_codex_strict_config_accepts_every_profile_auto_compact_preset(int? limit)
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("CAS_RUN_CODEX_CONFIG_E2E"), "1", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        Assert.StartsWith("E:\\", testRoot, StringComparison.OrdinalIgnoreCase);
+        var root = Path.Combine(testRoot, $"codex-auto-compact-{limit?.ToString() ?? "default"}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var command = (await new CodexCommandLocator().LocateAsync()).Command
+                ?? throw new InvalidOperationException("当前测试环境没有可执行的 Codex CLI。");
+            var validator = new CodexProjectConfigurationValidator(new AppDataPaths(root));
+            var projectConfiguration = "model = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"high\"\n"
+                + (limit is int value ? $"model_auto_compact_token_limit = {value}\n" : string.Empty)
+                + "approval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\n";
+
+            await validator.ValidateAsync(command, projectConfiguration);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     [Trait("Category", "LiveCodexConfig")]
     public async Task Current_codex_strict_config_accepts_a_project_layer_containing_the_valid_hook_fixture()

@@ -68,6 +68,28 @@ public sealed class SqliteProfileRepositoryTests : IDisposable
         Assert.Equal(ExternalWorkerPermissionMode.ReadOnly, reloaded.ExternalWorkerPermission);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(150_000)]
+    [InlineData(180_000)]
+    [InlineData(200_000)]
+    public async Task Round_trip_preserves_auto_compact_threshold(int? limit)
+    {
+        Directory.CreateDirectory(_directory);
+        var database = new SqliteDatabase(Path.Combine(_directory, $"auto-compact-{limit?.ToString() ?? "default"}.db"));
+        await database.InitializeAsync();
+        var repository = new SqliteProfileRepository(database);
+        var profile = Profile.CreateDefault(DateTimeOffset.UtcNow) with
+        {
+            AutoCompactTokenLimit = limit,
+        };
+
+        await repository.UpsertAsync(profile);
+        var reloaded = await new SqliteProfileRepository(database).GetAsync(profile.Id);
+
+        Assert.Equal(limit, reloaded!.AutoCompactTokenLimit);
+    }
+
     [Fact]
     public async Task Real_019_legacy_economic_profile_migrates_once_to_an_editable_schema()
     {
@@ -121,6 +143,7 @@ public sealed class SqliteProfileRepositoryTests : IDisposable
         Assert.Equal(WorkerSource.NativeCodex, migrated.WorkerPolicy.Source);
         Assert.Equal("native-luna", migrated.WorkerPolicy.PreferredProviderId);
         Assert.Equal(RoutingMode.Economic, migrated.WorkerPolicy.RoutingMode);
+        Assert.Null(migrated.AutoCompactTokenLimit);
         Assert.Equal(0, second.Migrated);
 
         var service = new ProfileService(repository, new ProfileValidator(), new FixedClock());

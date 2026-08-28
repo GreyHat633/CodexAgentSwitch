@@ -80,7 +80,6 @@ public sealed class CodexDesktopAppLauncher(
     ICodexModelResolver modelResolver,
     ICodexProjectConfigurationValidator configurationValidator) : ICodexDesktopLauncher
 {
-    private const int DefaultAutoCompactTokenLimit = 150_000;
     private const string AutoCompactTokenLimitKey = "model_auto_compact_token_limit";
     private const string ManagedStart = "# >>> Codex Agent Switch managed profile >>>";
     private const string ManagedEnd = "# <<< Codex Agent Switch managed profile <<<";
@@ -198,8 +197,8 @@ public sealed class CodexDesktopAppLauncher(
         var configuration = await WriteProjectConfigurationAsync(profile, cwd, null, command, cancellationToken);
         var target = StartDesktop(discovery);
         var summary = configuration.UserAutoCompactTokenLimitPreserved
-            ? "已写入项目级 Codex 配置并启动官方图形桌面应用。项目现有 model_auto_compact_token_limit 优先于 CAS 默认值；请在桌面应用中打开同一项目目录以加载该方案。"
-            : "已写入项目级 Codex 配置并启动官方图形桌面应用。请在桌面应用中打开同一项目目录以加载该方案。";
+            ? "已写入项目级 Codex 配置并启动官方图形桌面应用。该项目已存在用户自定义的自动压缩阈值，CAS 已保留该值，方案中的上下文压缩档位未覆盖它。请在桌面应用中新建或重新加载该项目对话后使用新配置；当前已运行的对话可能继续使用旧值。"
+            : "已写入项目级 Codex 配置并启动官方图形桌面应用。请在桌面应用中新建或重新加载该项目对话后使用新配置；当前已运行的对话可能继续使用旧值。";
         return new CodexDesktopLaunchResult(target, cwd, configuration.Path, false, summary);
     }
 
@@ -577,7 +576,7 @@ public sealed class CodexDesktopAppLauncher(
     private static string BuildManagedConfiguration(
         Profile profile,
         EffectiveWorkerDefinition worker,
-        bool includeDefaultAutoCompactTokenLimit)
+        bool allowProfileAutoCompactTokenLimit)
     {
         var approval = ExecutionApprovalPolicy.Resolve(profile.ApprovalMode);
         var builder = new StringBuilder()
@@ -586,9 +585,9 @@ public sealed class CodexDesktopAppLauncher(
             .AppendLine($"model = {Toml(profile.MainAgent.ModelId)}")
             .AppendLine($"model_reasoning_effort = {Toml(profile.MainAgent.ReasoningEffort)}");
 
-        if (includeDefaultAutoCompactTokenLimit)
+        if (allowProfileAutoCompactTokenLimit && profile.AutoCompactTokenLimit is int autoCompactTokenLimit)
         {
-            builder.AppendLine($"{AutoCompactTokenLimitKey} = {DefaultAutoCompactTokenLimit}");
+            builder.AppendLine($"{AutoCompactTokenLimitKey} = {autoCompactTokenLimit}");
         }
 
         builder.AppendLine($"approval_policy = {Toml(approval.ApprovalPolicy)}")
@@ -815,14 +814,14 @@ public sealed class CodexDesktopAppLauncher(
 
     private static string BuildAdaptationSummary(bool changed, bool userAutoCompactTokenLimitPreserved)
     {
+        var update = changed ? "项目配置已更新。" : "项目配置已是当前方案。";
+        const string reload = "新的自动压缩阈值会在新建或重新加载该项目对话后生效；当前已运行的对话可能继续使用旧值。";
         if (userAutoCompactTokenLimitPreserved)
         {
-            return changed
-                ? "已写入 Agent Switch 管理的项目配置；项目现有 model_auto_compact_token_limit 优先于 CAS 默认值。"
-                : "配置已是当前方案；项目现有 model_auto_compact_token_limit 优先于 CAS 默认值。";
+            return $"{update} 该项目已存在用户自定义的自动压缩阈值。CAS 已保留该值，方案中的上下文压缩档位未覆盖它。{reload}";
         }
 
-        return changed ? "已写入 Agent Switch 管理的项目配置。" : "配置已是当前方案，无需更新。";
+        return $"{update} {reload}";
     }
 
     private static string? RemoveManagedHooks(string? existing)

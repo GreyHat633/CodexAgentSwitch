@@ -164,7 +164,7 @@
                              Message="主代理与原生 Worker 将使用 never 批准策略和 danger-full-access 沙箱；外部 Worker 的本地工具权限由下方独立设置控制。"
                              Visibility="{Binding FullAutoWarningVisibility}" />
                     <StackPanel Spacing="12">
-                        <TextBlock Text="工作代理与路由" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="工作代理" Style="{StaticResource SectionTitleStyle}" />
                         <CheckBox Content="启用工作代理"
                                   IsChecked="{Binding WorkerEnabled, Mode=TwoWay}"
                                   AutomationProperties.Name="启用工作代理" />
@@ -172,7 +172,7 @@
                                    Visibility="{Binding WorkerDisabledHintVisibility}"
                                    Style="{StaticResource CaptionTextStyle}"
                                    TextWrapping="Wrap" />
-                        <StackPanel Visibility="{Binding WorkerSettingsVisibility}" Spacing="12">
+                        <StackPanel Spacing="12">
                             <InfoBar IsOpen="True"
                                      Severity="Warning"
                                      Title="当前账户不支持所选原生 Worker"
@@ -190,10 +190,12 @@
                                           ItemsSource="{Binding WorkerSourceOptions}"
                                           DisplayMemberPath="DisplayName"
                                           SelectedItem="{Binding SelectedWorkerSourceOption, Mode=TwoWay}"
+                                          Visibility="{Binding WorkerSettingsVisibility}"
                                           AutomationProperties.Name="工作代理来源" />
                                 <TextBox Grid.Row="0" Grid.Column="2"
                                          Header="最大工作代理数量"
                                          Text="{Binding WorkerCount, Mode=TwoWay}"
+                                         Visibility="{Binding WorkerSettingsVisibility}"
                                          AutomationProperties.Name="最大工作代理数量" />
                                 <ComboBox Grid.Row="0" Grid.Column="1"
                                           Header="原生工作代理"
@@ -232,11 +234,11 @@
                                             VerticalAlignment="Center"
                                             AutomationProperties.Name="外部 Worker 权限说明" />
                                 <ComboBox Grid.Row="1" Grid.Column="0"
-                                          Header="路由模式"
-                                          ItemsSource="{Binding RoutingModeOptions}"
-                                          SelectedItem="{Binding SelectedRoutingModeOption, Mode=TwoWay}"
-                                          ToolTipService.ToolTip="{Binding RoutingModeDescription}"
-                                          AutomationProperties.Name="路由模式">
+                                          Header="上下文压缩"
+                                          ItemsSource="{Binding AutoCompactOptions}"
+                                          SelectedItem="{Binding SelectedAutoCompactOption, Mode=TwoWay}"
+                                          ToolTipService.ToolTip="{Binding AutoCompactDescription}"
+                                          AutomationProperties.Name="上下文压缩">
                                     <ComboBox.ItemTemplate>
                                         <DataTemplate>
                                             <TextBlock Text="{Binding DisplayName}"
@@ -249,14 +251,15 @@
                                           ItemsSource="{Binding FallbackActionOptions}"
                                           DisplayMemberPath="DisplayName"
                                           SelectedItem="{Binding SelectedFallbackActionOption, Mode=TwoWay}"
+                                          Visibility="{Binding WorkerSettingsVisibility}"
                                           AutomationProperties.Name="回退策略" />
                                 <TextBlock Grid.Row="1" Grid.Column="2"
-                                           Text="{Binding RoutingModeDescription}"
+                                           Text="{Binding AutoCompactDescription}"
                                            Style="{StaticResource CaptionTextStyle}"
                                            TextWrapping="Wrap"
                                            VerticalAlignment="Center"
-                                           ToolTipService.ToolTip="{Binding RoutingModeDescription}"
-                                           AutomationProperties.Name="路由模式说明" />
+                                           ToolTipService.ToolTip="{Binding AutoCompactDescription}"
+                                           AutomationProperties.Name="上下文压缩说明" />
                             </Grid>
                             <InfoBar IsOpen="True"
                                      Severity="Warning"

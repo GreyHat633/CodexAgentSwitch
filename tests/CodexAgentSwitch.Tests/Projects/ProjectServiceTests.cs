@@ -65,7 +65,7 @@ public sealed class ProjectServiceTests
         var project = await service.CreateAsync("Snapshot scoped", workingDirectory, profileA);
         var snapshot = new NativeCodexAppliedSnapshot(
             profileA, "Sol + Luna", "gpt-5.6-sol", "high", "NativeAgent", "cas_luna_worker",
-            "gpt-5.6-luna", "openai", "medium", 3, "Economic", "Supported", "fixture-hash");
+            "gpt-5.6-luna", "openai", "medium", 3, "Economic", "Supported", "fixture-hash", 200_000);
         await service.RecordNativeCodexAdaptationAsync(project.Id, new NativeCodexProjectAdaptation(
             profileA, "Sol + Luna", Path.Combine(workingDirectory, ".codex", "config.toml"), null,
             DateTimeOffset.UtcNow, "gpt-5.6-sol / high", false, snapshot));
@@ -75,6 +75,7 @@ public sealed class ProjectServiceTests
         Assert.NotEqual(profileA, changedDefault.DefaultProfileId);
         Assert.Equal(snapshot, changedDefault.NativeCodexAdaptation!.AppliedSnapshot);
         Assert.Equal("cas_luna_worker", changedDefault.NativeCodexAdaptation.AppliedSnapshot!.WorkerRole);
+        Assert.Equal(200_000, changedDefault.NativeCodexAdaptation.AppliedSnapshot.AutoCompactTokenLimit);
     }
 
     private sealed class FixedClock : IClock

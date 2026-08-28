@@ -81,12 +81,13 @@ public sealed record Profile(
     DateTimeOffset UpdatedAt,
     DateTimeOffset? LastUsedAt)
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     /// <summary>
     /// Persisted profile payload schema. Values before 3 are normalized by the
     /// one-time profile migration; schema v4 separates External Worker tool
-    /// permission from approval automation.
+    /// permission from approval automation; schema v5 adds the optional native
+    /// Codex auto-compaction threshold.
     /// </summary>
     public int SchemaVersion { get; init; }
 
@@ -95,6 +96,12 @@ public sealed record Profile(
     public ExecutionApprovalMode ApprovalMode { get; init; } = ExecutionApprovalMode.Automatic;
 
     public ExternalWorkerPermissionMode ExternalWorkerPermission { get; init; } = ExternalWorkerPermissionMode.WorkspaceFullAccess;
+
+    /// <summary>
+    /// Null leaves the threshold to Codex. CAS only accepts the three product
+    /// presets exposed by the Profile editor.
+    /// </summary>
+    public int? AutoCompactTokenLimit { get; init; }
 
     /// <summary>
     /// A localized, non-sensitive reason that prevents a malformed legacy

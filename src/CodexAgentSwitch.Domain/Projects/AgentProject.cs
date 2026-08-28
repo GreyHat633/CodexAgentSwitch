@@ -38,4 +38,5 @@ public sealed record NativeCodexAppliedSnapshot(
     int MaxWorkers,
     string RoutingMode,
     string ValidationStatus,
-    string ConfigurationFingerprint);
+    string ConfigurationFingerprint,
+    int? AutoCompactTokenLimit = null);

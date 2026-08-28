@@ -70,6 +70,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     private string _workerCount;
     private string _workerReasoningStrength;
     private RoutingMode _routingMode;
+    private int? _autoCompactTokenLimit;
     private FallbackAction _fallbackAction;
     private string _perTaskBudget;
     private string _dailyBudget;
@@ -114,6 +115,9 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         _routingMode = Enum.IsDefined(profile.WorkerPolicy.RoutingMode)
             ? profile.WorkerPolicy.RoutingMode
             : RoutingMode.Single;
+        _autoCompactTokenLimit = profile.AutoCompactTokenLimit is 150_000 or 180_000 or 200_000
+            ? profile.AutoCompactTokenLimit
+            : null;
         _fallbackAction = Enum.IsDefined(profile.WorkerPolicy.FallbackAction)
             ? profile.WorkerPolicy.FallbackAction
             : FallbackAction.SingleAgent;
@@ -128,7 +132,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public static ProfileEditorViewModel ForNew(Profile template, IReadOnlyList<ProviderSelectionOption> externalProviders) =>
-        new(template, isNew: true, initialName: string.Empty, externalProviders);
+        new(template with { AutoCompactTokenLimit = null }, isNew: true, initialName: string.Empty, externalProviders);
 
     public static ProfileEditorViewModel ForCopy(Profile template, string uniqueName, IReadOnlyList<ProviderSelectionOption> externalProviders) =>
         new(template, isNew: true, initialName: uniqueName, externalProviders);
@@ -203,6 +207,14 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         new(RoutingMode.Single, "单代理模式", "不启用工作代理，所有工作由主代理独立完成。"),
     ];
 
+    public IReadOnlyList<SelectionOption<int?>> AutoCompactOptions { get; } =
+    [
+        new(150_000, "节省 · 150K", "更早触发 Codex 原生自动压缩，降低长上下文成本；长任务中可能频繁压缩。"),
+        new(180_000, "均衡 · 180K", "在上下文成本与连续性之间取折中。"),
+        new(200_000, "连续 · 200K", "适合长时间开发与工具密集任务，减少同一任务中反复压缩。"),
+        new(null, "默认 · 约218K", "不写入自定义阈值，使用 Codex 当前原生默认；当前环境约在 218K 附近触发。"),
+    ];
+
     public IReadOnlyList<SelectionOption<FallbackAction>> FallbackActionOptions { get; } =
     [
         new(FallbackAction.NativeLuna, "回退到原生 Luna"),
@@ -231,6 +243,9 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     public string RoutingModeDescription =>
         RoutingModeOptions.FirstOrDefault(option => option.Value == RoutingMode)?.Description
         ?? "该路由模式需要修复后才能使用。";
+
+    public string AutoCompactDescription =>
+        AutoCompactOptions.First(option => option.Value == AutoCompactTokenLimit).Description;
 
     public SelectionOption<WorkerSource> SelectedWorkerSourceOption
     {
@@ -267,6 +282,18 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             if (value is not null)
             {
                 RoutingMode = value.Value;
+            }
+        }
+    }
+
+    public SelectionOption<int?> SelectedAutoCompactOption
+    {
+        get => AutoCompactOptions.First(option => option.Value == AutoCompactTokenLimit);
+        set
+        {
+            if (value is not null)
+            {
+                AutoCompactTokenLimit = value.Value;
             }
         }
     }
@@ -469,6 +496,18 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             }
         }
     }
+    public int? AutoCompactTokenLimit
+    {
+        get => _autoCompactTokenLimit;
+        set
+        {
+            if (Set(ref _autoCompactTokenLimit, value))
+            {
+                OnPropertyChanged(nameof(AutoCompactDescription));
+                OnPropertyChanged(nameof(SelectedAutoCompactOption));
+            }
+        }
+    }
     public FallbackAction FallbackAction
     {
         get => _fallbackAction;
@@ -537,6 +576,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             IsBuiltIn = _isNew ? false : _source!.IsBuiltIn,
             ApprovalMode = this.ApprovalMode,
             ExternalWorkerPermission = this.ExternalWorkerPermission,
+            AutoCompactTokenLimit = this.AutoCompactTokenLimit,
             SchemaVersion = Profile.CurrentSchemaVersion,
             RepairMessage = null,
         };

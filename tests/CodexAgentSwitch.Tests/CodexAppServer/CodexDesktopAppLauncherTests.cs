@@ -31,6 +31,7 @@ public sealed class CodexDesktopAppLauncherTests
             {
                 MainAgent = new AgentSelection("gpt-5.6-terra", "high"),
                 WorkerPolicy = new WorkerPolicy(true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.SingleAgent),
+                AutoCompactTokenLimit = 150_000,
             };
 
             var result = await launcher.LaunchAsync(profile, project);
@@ -95,7 +96,7 @@ public sealed class CodexDesktopAppLauncherTests
     }
 
     [Fact]
-    public async Task Default_auto_compact_threshold_is_idempotent_and_restore_removes_the_generated_configuration()
+    public async Task Explicit_auto_compact_threshold_is_idempotent_and_restore_removes_the_generated_configuration()
     {
         var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
             ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
@@ -111,7 +112,7 @@ public sealed class CodexDesktopAppLauncherTests
                 new RecordingDesktopStarter(),
                 new PassThroughConfigurationValidator());
             var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
-            var profile = Profile.CreateDefault(now);
+            var profile = Profile.CreateDefault(now) with { AutoCompactTokenLimit = 150_000 };
 
             var first = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
             var second = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
@@ -144,6 +145,97 @@ public sealed class CodexDesktopAppLauncherTests
         }
     }
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(150_000, "model_auto_compact_token_limit = 150000")]
+    [InlineData(180_000, "model_auto_compact_token_limit = 180000")]
+    [InlineData(200_000, "model_auto_compact_token_limit = 200000")]
+    public async Task Profile_auto_compact_preset_controls_the_managed_project_key(int? limit, string? expectedLine)
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-auto-compact-preset-{limit?.ToString() ?? "default"}-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        Directory.CreateDirectory(projectDirectory);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                new PassThroughConfigurationValidator());
+            var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
+            var profile = Profile.CreateDefault(now) with { AutoCompactTokenLimit = limit };
+
+            var result = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
+
+            Assert.True(result.Succeeded, result.ErrorMessage);
+            var config = await File.ReadAllTextAsync(result.ConfigurationPath);
+            if (expectedLine is null)
+            {
+                Assert.DoesNotContain("model_auto_compact_token_limit", config, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains(expectedLine, config, StringComparison.Ordinal);
+                Assert.Equal(1, config.Split("model_auto_compact_token_limit", StringSplitOptions.None).Length - 1);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Reapplying_different_presets_and_native_default_replaces_or_removes_the_managed_value()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-auto-compact-replace-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        Directory.CreateDirectory(projectDirectory);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                new PassThroughConfigurationValidator());
+            var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
+
+            var first = Assert.Single(await launcher.ApplyToProjectsAsync(
+                Profile.CreateDefault(now) with { AutoCompactTokenLimit = 150_000 },
+                [project]));
+            var second = Assert.Single(await launcher.ApplyToProjectsAsync(
+                Profile.CreateDefault(now) with { AutoCompactTokenLimit = 200_000 },
+                [project]));
+
+            Assert.True(first.Succeeded, first.ErrorMessage);
+            Assert.True(second.Succeeded, second.ErrorMessage);
+            Assert.True(second.Changed);
+            var explicitConfig = await File.ReadAllTextAsync(second.ConfigurationPath);
+            Assert.DoesNotContain("model_auto_compact_token_limit = 150000", explicitConfig, StringComparison.Ordinal);
+            Assert.Contains("model_auto_compact_token_limit = 200000", explicitConfig, StringComparison.Ordinal);
+            Assert.Equal(1, explicitConfig.Split("model_auto_compact_token_limit", StringSplitOptions.None).Length - 1);
+
+            var nativeDefault = Assert.Single(await launcher.ApplyToProjectsAsync(
+                Profile.CreateDefault(now),
+                [project]));
+
+            Assert.True(nativeDefault.Succeeded, nativeDefault.ErrorMessage);
+            Assert.True(nativeDefault.Changed);
+            var defaultConfig = await File.ReadAllTextAsync(nativeDefault.ConfigurationPath);
+            Assert.DoesNotContain("model_auto_compact_token_limit", defaultConfig, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task User_auto_compact_threshold_takes_priority_and_survives_restore()
     {
@@ -166,15 +258,16 @@ public sealed class CodexDesktopAppLauncherTests
                 new RecordingDesktopStarter(),
                 validator);
             var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
-            var profile = Profile.CreateDefault(now);
+            var profile = Profile.CreateDefault(now) with { AutoCompactTokenLimit = 200_000 };
 
             var applied = Assert.Single(await launcher.ApplyToProjectsAsync(profile, [project]));
 
             Assert.True(applied.Succeeded, applied.ErrorMessage);
-            Assert.Contains("优先于 CAS 默认值", applied.Summary, StringComparison.Ordinal);
+            Assert.Contains("用户自定义的自动压缩阈值", applied.Summary, StringComparison.Ordinal);
+            Assert.Contains("方案中的上下文压缩档位未覆盖它", applied.Summary, StringComparison.Ordinal);
             var config = await File.ReadAllTextAsync(configurationPath);
             Assert.Contains("model_auto_compact_token_limit = 120000", config, StringComparison.Ordinal);
-            Assert.DoesNotContain("model_auto_compact_token_limit = 150000", config, StringComparison.Ordinal);
+            Assert.DoesNotContain("model_auto_compact_token_limit = 200000", config, StringComparison.Ordinal);
             Assert.Equal(1, config.Split("model_auto_compact_token_limit", StringSplitOptions.None).Length - 1);
             Assert.Contains("web_search = \"live\"", config, StringComparison.Ordinal);
             Assert.Contains("[features]", config, StringComparison.Ordinal);
@@ -223,12 +316,14 @@ public sealed class CodexDesktopAppLauncherTests
                 new PassThroughConfigurationValidator());
             var project = new AgentProject("project", "Project", projectDirectory, false, now, now);
 
-            var applied = Assert.Single(await launcher.ApplyToProjectsAsync(Profile.CreateDefault(now), [project]));
+            var applied = Assert.Single(await launcher.ApplyToProjectsAsync(
+                Profile.CreateDefault(now) with { AutoCompactTokenLimit = 180_000 },
+                [project]));
 
             Assert.True(applied.Succeeded, applied.ErrorMessage);
             var config = await File.ReadAllTextAsync(configurationPath);
             Assert.Contains("custom_setting = true", config, StringComparison.Ordinal);
-            Assert.Contains("model_auto_compact_token_limit = 150000", config, StringComparison.Ordinal);
+            Assert.Contains("model_auto_compact_token_limit = 180000", config, StringComparison.Ordinal);
             Assert.DoesNotContain("model_auto_compact_token_limit = 90000", config, StringComparison.Ordinal);
             Assert.Equal(1, config.Split("model_auto_compact_token_limit", StringSplitOptions.None).Length - 1);
         }
@@ -663,6 +758,7 @@ public sealed class CodexDesktopAppLauncherTests
             var profile = Profile.CreateDefault(now) with
             {
                 WorkerPolicy = new WorkerPolicy(false, WorkerSource.Disabled, null, null, 0, RoutingMode.Single, FallbackAction.SingleAgent),
+                AutoCompactTokenLimit = 200_000,
             };
             var firstProject = new AgentProject("first", "First", first, false, now, now);
             var secondProject = new AgentProject("second", "Second", second, false, now, now);
@@ -682,9 +778,9 @@ public sealed class CodexDesktopAppLauncherTests
             Assert.Contains("[features]", firstConfig, StringComparison.Ordinal);
             Assert.Contains("multi_agent = true", firstConfig, StringComparison.Ordinal);
             Assert.Contains("# >>> Codex Agent Switch managed profile >>>", firstConfig, StringComparison.Ordinal);
-            Assert.Contains("model_auto_compact_token_limit = 150000", firstConfig, StringComparison.Ordinal);
+            Assert.Contains("model_auto_compact_token_limit = 200000", firstConfig, StringComparison.Ordinal);
             Assert.True(
-                firstConfig.IndexOf("model_auto_compact_token_limit = 150000", StringComparison.Ordinal)
+                firstConfig.IndexOf("model_auto_compact_token_limit = 200000", StringComparison.Ordinal)
                     < firstConfig.IndexOf("[features]", StringComparison.Ordinal));
             Assert.False(File.Exists(Path.Combine(missingProject.WorkingDirectory, ".codex", "config.toml")));
             Assert.Equal(unmanagedOriginal, await File.ReadAllTextAsync(Path.Combine(unmanaged, ".codex", "config.toml")));

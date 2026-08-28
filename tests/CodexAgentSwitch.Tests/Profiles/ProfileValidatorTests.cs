@@ -75,4 +75,31 @@ public sealed class ProfileValidatorTests
 
         Assert.Contains(result.Issues, issue => issue.Code == "profile.workers.disabled_count");
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(150_000)]
+    [InlineData(180_000)]
+    [InlineData(200_000)]
+    public void Supported_auto_compact_thresholds_are_valid(int? limit)
+    {
+        var result = new ProfileValidator().Validate(Profile.CreateDefault(_now) with
+        {
+            AutoCompactTokenLimit = limit,
+        });
+
+        Assert.DoesNotContain(result.Issues, issue => issue.Code == "profile.auto_compact.invalid");
+    }
+
+    [Fact]
+    public void Unsupported_auto_compact_threshold_is_rejected()
+    {
+        var result = new ProfileValidator().Validate(Profile.CreateDefault(_now) with
+        {
+            AutoCompactTokenLimit = 175_000,
+        });
+
+        var issue = Assert.Single(result.Issues, issue => issue.Code == "profile.auto_compact.invalid");
+        Assert.Equal(nameof(Profile.AutoCompactTokenLimit), issue.Field);
+    }
 }
