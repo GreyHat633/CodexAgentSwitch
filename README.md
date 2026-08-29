@@ -1,26 +1,25 @@
 # Codex Agent Switch
 
-Codex Agent Switch（CAS）是一款面向 Windows 的 Codex 桌面控制台，用来集中管理项目、运行配置、原生 Codex Worker、OpenAI-Compatible Provider、委派边界、预算与 Usage 记录。
+Codex Agent Switch（CAS）的目的很明确：让 **Sol 主代理负责分析、策划、拆分和验收**，把边界清晰的实施工作交给成本更低的工作代理，从而减少高成本主模型的额度消耗。
 
-它解决的不是“替代 Codex”，而是让多个项目和不同执行策略拥有清晰、可审计、可恢复的控制层。
+经济性不是 CAS 的附带能力，而是它最核心的功能。CAS 不替代 Codex，也不靠降低任务质量来省额度；它通过明确主代理与工作代理的职责，让昂贵的 Sol 只处理真正需要全局判断的部分。
 
-> 当前版本：**0.2.7.2**
+> 当前版本：**0.2.7.3**
 >
 > 主要平台：Windows 10 22H2 x64；兼容 Windows 11 x64
 >
 > 技术栈：.NET 8、WinUI 3、Windows App SDK、SQLite
 
-![Codex Agent Switch dashboard](docs/ui/screenshots/phase7-dashboard-light-win10-1024x720.png)
+![CAS 0.2.7.3 economic profile with Sol main agent and lower-cost workers](docs/ui/screenshots/cas-0.2.7.3-economic-profile-light-win10-125dpi.png)
 
-## CAS 能做什么
+## CAS 如何降低额度消耗
 
-- 用 Profile 统一管理模型角色、推理强度、审批策略、沙箱策略和 Worker 配置。
-- 启动原生 Codex，并为所选项目生成短期、项目级启动配置。
-- 在 CAS 托管模式中保存项目、对话、主线程、委派决定、Worker 结果和 Usage 记录。
-- 接入 DeepSeek 等 OpenAI-Compatible Provider；Provider 与原生 Codex 模型目录相互独立。
-- 使用 Windows Credential Manager 保存 API Key，数据库和日志只记录凭据引用。
-- 提供安装、升级、备份、回滚和可恢复卸载流程。
-- 区分真实 Usage、估算值和不可取得字段，不用推测值伪装精确统计。
+1. **Sol 负责策划。** 主代理定位问题、决定架构、划分任务边界，并保留最终审查与集成责任。
+2. **工作代理负责实施。** Terra、Luna 或兼容 Provider 处理范围明确、可验证的编码、修复和测试任务。
+3. **CAS 负责调度边界。** 同一任务不会被主代理和工作代理重复执行；工作代理结果必须返回 Sol 审查后才能采用。
+4. **把额度花在判断上。** Profile、工作代理数量和上下文压缩策略共同约束执行成本，让 Sol 的上下文留给关键决策。
+
+这条“Sol 策划 → 低成本代理实施 → Sol 验收”的链路，就是 CAS 的主要价值。其他配置、记录、安全与恢复能力都服务于这条链路，而不是为了堆叠功能数量。
 
 ## 两种运行模式
 
@@ -63,7 +62,7 @@ CAS 管理完整的项目 → 对话 → 主线程层级。每次执行都会固
 ## 首次使用
 
 1. 在 CAS 中注册一个项目，并选择项目工作目录。
-2. 创建 Profile，选择可用的模型角色、推理强度和审批模式。
+2. 创建 Profile：选择 Sol 作为主代理，并按成本与任务类型配置 Terra、Luna 或兼容 Provider 工作代理。
 3. 如需外部 Worker，添加 OpenAI-Compatible Provider，并将 API Key 保存到 Windows Credential Manager。
 4. 将 Profile 应用到项目。
 5. 选择“原生 Codex”启动原始界面，或在 CAS 托管模式中创建任务。
@@ -97,13 +96,13 @@ CAS 不会把不可用的模型角色静默映射成另一个模型。旧 Profil
 pwsh -File .\scripts\build.ps1 -Configuration Release
 ```
 
-该脚本依次执行核心测试、Bootstrapper 测试和 Release 构建。生成 0.2.7.2 发布包：
+该脚本依次执行核心测试、Bootstrapper 测试和 Release 构建。生成 0.2.7.3 发布包：
 
 ```powershell
-pwsh -File .\scripts\package.ps1 -Version 0.2.7.2 -IncludeRuntimeInstaller
+pwsh -File .\scripts\package.ps1 -Version 0.2.7.3 -IncludeRuntimeInstaller
 ```
 
-发布输出位于 `artifacts\release\0.2.7.2\`。正式交付前还应执行对应的 C 盘写入审计、产物哈希核验和 Windows 实机验收；构建或自动化测试通过不等同于完成真实客户端验收。
+发布输出位于 `artifacts\release\0.2.7.3\`。正式交付前还应执行对应的 C 盘写入审计、产物哈希核验和 Windows 实机验收；构建或自动化测试通过不等同于完成真实客户端验收。
 
 ## 文档索引
 
