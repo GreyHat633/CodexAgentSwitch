@@ -150,7 +150,7 @@ public sealed class SqliteProfileRepository(SqliteDatabase database) : IProfileR
         return new Profile(
             id,
             "需要修复的方案",
-            new AgentSelection("gpt-5.6-sol", "high"),
+            new AgentSelection("gpt-6-astra", "high"),
             new WorkerPolicy(false, WorkerSource.Disabled, null, null, 0, RoutingMode.Single, FallbackAction.SingleAgent),
             new BudgetLimits(null, null, null, null, null, "CNY"),
             isDefault,

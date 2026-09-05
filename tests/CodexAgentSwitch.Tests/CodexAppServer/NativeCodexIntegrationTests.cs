@@ -1,3 +1,4 @@
+using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Workers;
 using CodexAgentSwitch.Infrastructure.CodexAppServer;
 using CodexAgentSwitch.Infrastructure.Common;
@@ -6,6 +7,115 @@ namespace CodexAgentSwitch.Tests.CodexAppServer;
 
 public sealed class NativeCodexIntegrationTests
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Current_app_server_returns_validated_four_role_catalog()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("CAS_RUN_ASTRA_INTEGRATION"), "1", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var discovery = await new CodexCommandLocator().LocateAsync();
+        Assert.True(discovery.IsAvailable, discovery.Status);
+        await using var client = new CodexAppServerClient(discovery.Command!);
+        var capabilities = await new NativeCodexWorkerAdapter(client, new SystemClock()).GetCapabilitiesAsync();
+        var expected = new Dictionary<string, string[]>
+        {
+            ["gpt-6-astra"] = ["low", "medium", "high", "xhigh", "max", "ultra"],
+            ["gpt-5.6-sol"] = ["low", "medium", "high", "xhigh", "max", "ultra"],
+            ["gpt-5.6-terra"] = ["low", "medium", "high", "xhigh", "max", "ultra"],
+            ["gpt-5.6-luna"] = ["low", "medium", "high", "xhigh", "max"],
+        };
+
+        foreach (var (modelId, efforts) in expected)
+        {
+            var model = Assert.Single(capabilities.Models, item => item.Id == modelId);
+            Assert.Equal(efforts, model.SupportedReasoningEfforts);
+            Console.WriteLine($"CAS_MODEL={model.Id};DEFAULT={model.IsDefault};EFFORTS={string.Join(',', model.SupportedReasoningEfforts)}");
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Current_app_server_runs_astra_main_turn_with_exact_effort()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("CAS_RUN_ASTRA_INTEGRATION"), "1", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var discovery = await new CodexCommandLocator().LocateAsync();
+        Assert.True(discovery.IsAvailable, discovery.Status);
+        await using var client = new CodexAppServerClient(discovery.Command!);
+        var session = new CodexMainAgentSession(client);
+        var root = RepositoryRoot();
+        var threadId = await session.CreateThreadAsync("gpt-6-astra", root, ExecutionApprovalMode.Safe);
+        try
+        {
+            var turn = await session.StartTurnAsync(
+                threadId,
+                "Return exactly CAS_ASTRA_MAIN_OK. Do not call tools.",
+                "gpt-6-astra",
+                "low",
+                root,
+                ExecutionApprovalMode.Safe);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            var result = await session.WaitForTurnAsync(turn.ThreadId, turn.TurnId, timeout.Token);
+
+            Assert.Contains("CAS_ASTRA_MAIN_OK", result.FinalText ?? string.Empty, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await client.RequestAsync("thread/delete", new { threadId });
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Current_app_server_runs_astra_native_worker()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("CAS_RUN_ASTRA_INTEGRATION"), "1", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var discovery = await new CodexCommandLocator().LocateAsync();
+        Assert.True(discovery.IsAvailable, discovery.Status);
+        await using var client = new CodexAppServerClient(discovery.Command!);
+        var adapter = new NativeCodexWorkerAdapter(client, new SystemClock());
+        var task = new WorkerTask(
+            "CAS-ASTRA-INTEGRATION",
+            "CAS-ASTRA-INTEGRATION-L1",
+            "Validate Astra native Worker execution.",
+            "Return exactly CAS_ASTRA_WORKER_OK. Do not call tools.",
+            RepositoryRoot(),
+            "gpt-6-astra",
+            "low",
+            new WorkerScope([], [], [ScopeOperation.Read]),
+            ["CAS_ASTRA_WORKER_OK"],
+            ["Exact response"],
+            ["Any tool call"]);
+        var job = await adapter.SpawnAsync(task);
+        try
+        {
+            var result = await adapter.WaitAsync(job.JobId, TimeSpan.FromMinutes(2));
+            Assert.NotNull(result);
+            Assert.Equal(WorkerJobStatus.Completed, result.Status);
+            Assert.Contains("CAS_ASTRA_WORKER_OK", result.Summary ?? string.Empty, StringComparison.Ordinal);
+        }
+        finally
+        {
+            var status = await adapter.ReadStatusAsync(job.JobId);
+            if (status.Status == WorkerJobStatus.Running)
+            {
+                await adapter.CancelAsync(job.JobId);
+            }
+
+            await adapter.DeleteAsync(job.JobId);
+        }
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Current_app_server_supports_schema_models_and_worker_lifecycle()
@@ -123,4 +233,7 @@ public sealed class NativeCodexIntegrationTests
             }
         }
     }
+
+    private static string RepositoryRoot() =>
+        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
 }

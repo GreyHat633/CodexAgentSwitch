@@ -38,7 +38,11 @@ public sealed class NativeCodexLauncher(
         var discovery = await locator.LocateAsync(cancellationToken);
         var command = discovery.Command
             ?? throw new InvalidOperationException(discovery.Status);
-        var mainModel = await modelResolver.ResolveAsync(command, profile.MainAgent.ModelId, cancellationToken);
+        var mainModel = await modelResolver.ResolveAsync(
+            command,
+            profile.MainAgent.ModelId,
+            profile.MainAgent.ReasoningEffort,
+            cancellationToken);
         Directory.CreateDirectory(paths.NativeCodexDirectory);
         var auditPath = Path.Combine(paths.NativeCodexDirectory, $"launch-{profile.Id:D}.json");
 
@@ -47,6 +51,7 @@ public sealed class NativeCodexLauncher(
             ? await modelResolver.ResolveAsync(
                 command,
                 worker.ModelId ?? throw new InvalidOperationException("原生 Worker 配置无效。"),
+                worker.ReasoningEffort ?? throw new InvalidOperationException("原生 Worker 推理强度无效。"),
                 cancellationToken)
             : null;
         var startInfo = new ProcessStartInfo

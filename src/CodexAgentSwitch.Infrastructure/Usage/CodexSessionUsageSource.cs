@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using CodexAgentSwitch.Application.Usage;
+using CodexAgentSwitch.Domain.Profiles;
 
 namespace CodexAgentSwitch.Infrastructure.Usage;
 
@@ -108,7 +109,7 @@ public sealed class CodexSessionUsageSource : IUsageSource
                     s.Source ??= ReadSessionSource(payload) ?? ReadSessionSource(root);
                     s.Model ??= String(payload, "model") ?? String(payload, "model_id");
                     var metaRole = FindString(payload, "agent_role") ?? FindString(root, "agent_role");
-                    s.Role = metaRole is not null ? (metaRole.Contains("cas_luna_worker", StringComparison.OrdinalIgnoreCase) ? "cas_luna_worker" : metaRole) : MapModelRole(s.Model);
+                    s.Role = metaRole is not null ? NormalizeExplicitRole(metaRole) : MapModelRole(s.Model);
                     s.RoleExplicit = metaRole is not null;
                     s.Started ??= Timestamp(root, payload);
                     continue;
@@ -123,7 +124,7 @@ public sealed class CodexSessionUsageSource : IUsageSource
                 var explicitRole = FindString(payload, "agent_role") ?? FindString(root, "agent_role");
                 if (explicitRole is not null)
                 {
-                    state.Role = explicitRole.Contains("cas_luna_worker", StringComparison.OrdinalIgnoreCase) ? "cas_luna_worker" : explicitRole;
+                    state.Role = NormalizeExplicitRole(explicitRole);
                     state.RoleExplicit = true;
                 }
                 else if (!state.RoleExplicit)
@@ -231,10 +232,18 @@ public sealed class CodexSessionUsageSource : IUsageSource
     private static string? ResolveRole(JsonElement root, JsonElement payload, string? model)
     {
         var role = FindString(payload, "agent_role") ?? FindString(root, "agent_role");
-        if (role is not null) return role.Contains("cas_luna_worker", StringComparison.OrdinalIgnoreCase) ? "cas_luna_worker" : role;
+        if (role is not null) return NormalizeExplicitRole(role);
         return MapModelRole(model);
     }
-    private static string MapModelRole(string? model) => model?.ToLowerInvariant() switch { "gpt-5.6-sol" => "Sol", "gpt-5.6-terra" => "Terra", "gpt-5.6-luna" => "Luna", _ => "Unknown" };
+    private static string MapModelRole(string? model) =>
+        NativeCodexRoleCatalog.FindByModel(model)?.SlotName ?? "Unknown";
+
+    private static string NormalizeExplicitRole(string role)
+    {
+        var managed = NativeCodexRoleCatalog.All.FirstOrDefault(candidate =>
+            role.Contains(candidate.AgentRole, StringComparison.OrdinalIgnoreCase));
+        return managed?.AgentRole ?? role;
+    }
     private static string? FindString(JsonElement e, string name)
     {
         if (e.ValueKind == JsonValueKind.Object)

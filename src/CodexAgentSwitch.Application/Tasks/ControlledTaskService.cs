@@ -1998,13 +1998,9 @@ public sealed class ControlledTaskService
         _ => WorkerJobStatus.Running,
     };
 
-    private static string NativeWorkerModel(WorkerPolicy policy) => policy.PreferredProviderId switch
-    {
-        "native-sol" => "gpt-5.6-sol",
-        "native-terra" => "gpt-5.6-terra",
-        "native-luna" => "gpt-5.6-luna",
-        _ => throw new InvalidOperationException($"不支持的原生 Worker：{policy.PreferredProviderId}。"),
-    };
+    private static string NativeWorkerModel(WorkerPolicy policy) =>
+        NativeCodexRoleCatalog.FindByWorker(policy.PreferredProviderId)?.ModelId
+        ?? throw new InvalidOperationException($"不支持的原生 Worker：{policy.PreferredProviderId}。");
 
     private sealed record StructuredDelegationDecision(
         string Decision,

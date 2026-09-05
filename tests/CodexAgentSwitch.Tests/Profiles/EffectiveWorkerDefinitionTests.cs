@@ -5,6 +5,7 @@ namespace CodexAgentSwitch.Tests.Profiles;
 public sealed class EffectiveWorkerDefinitionTests
 {
     [Theory]
+    [InlineData("native-astra", "cas_astra_worker", "gpt-6-astra", "agents/cas-astra-worker.toml")]
     [InlineData("native-sol", "cas_sol_worker", "gpt-5.6-sol", "agents/cas-sol-worker.toml")]
     [InlineData("native-terra", "cas_terra_worker", "gpt-5.6-terra", "agents/cas-terra-worker.toml")]
     [InlineData("native-luna", "cas_luna_worker", "gpt-5.6-luna", "agents/cas-luna-worker.toml")]
@@ -26,13 +27,16 @@ public sealed class EffectiveWorkerDefinitionTests
         Assert.True(definition.CanRunInNativeCodex);
     }
 
-    [Fact]
-    public void Native_worker_preserves_configured_reasoning_effort()
+    [Theory]
+    [InlineData("xhigh")]
+    [InlineData("max")]
+    [InlineData("ultra")]
+    public void Native_worker_preserves_configured_reasoning_effort(string effort)
     {
         var definition = EffectiveWorkerDefinition.Resolve(new WorkerPolicy(
-            true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.StopDelegation, "xhigh"));
+            true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.StopDelegation, effort));
 
-        Assert.Equal("xhigh", definition.ReasoningEffort);
+        Assert.Equal(effort, definition.ReasoningEffort);
     }
 
     [Fact]

@@ -7,6 +7,7 @@ using CodexAgentSwitch.Application.Providers;
 using CodexAgentSwitch.Application.Tasks;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
+using CodexAgentSwitch.Domain.Workers;
 using CodexAgentSwitch.Infrastructure.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -328,11 +329,12 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
     {
         try
         {
-            editor.SetAvailableNativeRoles(await LoadAvailableNativeRolesAsync());
+            editor.SetAvailableNativeModels(await LoadAvailableNativeModelsAsync());
         }
         catch (Exception exception)
         {
-            ShowError("无法读取 Codex 模型目录", "将保留全部角色选项；保存和启动时仍会重新校验。" + Environment.NewLine + exception.Message);
+            editor.SetNativeModelCatalogFailure(exception.Message);
+            ShowError("无法读取 Codex 模型目录", "已保留当前方案值并禁用模型修改；重新打开编辑器后可重试。" + Environment.NewLine + exception.Message);
         }
 
         Editor = editor;
@@ -340,22 +342,13 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
         Editor = null;
     }
 
-    private async Task<IReadOnlyList<string>> LoadAvailableNativeRolesAsync()
+    private async Task<IReadOnlyList<WorkerModelCapability>> LoadAvailableNativeModelsAsync()
     {
         var runtime = App.Services.GetRequiredService<IControlledTaskRuntime>();
         await runtime.EnsureStartedAsync();
         var capabilities = await runtime.NativeWorker.GetCapabilitiesAsync();
         return capabilities.Models
-            .Select(model => model.Id switch
-            {
-                "gpt-5.6-sol" => "Sol",
-                "gpt-5.6-terra" => "Terra",
-                "gpt-5.6-luna" => "Luna",
-                _ => null,
-            })
-            .Where(role => role is not null)
-            .Cast<string>()
-            .Distinct(StringComparer.Ordinal)
+            .Where(model => NativeCodexRoleCatalog.FindByModel(model.Id) is not null)
             .ToArray();
     }
 
@@ -407,7 +400,7 @@ public sealed partial class ProfilesPage : Page, IContentActionHandler, INotifyP
             {
                 Enabled = enabled,
                 Source = source,
-                PreferredProviderId = source == WorkerSource.Disabled ? null : "native-luna",
+                PreferredProviderId = source == WorkerSource.Disabled ? null : NativeCodexRoleCatalog.Luna.WorkerId,
                 MaxWorkers = maxWorkers,
                 RoutingMode = routingMode,
                 FallbackAction = FallbackAction.SingleAgent,

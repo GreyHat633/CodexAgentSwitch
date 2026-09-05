@@ -59,7 +59,7 @@ public sealed class ProfileValidator
             && profile.WorkerPolicy.Source == WorkerSource.NativeCodex
             && string.IsNullOrWhiteSpace(profile.WorkerPolicy.PreferredProviderId))
         {
-            issues.Add(new("profile.native_worker.required", "启用 Native Worker 时必须选择 Sol、Terra 或 Luna。", "WorkerPolicy.PreferredProviderId"));
+            issues.Add(new("profile.native_worker.required", "启用 Native Worker 时必须选择 Astra、Sol、Terra 或 Luna。", "WorkerPolicy.PreferredProviderId"));
         }
 
         if (profile.AutoCompactTokenLimit is not (null or 150_000 or 180_000 or 200_000))

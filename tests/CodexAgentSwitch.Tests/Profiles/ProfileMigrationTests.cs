@@ -63,4 +63,45 @@ public sealed class ProfileMigrationTests
         Assert.Equal(limit, result.Profile.AutoCompactTokenLimit);
         Assert.Equal(5, result.Profile.SchemaVersion);
     }
+
+    [Theory]
+    [InlineData("max")]
+    [InlineData("ultra")]
+    public void Astra_profile_and_live_reasoning_effort_survive_migration(string effort)
+    {
+        var profile = Profile.CreateDefault(Now) with
+        {
+            SchemaVersion = 4,
+            MainAgent = new AgentSelection("gpt-6-astra", effort),
+            WorkerPolicy = Profile.CreateDefault(Now).WorkerPolicy with
+            {
+                PreferredProviderId = "native-astra",
+                ReasoningEffort = effort,
+            },
+        };
+
+        var result = ProfileDataMigration.Migrate(profile, Now.AddMinutes(1));
+
+        Assert.Equal("gpt-6-astra", result.Profile.MainAgent.ModelId);
+        Assert.Equal(effort, result.Profile.MainAgent.ReasoningEffort);
+        Assert.Equal("native-astra", result.Profile.WorkerPolicy.PreferredProviderId);
+        Assert.Equal(effort, result.Profile.WorkerPolicy.ReasoningEffort);
+    }
+
+    [Fact]
+    public void Unknown_nonempty_model_and_worker_are_preserved_for_explicit_repair()
+    {
+        var profile = Profile.CreateDefault(Now) with
+        {
+            SchemaVersion = 4,
+            MainAgent = new AgentSelection("future-model", "future-effort"),
+            WorkerPolicy = Profile.CreateDefault(Now).WorkerPolicy with { PreferredProviderId = "native-future" },
+        };
+
+        var result = ProfileDataMigration.Migrate(profile, Now.AddMinutes(1));
+
+        Assert.Equal("future-model", result.Profile.MainAgent.ModelId);
+        Assert.Equal("future-effort", result.Profile.MainAgent.ReasoningEffort);
+        Assert.Equal("native-future", result.Profile.WorkerPolicy.PreferredProviderId);
+    }
 }

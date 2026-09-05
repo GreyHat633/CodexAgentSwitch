@@ -16,7 +16,9 @@ public sealed class ProfileEditorContractTests
         Assert.Equal(1, Count(viewModel, "\"连续 · 200K\""));
         Assert.Equal(1, Count(viewModel, "\"默认 · 约218K\""));
         Assert.Contains("AutoCompactTokenLimit = this.AutoCompactTokenLimit", viewModel, StringComparison.Ordinal);
-        Assert.Contains("template with { AutoCompactTokenLimit = null }", viewModel, StringComparison.Ordinal);
+        Assert.Contains("MainAgent = defaults.MainAgent", viewModel, StringComparison.Ordinal);
+        Assert.Contains("WorkerPolicy = defaults.WorkerPolicy", viewModel, StringComparison.Ordinal);
+        Assert.Contains("AutoCompactTokenLimit = null", viewModel, StringComparison.Ordinal);
         Assert.Contains("RoutingMode,", viewModel, StringComparison.Ordinal);
 
         Assert.Contains("Header=\"上下文压缩\"", xaml, StringComparison.Ordinal);
@@ -24,6 +26,11 @@ public sealed class ProfileEditorContractTests
         Assert.Contains("SelectedItem=\"{Binding SelectedAutoCompactOption, Mode=TwoWay}\"", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("Header=\"路由模式\"", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("AutomationProperties.Name=\"路由模式\"", xaml, StringComparison.Ordinal);
+
+        Assert.Contains("NativeCodexRoleCatalog.All", viewModel, StringComparison.Ordinal);
+        Assert.Contains("SetAvailableNativeModels", viewModel, StringComparison.Ordinal);
+        Assert.Contains("WorkerReasoningUnavailableVisibility", xaml, StringComparison.Ordinal);
+        Assert.Contains("Astra / Sol / Terra / Luna", xaml, StringComparison.Ordinal);
     }
 
     private static int Count(string value, string token) =>

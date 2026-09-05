@@ -68,7 +68,7 @@ public sealed class NativeCodexWorkerAdapter : IWorkerAdapter
             throw new InvalidOperationException("Native Worker concurrency limit of 3 has been reached.");
         }
 
-        var model = await _modelResolver.ResolveAsync(_client, task.ModelId, cancellationToken);
+        var model = await _modelResolver.ResolveAsync(_client, task.ModelId, task.ReasoningEffort, cancellationToken);
         var resolvedTask = task with { ModelId = model.ModelId };
         var sandbox = resolvedTask.ApprovalMode switch
         {

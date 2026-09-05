@@ -2,20 +2,33 @@
   "Repo": "E:\\AISPace\\Codex Agent Switch Project",
   "SessionsRoot": "E:\\AI\\CODEX\\.codex\\sessions",
   "OutputRoot": ".\\reports",
+  "Currency": "USD",
+  "PricingAsOf": "2026-09-05",
+  "SolEquivalentBaseline": "gpt-5.6-sol",
   "ModelRates": {
+    "gpt-6-astra": {
+      "Role": "Main",
+      "InputPer1M": 10.0,
+      "CachedInputPer1M": 1.0,
+      "OutputPer1M": 50.0
+    },
     "gpt-5.6-sol": {
       "Role": "Main",
-      "InputPer1M": 125.0,
-      "CachedInputPer1M": 12.5,
-      "OutputPer1M": 750.0,
-      "SolEquivalentMultiplier": 1.0
+      "InputPer1M": 4.0,
+      "CachedInputPer1M": 0.4,
+      "OutputPer1M": 20.0
+    },
+    "gpt-5.6-terra": {
+      "Role": "Worker",
+      "InputPer1M": 2.0,
+      "CachedInputPer1M": 0.2,
+      "OutputPer1M": 12.0
     },
     "gpt-5.6-luna": {
       "Role": "Worker",
-      "InputPer1M": 25.0,
-      "CachedInputPer1M": 2.5,
-      "OutputPer1M": 150.0,
-      "SolEquivalentMultiplier": 5.0
+      "InputPer1M": 0.2,
+      "CachedInputPer1M": 0.02,
+      "OutputPer1M": 1.2
     }
   },
   "Audit": {

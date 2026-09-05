@@ -89,7 +89,7 @@ internal sealed class MockAgentSwitchUiStateSource(string scenario) : IAgentSwit
                 "Luna 独立 Token Usage：当前 Codex Native Worker 接口未提供。",
                 "Provider 返回的实际 Token Usage。"),
             [
-                new ProviderUiStatus("native-codex", "原生 Codex", ProviderKind.NativeCodex, true, true, true, "Sol / Terra / Luna", "已连接", UiStatusTone.Success, "Codex Desktop 认证", "无需 API 调用", null),
+                new ProviderUiStatus("native-codex", "原生 Codex", ProviderKind.NativeCodex, true, true, true, "Astra / Sol / Terra / Luna", "已连接", UiStatusTone.Success, "Codex Desktop 认证", "无需 API 调用", null),
                 new ProviderUiStatus("deepseek-default", "DeepSeek", ProviderKind.DeepSeek, true, true, normalized == "working-external" || normalized == "reviewing", "DeepSeek V4 Flash 0731", "已启用", UiStatusTone.Success, "已安全配置", "成功 · 19:31", now.AddMinutes(-3)),
             ],
             state == SchedulerState.Faulted ? "用于视觉验收的后台异常状态。" : null));

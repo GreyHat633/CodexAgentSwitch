@@ -18,8 +18,9 @@ namespace CodexAgentSwitch.App.Views;
 public sealed partial class OnboardingPage : Page, IContentActionHandler
 {
     private readonly OnboardingWorkflowState workflow = new();
-    private readonly Dictionary<string, IReadOnlyList<string>> reasoningEfforts = new(StringComparer.Ordinal);
-    private HashSet<string> availableMainModels = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<string>> reasoningEfforts = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> availableMainModels = new(StringComparer.OrdinalIgnoreCase);
+    private bool modelCatalogLoaded;
     private Profile? seedProfile;
     private bool environmentReady;
     private bool providerConnectionVerified;
@@ -130,17 +131,28 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
             var taskRuntime = App.Services.GetRequiredService<IControlledTaskRuntime>();
             await taskRuntime.EnsureStartedAsync();
             var capabilities = await taskRuntime.NativeWorker.GetCapabilitiesAsync();
-            foreach (var model in capabilities.Models.Where(model => model.Id is "gpt-5.6-sol" or "gpt-5.6-terra" or "gpt-5.6-luna"))
+            foreach (var model in capabilities.Models.Where(model => NativeCodexRoleCatalog.FindByModel(model.Id) is not null))
             {
                 availableMainModels.Add(model.Id);
                 reasoningEfforts[model.Id] = model.SupportedReasoningEfforts;
             }
 
             MainAgentAvailabilityText.Text = "已从当前 Codex 账户读取主代理和推理强度目录。不可用模型会保留提示，不会被后台映射。";
+            modelCatalogLoaded = true;
+            PopulateNativeWorkerOptions(seedProfile?.WorkerPolicy.PreferredProviderId, seedProfile?.WorkerPolicy.ReasoningEffort);
+            var selectedModel = SelectedMainModel();
+            if (selectedModel is not null
+                && string.Equals(selectedModel, seedProfile?.MainAgent.ModelId, StringComparison.OrdinalIgnoreCase))
+            {
+                PopulateReasoningEfforts(selectedModel, seedProfile?.MainAgent.ReasoningEffort);
+            }
         }
         catch (Exception exception)
         {
+            modelCatalogLoaded = false;
             MainAgentAvailabilityText.Text = $"暂时无法读取当前账户目录：{exception.Message}。请稍后重新检测；不会擅自替换所选模型。";
+            NativeWorkerComboBox.IsEnabled = false;
+            NativeWorkerReasoningEffortComboBox.IsEnabled = false;
         }
 
         UpdateAgentAvailability();
@@ -149,11 +161,12 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
     private void PopulateFromProfile(Profile profile)
     {
         SetRadioForModelInstance(profile.MainAgent.ModelId);
+        PopulateReasoningEfforts(profile.MainAgent.ModelId, profile.MainAgent.ReasoningEffort);
         SetWorkerSource(profile.WorkerPolicy.Source);
         MaxWorkersBox.Value = Math.Max(1, profile.WorkerPolicy.MaxWorkers);
         SelectComboTag(RoutingModeComboBox, profile.WorkerPolicy.RoutingMode.ToString());
         SelectComboTag(FallbackComboBox, profile.WorkerPolicy.FallbackAction.ToString());
-        SelectComboTag(NativeWorkerComboBox, profile.WorkerPolicy.PreferredProviderId ?? "native-luna");
+        SelectComboTag(NativeWorkerComboBox, profile.WorkerPolicy.PreferredProviderId ?? NativeCodexRoleCatalog.Luna.WorkerId);
         ProfileNameBox.Text = string.IsNullOrWhiteSpace(profile.Name) ? "首次启动方案" : profile.Name + "（首次配置）";
     }
 
@@ -185,6 +198,17 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
     }
 
     private void ReasoningEffortChanged(object sender, SelectionChangedEventArgs args) => UpdateConfirmationSummary();
+
+    private void NativeWorkerSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        var worker = NativeCodexRoleCatalog.FindByWorker(SelectedTag(NativeWorkerComboBox));
+        if (worker is not null)
+        {
+            PopulateWorkerReasoningEfforts(worker.ModelId, null);
+        }
+
+        UpdateConfirmationSummary();
+    }
 
     private void WorkerSourceChecked(object sender, RoutedEventArgs args)
     {
@@ -301,11 +325,17 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
                 var modelId = SelectedMainModel();
                 if (modelId is null)
                 {
-                    ShowError("请选择主代理", "Sol、Terra 和 Luna 均会保留显示；请选择当前账户实际可用的模型。");
+                    ShowError("请选择主代理", "Astra、Sol、Terra 和 Luna 均会保留显示；请选择当前账户实际可用的模型。");
                     return false;
                 }
 
-                if (availableMainModels.Count > 0 && !availableMainModels.Contains(modelId))
+                if (!modelCatalogLoaded)
+                {
+                    ShowError("模型目录不可用", "必须先成功读取当前 Codex 账户的模型目录；请返回环境检测并重新检测。");
+                    return false;
+                }
+
+                if (!availableMainModels.Contains(modelId))
                 {
                     ShowError("主代理不可用", "当前 Codex 账户未提供所选模型；系统不会自动映射到其他模型。");
                     return false;
@@ -320,6 +350,13 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
                 return true;
             }
             case OnboardingStep.Worker:
+                if (NativeWorkerRadio.IsChecked == true
+                    && (SelectedTag(NativeWorkerComboBox) is null || SelectedTag(NativeWorkerReasoningEffortComboBox) is null))
+                {
+                    ShowError("请选择原生 Worker", "Worker 模型和推理强度必须来自当前 Codex 账户目录。");
+                    return false;
+                }
+
                 if (ExternalWorkerRadio.IsChecked == true && ExternalProviderComboBox.SelectedItem is not ProviderConfiguration)
                 {
                     ShowError("请选择外部 Provider", "外部 Worker 必须关联一个已配置的 Provider。");
@@ -378,7 +415,10 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
                 null,
                 enabled ? (int)Math.Round(MaxWorkersBox.Value) : 0,
                 Enum.Parse<RoutingMode>(SelectedTag(RoutingModeComboBox)!, true),
-                Enum.Parse<FallbackAction>(SelectedTag(FallbackComboBox)!, true)),
+                Enum.Parse<FallbackAction>(SelectedTag(FallbackComboBox)!, true),
+                source == WorkerSource.NativeCodex
+                    ? SelectedTag(NativeWorkerReasoningEffortComboBox)!
+                    : seedProfile?.WorkerPolicy.ReasoningEffort ?? "medium"),
             seedProfile?.Budget ?? new BudgetLimits(null, null, null, null, null, "CNY"),
             true,
             now,
@@ -439,14 +479,16 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
 
     private void UpdateAgentAvailability()
     {
-        UpdateAgentAvailability(SolRadio, SolAvailabilityText, "gpt-5.6-sol");
-        UpdateAgentAvailability(TerraRadio, TerraAvailabilityText, "gpt-5.6-terra");
-        UpdateAgentAvailability(LunaRadio, LunaAvailabilityText, "gpt-5.6-luna");
+        UpdateAgentAvailability(AstraRadio, AstraAvailabilityText, NativeCodexRoleCatalog.Astra.ModelId);
+        UpdateAgentAvailability(SolRadio, SolAvailabilityText, NativeCodexRoleCatalog.Sol.ModelId);
+        UpdateAgentAvailability(TerraRadio, TerraAvailabilityText, NativeCodexRoleCatalog.Terra.ModelId);
+        UpdateAgentAvailability(LunaRadio, LunaAvailabilityText, NativeCodexRoleCatalog.Luna.ModelId);
         var selected = SelectedMainModel();
         if (selected is not null)
         {
-            if (availableMainModels.Count > 0 && !availableMainModels.Contains(selected))
+            if (modelCatalogLoaded && !availableMainModels.Contains(selected))
             {
+                AstraRadio.IsChecked = false;
                 SolRadio.IsChecked = false;
                 TerraRadio.IsChecked = false;
                 LunaRadio.IsChecked = false;
@@ -461,10 +503,10 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
 
     private void UpdateAgentAvailability(RadioButton radio, TextBlock detail, string modelId)
     {
-        var resolved = availableMainModels.Count == 0 || availableMainModels.Contains(modelId);
+        var resolved = modelCatalogLoaded && availableMainModels.Contains(modelId);
         radio.IsEnabled = resolved;
-        detail.Text = availableMainModels.Count == 0
-            ? "尚未完成账户能力读取；保存前会再次校验。"
+        detail.Text = !modelCatalogLoaded
+            ? "尚未完成账户能力读取；当前不可选择。"
             : resolved ? "当前账户可用" : "当前账户不可用；不会自动映射到其他模型。";
     }
 
@@ -472,14 +514,52 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
     {
         var efforts = reasoningEfforts.TryGetValue(modelId, out var live)
             ? live
-            : new[] { "low", "medium", "high", "xhigh" };
+            : Array.Empty<string>();
         ReasoningEffortComboBox.Items.Clear();
         foreach (var effort in efforts)
         {
             ReasoningEffortComboBox.Items.Add(new ComboBoxItem { Content = ReasoningLabel(effort), Tag = effort });
         }
 
-        SelectComboTag(ReasoningEffortComboBox, preferred is not null && efforts.Contains(preferred) ? preferred : efforts.FirstOrDefault());
+        SelectComboTag(ReasoningEffortComboBox, preferred is not null && efforts.Contains(preferred, StringComparer.OrdinalIgnoreCase) ? preferred : efforts.FirstOrDefault());
+    }
+
+    private void PopulateNativeWorkerOptions(string? preferredWorkerId, string? preferredEffort)
+    {
+        NativeWorkerComboBox.Items.Clear();
+        foreach (var role in NativeCodexRoleCatalog.All.Where(role => availableMainModels.Contains(role.ModelId)))
+        {
+            NativeWorkerComboBox.Items.Add(new ComboBoxItem { Content = role.SlotName, Tag = role.WorkerId });
+        }
+
+        NativeWorkerComboBox.IsEnabled = modelCatalogLoaded;
+        NativeWorkerReasoningEffortComboBox.IsEnabled = modelCatalogLoaded;
+        SelectComboTag(NativeWorkerComboBox, preferredWorkerId);
+        if (NativeWorkerComboBox.SelectedItem is null && NativeWorkerComboBox.Items.Count > 0)
+        {
+            NativeWorkerComboBox.SelectedIndex = 0;
+        }
+
+        var selected = NativeCodexRoleCatalog.FindByWorker(SelectedTag(NativeWorkerComboBox));
+        PopulateWorkerReasoningEfforts(selected?.ModelId, preferredEffort);
+    }
+
+    private void PopulateWorkerReasoningEfforts(string? modelId, string? preferred)
+    {
+        var efforts = modelId is not null && reasoningEfforts.TryGetValue(modelId, out var live)
+            ? live
+            : Array.Empty<string>();
+        NativeWorkerReasoningEffortComboBox.Items.Clear();
+        foreach (var effort in efforts)
+        {
+            NativeWorkerReasoningEffortComboBox.Items.Add(new ComboBoxItem { Content = ReasoningLabel(effort), Tag = effort });
+        }
+
+        SelectComboTag(
+            NativeWorkerReasoningEffortComboBox,
+            preferred is not null && efforts.Contains(preferred, StringComparer.OrdinalIgnoreCase)
+                ? preferred
+                : efforts.FirstOrDefault());
     }
 
     private void UpdateConfirmationSummary()
@@ -493,7 +573,7 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
         var worker = source switch
         {
             WorkerSource.Disabled => "未启用 Worker",
-            WorkerSource.NativeCodex => $"原生 Worker：{SelectedTag(NativeWorkerComboBox) ?? "未选择"}",
+            WorkerSource.NativeCodex => $"原生 Worker：{SelectedTag(NativeWorkerComboBox) ?? "未选择"} · 推理强度：{ReasoningLabel(SelectedTag(NativeWorkerReasoningEffortComboBox) ?? "未选择")}",
             WorkerSource.ExternalProvider => $"外部 Worker：{(ExternalProviderComboBox.SelectedItem as ProviderConfiguration)?.Name ?? "未选择"} / {SelectedProviderModel() ?? "未选择模型"}",
             _ => "配置异常",
         };
@@ -504,29 +584,23 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
 
     private void UpdateAgentCardsLayout(double width)
     {
-        if (width >= 1080)
+        if (width >= 760)
         {
             AgentColumnOne.Width = new GridLength(1, GridUnitType.Star);
             AgentColumnTwo.Width = new GridLength(1, GridUnitType.Star);
-            AgentColumnThree.Width = new GridLength(1, GridUnitType.Star);
-            Grid.SetRow(TerraCard, 0); Grid.SetColumn(TerraCard, 1); Grid.SetColumnSpan(TerraCard, 1);
-            Grid.SetRow(LunaCard, 0); Grid.SetColumn(LunaCard, 2); Grid.SetColumnSpan(LunaCard, 1);
-        }
-        else if (width >= 760)
-        {
-            AgentColumnOne.Width = new GridLength(1, GridUnitType.Star);
-            AgentColumnTwo.Width = new GridLength(1, GridUnitType.Star);
-            AgentColumnThree.Width = new GridLength(0);
-            Grid.SetRow(TerraCard, 0); Grid.SetColumn(TerraCard, 1); Grid.SetColumnSpan(TerraCard, 1);
-            Grid.SetRow(LunaCard, 1); Grid.SetColumn(LunaCard, 0); Grid.SetColumnSpan(LunaCard, 2);
+            Grid.SetRow(AstraCard, 0); Grid.SetColumn(AstraCard, 0);
+            Grid.SetRow(SolCard, 0); Grid.SetColumn(SolCard, 1);
+            Grid.SetRow(TerraCard, 1); Grid.SetColumn(TerraCard, 0);
+            Grid.SetRow(LunaCard, 1); Grid.SetColumn(LunaCard, 1);
         }
         else
         {
             AgentColumnOne.Width = new GridLength(1, GridUnitType.Star);
             AgentColumnTwo.Width = new GridLength(0);
-            AgentColumnThree.Width = new GridLength(0);
-            Grid.SetRow(TerraCard, 1); Grid.SetColumn(TerraCard, 0); Grid.SetColumnSpan(TerraCard, 3);
-            Grid.SetRow(LunaCard, 2); Grid.SetColumn(LunaCard, 0); Grid.SetColumnSpan(LunaCard, 3);
+            Grid.SetRow(AstraCard, 0); Grid.SetColumn(AstraCard, 0);
+            Grid.SetRow(SolCard, 1); Grid.SetColumn(SolCard, 0);
+            Grid.SetRow(TerraCard, 2); Grid.SetColumn(TerraCard, 0);
+            Grid.SetRow(LunaCard, 3); Grid.SetColumn(LunaCard, 0);
         }
     }
 
@@ -545,9 +619,10 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
 
     private void SetRadioForModelInstance(string modelId)
     {
-        SolRadio.IsChecked = modelId == "gpt-5.6-sol";
-        TerraRadio.IsChecked = modelId == "gpt-5.6-terra";
-        LunaRadio.IsChecked = modelId == "gpt-5.6-luna";
+        AstraRadio.IsChecked = modelId == NativeCodexRoleCatalog.Astra.ModelId;
+        SolRadio.IsChecked = modelId == NativeCodexRoleCatalog.Sol.ModelId;
+        TerraRadio.IsChecked = modelId == NativeCodexRoleCatalog.Terra.ModelId;
+        LunaRadio.IsChecked = modelId == NativeCodexRoleCatalog.Luna.ModelId;
     }
 
     private static void SelectComboTag(ComboBox comboBox, string? tag)
@@ -559,7 +634,7 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
 
     private static string? SelectedTag(ComboBox comboBox) => (comboBox.SelectedItem as ComboBoxItem)?.Tag as string;
 
-    private string? SelectedMainModel() => new[] { SolRadio, TerraRadio, LunaRadio }
+    private string? SelectedMainModel() => new[] { AstraRadio, SolRadio, TerraRadio, LunaRadio }
         .FirstOrDefault(radio => radio.IsChecked == true)?.Tag as string;
 
     private WorkerSource SelectedWorkerSource() => ExternalWorkerRadio.IsChecked == true
@@ -628,6 +703,8 @@ public sealed partial class OnboardingPage : Page, IContentActionHandler
         "medium" => "中",
         "high" => "高",
         "xhigh" => "极高",
+        "max" => "最高",
+        "ultra" => "极限",
         _ => effort,
     };
 }

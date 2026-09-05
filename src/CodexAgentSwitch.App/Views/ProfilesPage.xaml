@@ -30,7 +30,7 @@
             <StackPanel Padding="{StaticResource PagePadding}" Spacing="16" MaxWidth="{StaticResource PageContentMaxWidth}" HorizontalAlignment="Center">
                 <Grid RowSpacing="12">
                     <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
-                    <local:PageHeader Title="配置方案" Subtitle="创建、编辑并持久化 Sol / Terra / Luna 路由方案。导入和导出不包含凭据。" />
+                    <local:PageHeader Title="配置方案" Subtitle="创建、编辑并持久化 Astra / Sol / Terra / Luna 路由方案。导入和导出不包含凭据。" />
                     <StackPanel x:Name="HeaderActions" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <Button Content="导入" Tag="profile:import" />
                         <Button Content="新建方案" Style="{StaticResource AccentButtonStyle}" Tag="profile:new" AutomationProperties.Name="新建方案" />
@@ -128,19 +128,30 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions><RowDefinition /></Grid.RowDefinitions>
-                        <ComboBox Grid.Row="0" Grid.Column="0" Header="主代理" ItemsSource="{Binding MainAgentSlots}" SelectedItem="{Binding MainAgentSlot, Mode=TwoWay}" AutomationProperties.Name="主代理选择" />
+                        <ComboBox Grid.Row="0" Grid.Column="0" Header="主代理" ItemsSource="{Binding MainAgentSlots}" SelectedItem="{Binding MainAgentSlot, Mode=TwoWay}" IsEnabled="{Binding NativeModelControlsEnabled}" AutomationProperties.Name="主代理选择" />
                         <ComboBox Grid.Row="0" Grid.Column="1"
                                   Header="推理强度"
                                   ItemsSource="{Binding ReasoningStrengthOptions}"
                                   DisplayMemberPath="DisplayName"
                                   SelectedItem="{Binding SelectedReasoningStrengthOption, Mode=TwoWay}"
+                                  IsEnabled="{Binding NativeModelControlsEnabled}"
                                   AutomationProperties.Name="主代理推理强度" />
                     </Grid>
+                    <InfoBar IsOpen="True"
+                             Severity="Error"
+                             Title="无法读取 Codex 模型目录"
+                             Message="{Binding NativeModelCatalogErrorMessage}"
+                             Visibility="{Binding NativeModelCatalogErrorVisibility}" />
                     <InfoBar IsOpen="True"
                              Severity="Warning"
                              Title="当前账户不支持所选主代理"
                              Message="{Binding MainAgentUnavailableMessage}"
                              Visibility="{Binding MainAgentUnavailableVisibility}" />
+                    <InfoBar IsOpen="True"
+                             Severity="Warning"
+                             Title="当前模型不支持所选推理强度"
+                             Message="{Binding MainReasoningUnavailableMessage}"
+                             Visibility="{Binding MainReasoningUnavailableVisibility}" />
                     <TextBlock Text="批准与访问" Style="{StaticResource SectionTitleStyle}" />
                     <Grid ColumnSpacing="16">
                         <Grid.ColumnDefinitions>
@@ -201,6 +212,7 @@
                                           Header="原生工作代理"
                                           ItemsSource="{Binding NativeWorkerSlots}"
                                           SelectedItem="{Binding NativeWorkerSlot, Mode=TwoWay}"
+                                          IsEnabled="{Binding NativeModelControlsEnabled}"
                                           Visibility="{Binding NativeWorkerVisibility}"
                                           AutomationProperties.Name="原生工作代理选择" />
                                 <ComboBox Grid.Row="0" Grid.Column="1"
@@ -217,8 +229,15 @@
                                           ItemsSource="{Binding WorkerReasoningStrengthOptions}"
                                           DisplayMemberPath="DisplayName"
                                           SelectedItem="{Binding SelectedWorkerReasoningStrengthOption, Mode=TwoWay}"
+                                           IsEnabled="{Binding NativeModelControlsEnabled}"
                                            Visibility="{Binding NativeWorkerVisibility}"
                                            AutomationProperties.Name="Worker 推理强度" />
+                                 <InfoBar Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
+                                          IsOpen="True"
+                                          Severity="Warning"
+                                          Title="当前 Worker 不支持所选推理强度"
+                                          Message="{Binding WorkerReasoningUnavailableMessage}"
+                                          Visibility="{Binding WorkerReasoningUnavailableVisibility}" />
                                  <ComboBox Grid.Row="2" Grid.Column="0"
                                            Header="外部 Worker 权限"
                                            ItemsSource="{Binding ExternalWorkerPermissionOptions}"

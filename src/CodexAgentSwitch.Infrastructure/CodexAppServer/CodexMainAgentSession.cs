@@ -200,7 +200,7 @@ public sealed class CodexMainAgentSession : IMainAgentSession
         ExecutionApprovalMode approvalMode,
         CancellationToken cancellationToken = default)
     {
-        var model = await modelResolver.ResolveAsync(client, modelId, cancellationToken);
+        var model = await modelResolver.ResolveAsync(client, modelId, reasoningEffort, cancellationToken);
         var response = await request(
             "turn/start",
             new

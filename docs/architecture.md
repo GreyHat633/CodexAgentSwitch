@@ -11,12 +11,12 @@ The managed execution path is:
 ActiveProfile → TaskProfileSnapshot → DelegationDecision
   → WorkerOrchestrator → ExternalProviderResolver
   → OpenAICompatibleWorkerAdapter → DeepSeek API
-  → Sol review → messages / Usage ledger / SQLite archive
+  → Main review → messages / Usage ledger / SQLite archive
 ```
 
 External Provider resolution uses the snapshot only. It never asks the native Codex model list whether DeepSeek exists, and it never silently substitutes Luna. A failure follows the selected Profile fallback rule or stops. The explicit Worker test button bypasses economic routing but still records the real Provider, model and endpoint.
 
-Sol, Terra and Luna are stable **roles**, not a promise that every ChatGPT account has three matching model IDs. The App Server model catalog is read when a Profile editor opens and again before a managed thread or native launch is created. Unavailable roles are removed from the editor choices; a legacy Profile that still refers to one displays a clear warning and cannot be saved, launched or executed until the user selects an available role. No role is silently mapped to another model.
+Astra, Sol, Terra and Luna are stable **CAS product roles**, not a promise that every Codex account exposes every matching model ID. The App Server `model/list` catalog is read when a Profile editor opens and again before a managed turn or native launch. CAS intersects the live catalog with those four validated roles and uses each model's live `supportedReasoningEfforts`; unrelated catalog entries are not promoted into unvalidated CAS roles. A legacy unavailable value stays visible and blocks save or launch until the user explicitly changes it. No role or reasoning effort is silently mapped to another value.
 
 Profiles persist an approval mode:
 

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using CodexAgentSwitch.Domain.Profiles;
 using CodexAgentSwitch.Domain.Providers;
+using CodexAgentSwitch.Domain.Workers;
 using Microsoft.UI.Xaml;
 using DomainRoutingMode = CodexAgentSwitch.Domain.Profiles.RoutingMode;
 using DomainWorkerSource = CodexAgentSwitch.Domain.Profiles.WorkerSource;
@@ -78,8 +79,13 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     private string _tokenLimit;
     private string _requestLimit;
     private string _currency;
-    private IReadOnlyList<string> _mainAgentSlots = ["Sol", "Terra", "Luna"];
-    private IReadOnlyList<string> _nativeWorkerSlots = ["Sol", "Terra", "Luna"];
+    private IReadOnlyList<string> _mainAgentSlots = NativeCodexRoleCatalog.All.Select(role => role.SlotName).ToArray();
+    private IReadOnlyList<string> _nativeWorkerSlots = NativeCodexRoleCatalog.All.Select(role => role.SlotName).ToArray();
+    private IReadOnlyList<WorkerModelCapability> _availableNativeModels = [];
+    private IReadOnlyList<SelectionOption<string>> _reasoningStrengthOptions = CreateReasoningOptions(["low", "medium", "high", "xhigh"]);
+    private IReadOnlyList<SelectionOption<string>> _workerReasoningStrengthOptions = CreateReasoningOptions(["low", "medium", "high", "xhigh"]);
+    private bool _nativeModelCatalogLoaded;
+    private string _nativeModelCatalogError = string.Empty;
 
     private ProfileEditorViewModel(
         Profile? source,
@@ -92,9 +98,9 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         var profile = source ?? Profile.CreateDefault(DateTimeOffset.UtcNow);
         _name = isNew ? initialName : profile.Name;
         _mainAgentSlot = SlotFromModel(profile.MainAgent.ModelId);
-        _reasoningStrength = profile.MainAgent.ReasoningEffort is "low" or "medium" or "high" or "xhigh"
-            ? profile.MainAgent.ReasoningEffort
-            : "high";
+        _reasoningStrength = string.IsNullOrWhiteSpace(profile.MainAgent.ReasoningEffort)
+            ? "high"
+            : profile.MainAgent.ReasoningEffort.Trim();
         _approvalMode = Enum.IsDefined(profile.ApprovalMode)
             ? profile.ApprovalMode
             : ExecutionApprovalMode.Automatic;
@@ -111,7 +117,9 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             : string.Empty;
         ExternalProviders = EnsureSelectedProvider(externalProviders, _externalProviderId);
         _workerCount = profile.WorkerPolicy.MaxWorkers.ToString(CultureInfo.InvariantCulture);
-        _workerReasoningStrength = profile.WorkerPolicy.ReasoningEffort is "low" or "medium" or "high" or "xhigh" ? profile.WorkerPolicy.ReasoningEffort : "medium";
+        _workerReasoningStrength = string.IsNullOrWhiteSpace(profile.WorkerPolicy.ReasoningEffort)
+            ? "medium"
+            : profile.WorkerPolicy.ReasoningEffort.Trim();
         _routingMode = Enum.IsDefined(profile.WorkerPolicy.RoutingMode)
             ? profile.WorkerPolicy.RoutingMode
             : RoutingMode.Single;
@@ -131,8 +139,20 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public static ProfileEditorViewModel ForNew(Profile template, IReadOnlyList<ProviderSelectionOption> externalProviders) =>
-        new(template with { AutoCompactTokenLimit = null }, isNew: true, initialName: string.Empty, externalProviders);
+    public static ProfileEditorViewModel ForNew(Profile template, IReadOnlyList<ProviderSelectionOption> externalProviders)
+    {
+        var defaults = Profile.CreateDefault(DateTimeOffset.UtcNow);
+        return new(
+            template with
+            {
+                MainAgent = defaults.MainAgent,
+                WorkerPolicy = defaults.WorkerPolicy,
+                AutoCompactTokenLimit = null,
+            },
+            isNew: true,
+            initialName: string.Empty,
+            externalProviders);
+    }
 
     public static ProfileEditorViewModel ForCopy(Profile template, string uniqueName, IReadOnlyList<ProviderSelectionOption> externalProviders) =>
         new(template, isNew: true, initialName: uniqueName, externalProviders);
@@ -144,19 +164,14 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public IReadOnlyList<string> MainAgentSlots => _mainAgentSlots;
 
-    public IReadOnlyList<SelectionOption<string>> ReasoningStrengthOptions { get; } =
-    [
-        new("low", "低", "适合简单、明确的任务"),
-        new("medium", "中", "兼顾速度与分析深度"),
-        new("high", "高", "适合复杂开发与审查"),
-        new("xhigh", "极高", "用于最复杂且允许更高耗时的任务"),
-    ];
+    public IReadOnlyList<SelectionOption<string>> ReasoningStrengthOptions => _reasoningStrengthOptions;
 
-    public IReadOnlyList<SelectionOption<string>> WorkerReasoningStrengthOptions => ReasoningStrengthOptions;
+    public IReadOnlyList<SelectionOption<string>> WorkerReasoningStrengthOptions => _workerReasoningStrengthOptions;
 
     public SelectionOption<string> SelectedWorkerReasoningStrengthOption
     {
-        get => WorkerReasoningStrengthOptions.FirstOrDefault(option => option.Value == WorkerReasoningStrength) ?? WorkerReasoningStrengthOptions[1];
+        get => WorkerReasoningStrengthOptions.FirstOrDefault(option => option.Value == WorkerReasoningStrength)
+               ?? CreateReasoningOption(WorkerReasoningStrength, unavailable: true);
         set { if (value is not null) WorkerReasoningStrength = value.Value; }
     }
 
@@ -176,7 +191,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public IReadOnlyList<SelectionOption<WorkerSource>> WorkerSourceOptions { get; } =
     [
-        new(WorkerSource.NativeCodex, "原生工作代理", "使用 Codex 的 Sol、Terra 或 Luna"),
+        new(WorkerSource.NativeCodex, "原生工作代理", "使用 Codex 的 Astra、Sol、Terra 或 Luna"),
         new(WorkerSource.ExternalProvider, "外部服务商", "使用已配置并启用的外部服务商"),
     ];
 
@@ -197,6 +212,29 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public string NativeWorkerUnavailableMessage =>
         $"当前 Codex 账户不支持原生 Worker {NativeWorkerSlot}。请改选可用 Worker，或改用外部服务商。";
+
+    public Visibility NativeModelCatalogErrorVisibility =>
+        string.IsNullOrWhiteSpace(_nativeModelCatalogError) ? Visibility.Collapsed : Visibility.Visible;
+
+    public string NativeModelCatalogErrorMessage => _nativeModelCatalogError;
+
+    public bool NativeModelControlsEnabled => _nativeModelCatalogLoaded && string.IsNullOrWhiteSpace(_nativeModelCatalogError);
+
+    public Visibility MainReasoningUnavailableVisibility =>
+        IsReasoningAvailable(MainAgentSlot, ReasoningStrength) ? Visibility.Collapsed : Visibility.Visible;
+
+    public string MainReasoningUnavailableMessage =>
+        $"主代理 {MainAgentSlot} 当前不支持推理强度 {ReasoningStrength}。请改选该模型返回的可用强度。";
+
+    public Visibility WorkerReasoningUnavailableVisibility =>
+        !WorkerEnabled
+        || WorkerSource != DomainWorkerSource.NativeCodex
+        || IsReasoningAvailable(NativeWorkerSlot, WorkerReasoningStrength)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+    public string WorkerReasoningUnavailableMessage =>
+        $"原生 Worker {NativeWorkerSlot} 当前不支持推理强度 {WorkerReasoningStrength}。请改选该模型返回的可用强度。";
 
     public IReadOnlyList<SelectionOption<RoutingMode>> RoutingModeOptions { get; } =
     [
@@ -263,7 +301,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     public SelectionOption<string> SelectedReasoningStrengthOption
     {
         get => ReasoningStrengthOptions.FirstOrDefault(option => option.Value == ReasoningStrength)
-               ?? ReasoningStrengthOptions.First(option => option.Value == "high");
+               ?? CreateReasoningOption(ReasoningStrength, unavailable: true);
         set
         {
             if (value is not null)
@@ -345,6 +383,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         {
             if (Set(ref _mainAgentSlot, value))
             {
+                RefreshMainReasoningOptions(selectDefaultWhenUnsupported: true);
                 OnPropertyChanged(nameof(MainAgentUnavailableVisibility));
                 OnPropertyChanged(nameof(MainAgentUnavailableMessage));
             }
@@ -394,6 +433,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             if (Set(ref _reasoningStrength, value))
             {
                 OnPropertyChanged(nameof(SelectedReasoningStrengthOption));
+                OnPropertyChanged(nameof(MainReasoningUnavailableVisibility));
+                OnPropertyChanged(nameof(MainReasoningUnavailableMessage));
             }
         }
     }
@@ -433,6 +474,8 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(WorkerDisabledHintVisibility));
             OnPropertyChanged(nameof(NativeWorkerVisibility));
             OnPropertyChanged(nameof(NativeWorkerUnavailableVisibility));
+            OnPropertyChanged(nameof(WorkerReasoningUnavailableVisibility));
+            OnPropertyChanged(nameof(WorkerReasoningUnavailableMessage));
             OnPropertyChanged(nameof(ExternalProviderVisibility));
             OnPropertyChanged(nameof(ExternalProviderEmptyVisibility));
             OnPropertyChanged(nameof(SelectedWorkerSourceOption));
@@ -450,6 +493,9 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             }
 
             OnPropertyChanged(nameof(NativeWorkerVisibility));
+            OnPropertyChanged(nameof(NativeWorkerUnavailableVisibility));
+            OnPropertyChanged(nameof(WorkerReasoningUnavailableVisibility));
+            OnPropertyChanged(nameof(WorkerReasoningUnavailableMessage));
             OnPropertyChanged(nameof(ExternalProviderVisibility));
             OnPropertyChanged(nameof(ExternalProviderEmptyVisibility));
             OnPropertyChanged(nameof(SelectedWorkerSourceOption));
@@ -468,6 +514,7 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         {
             if (Set(ref _nativeWorkerSlot, value))
             {
+                RefreshWorkerReasoningOptions(selectDefaultWhenUnsupported: true);
                 OnPropertyChanged(nameof(NativeWorkerUnavailableVisibility));
                 OnPropertyChanged(nameof(NativeWorkerUnavailableMessage));
             }
@@ -478,7 +525,15 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
     public string WorkerReasoningStrength
     {
         get => _workerReasoningStrength;
-        set { if (Set(ref _workerReasoningStrength, value)) OnPropertyChanged(nameof(SelectedWorkerReasoningStrengthOption)); }
+        set
+        {
+            if (Set(ref _workerReasoningStrength, value))
+            {
+                OnPropertyChanged(nameof(SelectedWorkerReasoningStrengthOption));
+                OnPropertyChanged(nameof(WorkerReasoningUnavailableVisibility));
+                OnPropertyChanged(nameof(WorkerReasoningUnavailableMessage));
+            }
+        }
     }
     public RoutingMode RoutingMode
     {
@@ -528,6 +583,11 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
 
     public Profile BuildProfile(DateTimeOffset now)
     {
+        if (!NativeModelControlsEnabled)
+        {
+            throw new FormatException("Codex 模型目录尚未成功读取，无法保存方案。请重新打开编辑器后重试。");
+        }
+
         if (!MainAgentSlots.Contains(MainAgentSlot, StringComparer.Ordinal))
         {
             throw new FormatException(MainAgentUnavailableMessage);
@@ -538,6 +598,18 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
             && !NativeWorkerSlots.Contains(NativeWorkerSlot, StringComparer.Ordinal))
         {
             throw new FormatException(NativeWorkerUnavailableMessage);
+        }
+
+        if (!IsReasoningAvailable(MainAgentSlot, ReasoningStrength))
+        {
+            throw new FormatException(MainReasoningUnavailableMessage);
+        }
+
+        if (WorkerEnabled
+            && WorkerSource == DomainWorkerSource.NativeCodex
+            && !IsReasoningAvailable(NativeWorkerSlot, WorkerReasoningStrength))
+        {
+            throw new FormatException(WorkerReasoningUnavailableMessage);
         }
 
         var id = _isNew ? Guid.NewGuid() : _source!.Id;
@@ -582,53 +654,138 @@ public sealed class ProfileEditorViewModel : INotifyPropertyChanged
         };
     }
 
-    private static string SlotFromModel(string? modelId) => modelId switch
-    {
-        "gpt-5.6-terra" => "Terra",
-        "gpt-5.6-luna" => "Luna",
-        _ => "Sol",
-    };
+    private static string SlotFromModel(string? modelId) =>
+        NativeCodexRoleCatalog.FindByModel(modelId)?.SlotName
+        ?? modelId?.Trim()
+        ?? "Astra";
 
-    private static string SlotFromWorkerId(string? workerId) => workerId switch
-    {
-        "native-terra" or "gpt-5.6-terra" => "Terra",
-        "native-luna" or "gpt-5.6-luna" => "Luna",
-        _ => "Sol",
-    };
+    private static string SlotFromWorkerId(string? workerId) =>
+        NativeCodexRoleCatalog.FindByWorker(workerId)?.SlotName
+        ?? NativeCodexRoleCatalog.FindByModel(workerId)?.SlotName
+        ?? workerId?.Trim()
+        ?? "Luna";
 
-    private static string ModelForSlot(string slot) => slot switch
-    {
-        "Terra" => "gpt-5.6-terra",
-        "Luna" => "gpt-5.6-luna",
-        _ => "gpt-5.6-sol",
-    };
+    private static string ModelForSlot(string slot) =>
+        NativeCodexRoleCatalog.FindBySlot(slot)?.ModelId ?? slot.Trim();
 
-    private static string NativeWorkerIdForSlot(string slot) => slot switch
-    {
-        "Terra" => "native-terra",
-        "Luna" => "native-luna",
-        _ => "native-sol",
-    };
+    private static string NativeWorkerIdForSlot(string slot) =>
+        NativeCodexRoleCatalog.FindBySlot(slot)?.WorkerId ?? slot.Trim();
 
-    public void SetAvailableNativeRoles(IEnumerable<string> roles)
+    public void SetAvailableNativeModels(IEnumerable<WorkerModelCapability> models)
     {
-        var allowed = roles
-            .Where(role => role is "Sol" or "Terra" or "Luna")
-            .Distinct(StringComparer.Ordinal)
+        _availableNativeModels = models
+            .Where(model => NativeCodexRoleCatalog.FindByModel(model.Id) is not null)
+            .GroupBy(model => model.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
             .ToArray();
-        // A transient capability lookup failure must not erase every option or
-        // silently remap the persisted Sol/Terra/Luna selection.
-        if (allowed.Length > 0)
-        {
-            _mainAgentSlots = allowed;
-            _nativeWorkerSlots = allowed;
-        }
+        var availableIds = _availableNativeModels.Select(model => model.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var allowed = NativeCodexRoleCatalog.All
+            .Where(role => availableIds.Contains(role.ModelId))
+            .Select(role => role.SlotName)
+            .ToArray();
+        _mainAgentSlots = allowed;
+        _nativeWorkerSlots = allowed;
+        _nativeModelCatalogLoaded = true;
+        _nativeModelCatalogError = string.Empty;
+        RefreshMainReasoningOptions(selectDefaultWhenUnsupported: false);
+        RefreshWorkerReasoningOptions(selectDefaultWhenUnsupported: false);
         OnPropertyChanged(nameof(MainAgentSlots));
         OnPropertyChanged(nameof(NativeWorkerSlots));
+        OnPropertyChanged(nameof(NativeModelControlsEnabled));
+        OnPropertyChanged(nameof(NativeModelCatalogErrorVisibility));
+        OnPropertyChanged(nameof(NativeModelCatalogErrorMessage));
         OnPropertyChanged(nameof(MainAgentUnavailableVisibility));
         OnPropertyChanged(nameof(MainAgentUnavailableMessage));
         OnPropertyChanged(nameof(NativeWorkerUnavailableVisibility));
         OnPropertyChanged(nameof(NativeWorkerUnavailableMessage));
+    }
+
+    public void SetNativeModelCatalogFailure(string message)
+    {
+        _nativeModelCatalogLoaded = false;
+        _nativeModelCatalogError = string.IsNullOrWhiteSpace(message) ? "未知错误" : message.Trim();
+        OnPropertyChanged(nameof(NativeModelControlsEnabled));
+        OnPropertyChanged(nameof(NativeModelCatalogErrorVisibility));
+        OnPropertyChanged(nameof(NativeModelCatalogErrorMessage));
+    }
+
+    private void RefreshMainReasoningOptions(bool selectDefaultWhenUnsupported)
+    {
+        var model = FindCapability(MainAgentSlot);
+        if (selectDefaultWhenUnsupported && model is not null && !ContainsEffort(model, ReasoningStrength))
+        {
+            _reasoningStrength = model.DefaultReasoningEffort;
+        }
+
+        _reasoningStrengthOptions = OptionsFor(model, ReasoningStrength);
+        OnPropertyChanged(nameof(ReasoningStrengthOptions));
+        OnPropertyChanged(nameof(SelectedReasoningStrengthOption));
+        OnPropertyChanged(nameof(MainReasoningUnavailableVisibility));
+        OnPropertyChanged(nameof(MainReasoningUnavailableMessage));
+    }
+
+    private void RefreshWorkerReasoningOptions(bool selectDefaultWhenUnsupported)
+    {
+        var model = FindCapability(NativeWorkerSlot);
+        if (selectDefaultWhenUnsupported && model is not null && !ContainsEffort(model, WorkerReasoningStrength))
+        {
+            _workerReasoningStrength = model.DefaultReasoningEffort;
+        }
+
+        _workerReasoningStrengthOptions = OptionsFor(model, WorkerReasoningStrength);
+        OnPropertyChanged(nameof(WorkerReasoningStrengthOptions));
+        OnPropertyChanged(nameof(SelectedWorkerReasoningStrengthOption));
+        OnPropertyChanged(nameof(WorkerReasoningUnavailableVisibility));
+        OnPropertyChanged(nameof(WorkerReasoningUnavailableMessage));
+    }
+
+    private WorkerModelCapability? FindCapability(string slot)
+    {
+        var modelId = NativeCodexRoleCatalog.FindBySlot(slot)?.ModelId;
+        return _availableNativeModels.FirstOrDefault(model =>
+            string.Equals(model.Id, modelId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool IsReasoningAvailable(string slot, string effort)
+    {
+        var model = FindCapability(slot);
+        return model is not null && ContainsEffort(model, effort);
+    }
+
+    private static bool ContainsEffort(WorkerModelCapability model, string effort) =>
+        model.SupportedReasoningEfforts.Contains(effort, StringComparer.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<SelectionOption<string>> OptionsFor(WorkerModelCapability? model, string selected)
+    {
+        var options = CreateReasoningOptions(model?.SupportedReasoningEfforts ?? []);
+        return string.IsNullOrWhiteSpace(selected)
+               || options.Any(option => string.Equals(option.Value, selected, StringComparison.OrdinalIgnoreCase))
+            ? options
+            : options.Append(CreateReasoningOption(selected, unavailable: true)).ToArray();
+    }
+
+    private static IReadOnlyList<SelectionOption<string>> CreateReasoningOptions(IEnumerable<string> efforts) =>
+        efforts
+            .Where(effort => !string.IsNullOrWhiteSpace(effort))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(effort => CreateReasoningOption(effort, unavailable: false))
+            .ToArray();
+
+    private static SelectionOption<string> CreateReasoningOption(string effort, bool unavailable)
+    {
+        var normalized = effort.Trim();
+        var label = normalized.ToLowerInvariant() switch
+        {
+            "none" => "无 · none",
+            "low" => "低 · low",
+            "medium" => "中 · medium",
+            "high" => "高 · high",
+            "xhigh" => "极高 · xhigh",
+            "max" => "最高 · max",
+            "ultra" => "极限 · ultra",
+            _ => normalized,
+        };
+        return new(normalized, unavailable ? $"{label}（不可用）" : label);
     }
 
     private static string Format(decimal? value) => value?.ToString("0.##", CultureInfo.InvariantCulture) ?? string.Empty;

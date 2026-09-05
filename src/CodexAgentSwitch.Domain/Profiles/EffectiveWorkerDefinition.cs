@@ -65,13 +65,7 @@ public sealed record EffectiveWorkerDefinition(
                 "当前 Codex Native 模式无法可靠地将委派任务正文传递给外部 Provider Worker；请在 CodexAgentSwitch 模式中使用外部 Worker。");
         }
 
-        (string Role, string Model, string File)? native = policy.PreferredProviderId switch
-        {
-            "native-sol" => ("cas_sol_worker", "gpt-5.6-sol", "agents/cas-sol-worker.toml"),
-            "native-terra" => ("cas_terra_worker", "gpt-5.6-terra", "agents/cas-terra-worker.toml"),
-            "native-luna" => ("cas_luna_worker", "gpt-5.6-luna", "agents/cas-luna-worker.toml"),
-            _ => null,
-        };
+        var native = NativeCodexRoleCatalog.FindByWorker(policy.PreferredProviderId);
 
         return native is null
             ? new(
@@ -80,20 +74,20 @@ public sealed record EffectiveWorkerDefinition(
                 "原生 Worker 标识无效，未生成默认或回退 Worker。")
             : new(
                 EffectiveWorkerKind.NativeAgent,
-                native.Value.Role,
-                native.Value.Model,
+                native.AgentRole,
+                native.ModelId,
                 NormalizeReasoning(policy.ReasoningEffort),
                 "openai",
                 Math.Max(1, policy.MaxWorkers),
                 policy.RoutingMode,
-                native.Value.File,
+                native.ConfigFile,
                 WorkerExecutionCapability.Supported,
                 "通过项目级自定义 Agent 角色执行。");
     }
 
     private static string NormalizeReasoning(string? effort) => effort?.Trim() switch
     {
-        "low" or "medium" or "high" or "xhigh" => effort.Trim(),
+        not null when !string.IsNullOrWhiteSpace(effort) => effort.Trim(),
         _ => "medium",
     };
 }

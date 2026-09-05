@@ -122,8 +122,8 @@ public sealed record Profile(
     public static Profile CreateDefault(DateTimeOffset now) => new(
         Guid.NewGuid(),
         "经济模式",
-        new AgentSelection("gpt-5.6-sol", "high"),
-        new WorkerPolicy(true, WorkerSource.NativeCodex, "native-luna", null, 1, RoutingMode.Economic, FallbackAction.SingleAgent),
+        new AgentSelection(NativeCodexRoleCatalog.Astra.ModelId, "high"),
+        new WorkerPolicy(true, WorkerSource.NativeCodex, NativeCodexRoleCatalog.Luna.WorkerId, null, 1, RoutingMode.Economic, FallbackAction.SingleAgent),
         new BudgetLimits(0.5m, 3m, 30m, null, null, "CNY"),
         true,
         now,

@@ -61,7 +61,7 @@ public static class ProfileDataMigration
             return Repair(profile, "该方案缺少名称，无法安全迁移。请删除后重新创建。", now);
         }
 
-        var mainAgent = profile.MainAgent ?? new AgentSelection("gpt-5.6-sol", "high");
+        var mainAgent = profile.MainAgent ?? new AgentSelection("gpt-6-astra", "high");
         var model = NormalizeModel(mainAgent.ModelId);
         var effort = NormalizeReasoning(mainAgent.ReasoningEffort);
 
@@ -154,18 +154,17 @@ public static class ProfileDataMigration
             UpdatedAt = now,
         }, true);
 
-    private static string NormalizeModel(string? modelId) => modelId?.Trim() switch
+    private static string NormalizeModel(string? modelId)
     {
-        "sol" => "gpt-5.6-sol",
-        "terra" => "gpt-5.6-terra",
-        "luna" => "gpt-5.6-luna",
-        "gpt-5.6-sol" or "gpt-5.6-terra" or "gpt-5.6-luna" => modelId.Trim(),
-        _ => "gpt-5.6-sol",
-    };
+        var value = modelId?.Trim();
+        return string.IsNullOrWhiteSpace(value)
+            ? NativeCodexRoleCatalog.Astra.ModelId
+            : NativeCodexRoleCatalog.FindByModelOrSlot(value)?.ModelId ?? value;
+    }
 
     private static string NormalizeReasoning(string? effort) => effort?.Trim() switch
     {
-        "low" or "medium" or "high" or "xhigh" => effort.Trim(),
+        not null when !string.IsNullOrWhiteSpace(effort) => effort.Trim(),
         _ => "high",
     };
 
@@ -187,13 +186,13 @@ public static class ProfileDataMigration
             : source;
     }
 
-    private static string NormalizeNativeWorker(string? workerId) => workerId?.Trim() switch
+    private static string NormalizeNativeWorker(string? workerId)
     {
-        "native-sol" or "gpt-5.6-sol" or "sol" => "native-sol",
-        "native-terra" or "gpt-5.6-terra" or "terra" => "native-terra",
-        "native-luna" or "gpt-5.6-luna" or "luna" => "native-luna",
-        _ => "native-luna",
-    };
+        var value = workerId?.Trim();
+        return string.IsNullOrWhiteSpace(value)
+            ? NativeCodexRoleCatalog.Luna.WorkerId
+            : NativeCodexRoleCatalog.FindByWorkerModelOrSlot(value)?.WorkerId ?? value;
+    }
 
     private static RoutingMode NormalizeRouting(RoutingMode mode, bool workerEnabled)
     {

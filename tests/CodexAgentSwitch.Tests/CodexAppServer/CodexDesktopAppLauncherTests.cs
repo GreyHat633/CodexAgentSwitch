@@ -10,6 +10,56 @@ namespace CodexAgentSwitch.Tests.CodexAppServer;
 public sealed class CodexDesktopAppLauncherTests
 {
     [Fact]
+    public async Task Astra_profile_generates_exact_main_and_native_worker_configuration()
+    {
+        var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")
+            ?? throw new InvalidOperationException("CAS_TEST_ROOT must point to an E-drive test directory.");
+        var root = Path.Combine(testRoot, $"desktop-astra-{Guid.NewGuid():N}");
+        var project = Path.Combine(root, "project");
+        Directory.CreateDirectory(project);
+        try
+        {
+            var launcher = CreateLauncher(
+                new AppDataPaths(Path.Combine(root, "app-data")),
+                new FixedDesktopRegistration("OpenAI.Codex_testpublisher!App"),
+                new RecordingDesktopStarter(),
+                new PassThroughConfigurationValidator());
+            var profile = Profile.CreateDefault(DateTimeOffset.UtcNow) with
+            {
+                MainAgent = new AgentSelection("gpt-6-astra", "max"),
+                WorkerPolicy = new WorkerPolicy(
+                    true,
+                    WorkerSource.NativeCodex,
+                    "native-astra",
+                    null,
+                    1,
+                    RoutingMode.Economic,
+                    FallbackAction.SingleAgent,
+                    "ultra"),
+            };
+
+            var result = await launcher.LaunchAsync(profile, project);
+            var config = await File.ReadAllTextAsync(result.ConfigurationPath);
+            var workerPath = Path.Combine(project, ".codex", "agents", "cas-astra-worker.toml");
+            var worker = await File.ReadAllTextAsync(workerPath);
+
+            Assert.Contains("model = \"gpt-6-astra\"", config, StringComparison.Ordinal);
+            Assert.Contains("model_reasoning_effort = \"max\"", config, StringComparison.Ordinal);
+            Assert.Contains("[agents.cas_astra_worker]", config, StringComparison.Ordinal);
+            Assert.Contains("name = \"cas_astra_worker\"", worker, StringComparison.Ordinal);
+            Assert.Contains("model = \"gpt-6-astra\"", worker, StringComparison.Ordinal);
+            Assert.Contains("model_reasoning_effort = \"ultra\"", worker, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Default_native_mode_launches_the_registered_gui_app_and_never_the_cli()
     {
         var testRoot = Environment.GetEnvironmentVariable("CAS_TEST_ROOT")

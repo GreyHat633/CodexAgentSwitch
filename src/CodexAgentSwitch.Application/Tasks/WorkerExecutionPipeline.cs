@@ -106,13 +106,7 @@ public sealed class DelegationDecisionService(IClock clock)
 
     private static string? NativeModel(WorkerPolicy policy) => policy.Source != WorkerSource.NativeCodex
         ? null
-        : policy.PreferredProviderId switch
-        {
-            "native-sol" => "gpt-5.6-sol",
-            "native-terra" => "gpt-5.6-terra",
-            "native-luna" => "gpt-5.6-luna",
-            _ => null,
-        };
+        : NativeCodexRoleCatalog.FindByWorker(policy.PreferredProviderId)?.ModelId;
 }
 
 public sealed class ExternalProviderResolver
@@ -286,19 +280,16 @@ public sealed class WorkerOrchestrator(
     {
         if (forceNativeLuna)
         {
-            return new ResolvedWorker(runtime.NativeWorker, "gpt-5.6-luna", "medium", "native-codex", "原生 Codex", null, null);
+            return new ResolvedWorker(runtime.NativeWorker, NativeCodexRoleCatalog.Luna.ModelId, "medium", "native-codex", "原生 Codex", null, null);
         }
 
         if (snapshot.WorkerPolicy.Source == WorkerSource.NativeCodex)
         {
-            var modelId = snapshot.WorkerPolicy.PreferredProviderId switch
-            {
-                "native-sol" => "gpt-5.6-sol",
-                "native-terra" => "gpt-5.6-terra",
-                "native-luna" => "gpt-5.6-luna",
-                _ => throw new InvalidOperationException("当前方案的原生 Worker ID 无效。"),
-            };
-            var effort = snapshot.WorkerPolicy.ReasoningEffort is "low" or "medium" or "high" or "xhigh" ? snapshot.WorkerPolicy.ReasoningEffort : "medium";
+            var modelId = NativeCodexRoleCatalog.FindByWorker(snapshot.WorkerPolicy.PreferredProviderId)?.ModelId
+                ?? throw new InvalidOperationException("当前方案的原生 Worker ID 无效。");
+            var effort = string.IsNullOrWhiteSpace(snapshot.WorkerPolicy.ReasoningEffort)
+                ? "medium"
+                : snapshot.WorkerPolicy.ReasoningEffort.Trim();
             return new ResolvedWorker(runtime.NativeWorker, modelId, effort, "native-codex", "原生 Codex", null, null);
         }
 

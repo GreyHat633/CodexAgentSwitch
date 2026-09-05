@@ -68,17 +68,39 @@ audit.config.json 中长期保存：
 - 报告输出目录
 - 模型价格
 
-当前已配置：
+当前已配置 Astra、Sol、Terra、Luna。价格单位为 USD / 1M tokens，
+并在 audit.config.json 的 PricingAsOf 中记录核对日期。
+
+当前 Sol 基线价格：
+gpt-6-astra
+  Input: 10 / 1M
+  Cached: 1 / 1M
+  Output: 50 / 1M
+
 gpt-5.6-sol
-  Input: 125 / 1M
-  Cached: 12.5 / 1M
-  Output: 750 / 1M
+  Input: 4 / 1M
+  Cached: 0.4 / 1M
+  Output: 20 / 1M
+
+gpt-5.6-terra
+  Input: 2 / 1M
+  Cached: 0.2 / 1M
+  Output: 12 / 1M
 
 gpt-5.6-luna
-  Input: 25 / 1M
-  Cached: 2.5 / 1M
-  Output: 150 / 1M
-  Sol-equivalent multiplier: 5
+  Input: 0.2 / 1M
+  Cached: 0.02 / 1M
+  Output: 1.2 / 1M
+
+2026-09-05 官方核对来源：
+https://developers.openai.com/api/docs/models/gpt-6-astra
+https://developers.openai.com/api/docs/models/gpt-5.6-sol
+https://developers.openai.com/api/docs/models/gpt-5.6-terra
+https://developers.openai.com/api/docs/models/gpt-5.6-luna
+
+Sol-equivalent 不再使用单一倍率，而是把同一组输入、缓存输入和输出
+token 分别按 Sol 单价重新计算。API 美元价格只是经济性代理指标，
+不等同于 Codex 套餐的额度扣减。
 
 重要：
 如果以后模型或官方价格变化，只需要更新 audit.config.json。

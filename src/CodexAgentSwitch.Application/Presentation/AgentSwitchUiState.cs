@@ -406,18 +406,26 @@ public sealed class AgentSwitchUiStateProjection(
     };
 
     private static string ProviderModel(ProviderConfiguration provider) => provider.Kind == ProviderKind.NativeCodex
-        ? "Sol / Terra / Luna"
+        ? "Astra / Sol / Terra / Luna"
         : Model(provider.ModelId ?? "未选择模型");
 
-    private static string Model(string model) => model switch
+    private static string Model(string model)
     {
-        "gpt-5.6-sol" => "GPT-5.6 Sol",
-        "gpt-5.6-terra" => "GPT-5.6 Terra",
-        "gpt-5.6-luna" => "GPT-5.6 Luna",
-        DeepSeekV4Catalog.FlashModelId => "DeepSeek V4 Flash 0731",
-        DeepSeekV4Catalog.ProModelId => "DeepSeek V4 Pro",
-        _ => model,
-    };
+        var native = NativeCodexRoleCatalog.FindByModel(model);
+        if (native is not null)
+        {
+            return native.ModelId.StartsWith("gpt-6-", StringComparison.Ordinal)
+                ? $"GPT-6 {native.SlotName}"
+                : $"GPT-5.6 {native.SlotName}";
+        }
+
+        return model switch
+        {
+            DeepSeekV4Catalog.FlashModelId => "DeepSeek V4 Flash 0731",
+            DeepSeekV4Catalog.ProModelId => "DeepSeek V4 Pro",
+            _ => model,
+        };
+    }
 
     private static string Reasoning(string effort) => effort switch
     {

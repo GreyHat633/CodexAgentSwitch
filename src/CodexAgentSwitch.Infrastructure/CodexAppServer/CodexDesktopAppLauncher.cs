@@ -88,13 +88,10 @@ public sealed class CodexDesktopAppLauncher(
     private const string ProjectInstructionsFile = "AGENTS.md";
     private const string WorkerMarker = "# >>> Codex Agent Switch worker >>>";
     private const string ExternalWorkerMarker = "# >>> Codex Agent Switch external worker >>>";
-    private static readonly string[] ManagedWorkerAgentFiles =
-    [
-        "agents/cas-sol-worker.toml",
-        "agents/cas-terra-worker.toml",
-        "agents/cas-luna-worker.toml",
-        "agents/cas-external-worker.toml",
-    ];
+    private static readonly string[] ManagedWorkerAgentFiles = NativeCodexRoleCatalog.All
+        .Select(role => role.ConfigFile)
+        .Append("agents/cas-external-worker.toml")
+        .ToArray();
     private const string DesktopEntryFile = "desktop-entry.json";
     private const string HooksFile = "hooks.json";
 
@@ -184,13 +181,14 @@ public sealed class CodexDesktopAppLauncher(
 
         var command = (await locator.LocateAsync(cancellationToken)).Command
             ?? throw new InvalidOperationException("Codex CLI 未就绪，无法校验当前 Profile 的主代理。请先在设置页修复 Codex CLI。");
-        await modelResolver.ResolveAsync(command, profile.MainAgent.ModelId, cancellationToken);
+        await modelResolver.ResolveAsync(command, profile.MainAgent.ModelId, profile.MainAgent.ReasoningEffort, cancellationToken);
         var worker = EffectiveWorkerDefinition.Resolve(profile.WorkerPolicy);
         if (worker.Kind == EffectiveWorkerKind.NativeAgent && worker.Capability == WorkerExecutionCapability.Supported)
         {
             await modelResolver.ResolveAsync(
                 command,
                 worker.ModelId ?? throw new InvalidOperationException("原生 Worker 配置无效。"),
+                worker.ReasoningEffort ?? throw new InvalidOperationException("原生 Worker 推理强度无效。"),
                 cancellationToken);
         }
 
@@ -1241,13 +1239,18 @@ public sealed class CodexDesktopAppLauncher(
 
     private async Task ValidateNativeModelsAsync(Profile profile, CodexCommand command, CancellationToken cancellationToken)
     {
-        await modelResolver.ResolveAsync(command, profile.MainAgent.ModelId, cancellationToken);
+        await modelResolver.ResolveAsync(
+            command,
+            profile.MainAgent.ModelId,
+            profile.MainAgent.ReasoningEffort,
+            cancellationToken);
         var worker = EffectiveWorkerDefinition.Resolve(profile.WorkerPolicy);
         if (worker.Kind == EffectiveWorkerKind.NativeAgent && worker.Capability == WorkerExecutionCapability.Supported)
         {
             await modelResolver.ResolveAsync(
                 command,
                 worker.ModelId ?? throw new InvalidOperationException("原生 Worker 配置无效。"),
+                worker.ReasoningEffort ?? throw new InvalidOperationException("原生 Worker 推理强度无效。"),
                 cancellationToken);
         }
     }

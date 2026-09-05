@@ -39,13 +39,7 @@ public sealed class NativeWorkerExecutor : IWorkerExecutor
 
     public Task<WorkerResultPacket> ExecuteAsync(TaskPacket packet, CancellationToken cancellationToken = default)
     {
-        var role = packet.WorkerId switch
-        {
-            "native-sol" => "cas_sol_worker",
-            "native-terra" => "cas_terra_worker",
-            "native-luna" => "cas_luna_worker",
-            _ => packet.WorkerId,
-        };
+        var role = NativeCodexRoleCatalog.FindByWorker(packet.WorkerId)?.AgentRole ?? packet.WorkerId;
         var invocation = NativeCustomAgentInvocationPolicy.Create(packet, role);
         return Task.FromResult(new WorkerResultPacket(
             packet.TaskId,

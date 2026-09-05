@@ -285,6 +285,14 @@ if (-not [System.IO.Path]::IsPathRooted($OutputRoot)) {
 }
 $OutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
 $RateTable = $config.ModelRates
+$solEquivalentBaseline = if ([string]::IsNullOrWhiteSpace([string]$config.SolEquivalentBaseline)) {
+    'gpt-5.6-sol'
+} else {
+    [string]$config.SolEquivalentBaseline
+}
+if ($null -eq (Get-RateInfo -Model $solEquivalentBaseline -RateTable $RateTable)) {
+    throw "Sol-equivalent baseline pricing is not configured: $solEquivalentBaseline"
+}
 
 $preHitBuffer = 10
 $postCommitBuffer = 20
@@ -674,12 +682,14 @@ foreach ($meta in $selected) {
                     -Output $dOutput `
                     -RateTable $RateTable
 
-                $solEq = $null
+                $solEq = Get-NormalizedCost `
+                    -Model $solEquivalentBaseline `
+                    -Uncached $dUncached `
+                    -Cached $dCached `
+                    -Output $dOutput `
+                    -RateTable $RateTable
                 $rate = Get-RateInfo -Model $meta.Model -RateTable $RateTable
-                if ($null -ne $cost -and $null -ne $rate) {
-                    $solEq = $cost * [double]$rate.SolEquivalentMultiplier
-                }
-                else {
+                if ($null -eq $cost -or $null -eq $rate) {
                     $unknownPricedModels[$meta.Model] = $true
                 }
 
@@ -747,8 +757,12 @@ $workerSolEq = if ($workerItems.Count -gt 0) {
     [double](($workerItems | Measure-Object -Property SolEquivalent -Sum).Sum)
 } else { 0.0 }
 
+$mainSolEq = if ($mainItems.Count -gt 0) {
+    [double](($mainItems | Measure-Object -Property SolEquivalent -Sum).Sum)
+} else { 0.0 }
+
 $actualTotal = $mainActual + $workerActual
-$allSolEquivalent = $mainActual + $workerSolEq
+$allSolEquivalent = $mainSolEq + $workerSolEq
 
 $displacementPct = if ($allSolEquivalent -gt 0) {
     [math]::Round(($workerSolEq / $allSolEquivalent) * 100.0, 1)
@@ -1166,6 +1180,8 @@ $md.Add('- Main sessions require strong release evidence: final-commit hit, or t
 $md.Add('- Worker child sessions may be selected by explicit development evidence or temporal overlap with a strong Main release session.')
 $md.Add('- Token cost uses incremental `token_count` deltas. Reasoning tokens are not double-charged.')
 $md.Add('- Model pricing comes from `audit.config.json`; unknown models are reported instead of guessed.')
+$md.Add('- USD API list-price calculations are an economic proxy. They do not claim to reproduce Codex subscription quota debits.')
+$md.Add('- Sol-equivalent cost reapplies the configured Sol input, cached-input, and output rates to the same token dimensions; it is not a scalar model multiplier.')
 $md.Add('- Paid-point balance is account-level evidence, not a normalized-cost oracle.')
 $md.Add('- Delegation Coverage and Adoption Efficiency are mechanical proxies, not semantic work-quality measurements.')
 $md.Add('- Git metrics use committed `$BaseRef..$FinalRef`; uncommitted work is not silently included.')

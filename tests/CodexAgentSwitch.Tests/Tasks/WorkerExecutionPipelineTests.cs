@@ -93,6 +93,30 @@ public sealed class WorkerExecutionPipelineTests
         Assert.Equal(0, native.SpawnCount);
     }
 
+    [Theory]
+    [InlineData("max")]
+    [InlineData("ultra")]
+    public async Task Native_worker_preserves_live_reasoning_effort_through_execution(string effort)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var snapshot = new TaskProfileSnapshot(
+            Guid.NewGuid(),
+            "Astra worker",
+            new AgentSelection(NativeCodexRoleCatalog.Astra.ModelId, "high"),
+            new WorkerPolicy(true, WorkerSource.NativeCodex, NativeCodexRoleCatalog.Astra.WorkerId, null, 1, RoutingMode.Balanced, FallbackAction.StopDelegation, effort),
+            new BudgetLimits(null, null, null, null, null, "CNY"),
+            null,
+            now);
+        var native = new RecordingAdapter("native-codex");
+        var orchestrator = new WorkerOrchestrator(new RejectingExternalFactory(), new FakeRuntime(native), new ExternalProviderResolver());
+
+        var result = await orchestrator.ExecuteAsync(snapshot, CreateTask());
+
+        Assert.Equal(NativeCodexRoleCatalog.Astra.ModelId, native.LastTask?.ModelId);
+        Assert.Equal(effort, native.LastTask?.ReasoningEffort);
+        Assert.Equal(effort, result.ReasoningEffort);
+    }
+
     [Fact]
     public async Task External_worker_missing_coding_capabilities_is_rejected_before_spawn()
     {

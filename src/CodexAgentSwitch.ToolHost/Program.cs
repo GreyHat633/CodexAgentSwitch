@@ -49,7 +49,7 @@ while (await Console.In.ReadLineAsync() is { } line)
                         ? requestedProtocol.GetString() ?? "2025-06-18"
                         : "2025-06-18",
                 capabilities = new { tools = new { listChanged = false } },
-                serverInfo = new { name = "codex-agent-switch", version = "0.2.7.0" },
+                serverInfo = new { name = "codex-agent-switch", version = "0.2.7.4" },
             },
             "ping" => new { },
             "tools/list" => ListTools(),
